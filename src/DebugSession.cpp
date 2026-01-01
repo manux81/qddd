@@ -34,6 +34,7 @@
 #include <QDebug>
 #include <QFileInfo>
 #include <QTextStream>
+#include <QRegularExpression>
 
 static QString decodeCString(QString s) {
 	if (s.startsWith("\"") && s.endsWith("\""))
@@ -180,26 +181,33 @@ void DebugSession::insertBreakpoint(const QString &loc) {
 	if (loc.isEmpty())
 		return;
 	enqueueCommand({QString("-break-insert %1").arg(loc), nullptr, true});
-	enqueueCommand({"-break-list", nullptr, false});
+
+	if (m_backend == Backend::GDB_MI)
+		enqueueCommand({"-break-list", nullptr, false});
 }
+
 
 void DebugSession::deleteBreakpoint(int number) {
 	if (number <= 0)
 		return;
 	enqueueCommand({QString("-break-delete %1").arg(number), nullptr, true});
-	enqueueCommand({"-break-list", nullptr, false});
+	if (m_backend == Backend::GDB_MI)
+		enqueueCommand({"-break-list", nullptr, false});
 }
 
 void DebugSession::clearAllBreakpoints() {
 	enqueueCommand({"-break-delete", nullptr, true});
-	enqueueCommand({"-break-list", nullptr, false});
+	if (m_backend == Backend::GDB_MI)
+		enqueueCommand({"-break-list", nullptr, false});
 }
 
 void DebugSession::toggleBreakpointEnabled(int n, bool en) {
 	enqueueCommand(
 	    {QString("-break-%1 %2").arg(en ? "enable" : "disable").arg(n), nullptr,
 	     true});
-	enqueueCommand({"-break-list", nullptr, false});
+
+	if (m_backend == Backend::GDB_MI)
+		enqueueCommand({"-break-list", nullptr, false});
 }
 
 void DebugSession::toggleBreakpointAt(const QString &file, int line) {
@@ -402,7 +410,9 @@ void DebugSession::handleStopped(const QString &line) {
 		    line.section("line=\"", 1, 1).section("\"", 0, 0).toInt();
 
 	emit sessionUpdated();
-
+	if (m_backend == Backend::GDB_MI) {
+		enqueueCommand({"-break-list", nullptr, false});
+	}
 	fetchData();
 }
 
@@ -413,7 +423,6 @@ void DebugSession::fetchData() {
 	enqueueCommand({"-stack-list-frames", nullptr, false});
 	enqueueCommand({"-stack-info-frame", nullptr, false});
 	enqueueCommand({"-stack-list-variables --all-values", nullptr, false});
-	enqueueCommand({"-break-list", nullptr, false});
 
 	if (m_useComplexVarView)
 		fetchComplexVars();
@@ -504,31 +513,51 @@ void DebugSession::handleFrameInfo(const QString &line) {
 }
 
 void DebugSession::handleBreakpointList(const QString &line) {
-	QList<BreakpointInfo> out;
-	QString s = line;
-	s.remove("^done,BreakpointTable=");
+	QList<BreakpointInfo> list;
 
-	QStringList bps = s.split("},{");
-	for (QString e : bps) {
+	QRegularExpression re(R"(body=\[(.*)\]\}$)");
+	QRegularExpressionMatch m = re.match(line);
+	if (!m.hasMatch()) {
+		qDebug() << "[DBG] breakpointList: NO BODY";
+		return;
+	}
+	QString body = m.captured(1);
+
+	QStringList entries = body.split("},bkpt={");
+	for (QString e : entries) {
+
+		if (e.startsWith("bkpt={"))
+			e.remove(0, 6);
+		if (e.endsWith("}"))
+			e.chop(1);
+
 		BreakpointInfo b;
 		if (e.contains("number=\""))
 			b.number = e.section("number=\"", 1, 1).section("\"", 0, 0).toInt();
-		if (e.contains("file=\""))
-			b.file = e.section("file=\"", 1, 1).section("\"", 0, 0);
 		if (e.contains("fullname=\""))
 			b.file = e.section("fullname=\"", 1, 1).section("\"", 0, 0);
+		else if (e.contains("file=\""))
+			b.file = e.section("file=\"", 1, 1).section("\"", 0, 0);
+
 		if (e.contains("line=\""))
 			b.line = e.section("line=\"", 1, 1).section("\"", 0, 0).toInt();
+
 		b.enabled = !e.contains("enabled=\"n\"");
-		out.append(b);
+
+		if (b.number > 0)
+			list.append(b);
 	}
 
-	m_bps = out;
+	m_bps = list;
+	qDebug() << "[DBG] breakpointList =>" << m_bps.size();
 	emit breakpointsChanged(m_bps);
 }
 
 void DebugSession::handleBreakpointEvent(const QString &line) {
 	// =breakpoint-created,bkpt={number="2",type="breakpoint",disp="keep",enabled="y",...,file="prova.c",fullname="...",line="9",...}
+	if (m_backend == Backend::GDB_MI) {
+		return;
+	}
 
 	int pos = line.indexOf("bkpt=");
 	if (pos < 0)
@@ -555,6 +584,11 @@ void DebugSession::handleBreakpointEvent(const QString &line) {
 		b.line = e.section("line=\"", 1, 1).section("\"", 0, 0).toInt();
 	b.enabled = !e.contains("enabled=\"n\"");
 
+	if (b.number <= 0 || b.file.isEmpty() || b.line <= 0) {
+		qDebug() << "[DBG] handleBreakpointEvent: ignoring invalid bp from event:" << e;
+		return;
+	}
+
 	bool updated = false;
 	for (int i = 0; i < m_bps.size(); ++i) {
 		if (m_bps[i].number == b.number) {
@@ -566,6 +600,7 @@ void DebugSession::handleBreakpointEvent(const QString &line) {
 	if (!updated)
 		m_bps.append(b);
 
+	qDebug() << "[DBG] handleBreakpointEvent -> breakpoints:" << m_bps.size();
 	emit breakpointsChanged(m_bps);
 }
 
