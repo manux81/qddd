@@ -1,0 +1,259 @@
+/*
+ * Copyright (c) [2026], Manuele Conti
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of Manuele Conti nor the names of its
+ *    contributors may be used to endorse or promote products derived from this
+ *    software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#include "SourceEditor.h"
+#include <QFile>
+#include <QPainter>
+#include <QScrollBar>
+#include <QTextBlock>
+
+LineNumberArea::LineNumberArea(SourceEditor *editor)
+    : QWidget(editor), m_editor(editor) {}
+
+QSize LineNumberArea::sizeHint() const {
+	return QSize(m_editor->lineNumberAreaWidth(), 0);
+}
+
+void LineNumberArea::paintEvent(QPaintEvent *event) {
+	m_editor->lineNumberAreaPaintEvent(event);
+}
+
+SourceEditor::SourceEditor(QWidget *parent)
+    : QPlainTextEdit(parent), m_lineNumberArea(new LineNumberArea(this)) {
+	connect(this, &SourceEditor::blockCountChanged, this,
+	        &SourceEditor::updateLineNumberAreaWidth);
+	connect(this, &SourceEditor::updateRequest, this,
+	        &SourceEditor::updateLineNumberArea);
+	connect(this, &SourceEditor::cursorPositionChanged, this,
+	        &SourceEditor::highlightCurrentLine);
+
+	updateLineNumberAreaWidth(0);
+
+	QFont f("Menlo");
+	f.setPointSize(14);
+	setFont(f);
+
+	setStyleSheet("QPlainTextEdit {"
+	              " background: #1e1e1e;"
+	              " color: #e0e0e0;"
+	              " selection-background-color: #264f78;"
+	              "}");
+
+	highlightCurrentLine();
+}
+
+void SourceEditor::showLocation(const QString &file, int line) {
+	// salva il file corrente per run-until-cursor / toggle-breakpoint /
+	// location query
+	setProperty("currentFile", file);
+
+	QFile f(file);
+	if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+		return;
+
+	setPlainText(QString::fromUtf8(f.readAll()));
+
+	// posiziona il cursore sulla riga richiesta
+	QTextCursor cursor(document()->findBlockByLineNumber(line - 1));
+	setTextCursor(cursor);
+	centerCursor();
+
+	// evidenzia riga corrente
+	highlightCurrentLine();
+
+	// aggiorna margine line-number / breakpoint / freccia PC
+	if (m_lineNumberArea)
+		m_lineNumberArea->update();
+}
+
+void SourceEditor::highlightCurrentLine() {
+	QList<QTextEdit::ExtraSelection> extra;
+
+	QTextEdit::ExtraSelection sel;
+	sel.format.setBackground(QColor("#3c3c3c"));
+	sel.format.setForeground(Qt::white);
+	sel.format.setProperty(QTextFormat::FullWidthSelection, true);
+
+	sel.cursor = textCursor();
+	sel.cursor.clearSelection();
+	extra << sel;
+
+	setExtraSelections(extra);
+}
+
+void SourceEditor::setSession(DebugSession *session) { m_session = session; }
+
+int SourceEditor::lineNumberAreaWidth() {
+	int digits = 1;
+	int max = qMax(1, blockCount());
+	while (max >= 10) {
+		max /= 10;
+		++digits;
+	}
+
+	const int space =
+	    3 + fontMetrics().horizontalAdvance(QLatin1Char('9')) * digits;
+	return space + 16;
+}
+
+void SourceEditor::updateLineNumberAreaWidth(int) {
+	setViewportMargins(lineNumberAreaWidth(), 0, 0, 0);
+}
+
+void SourceEditor::updateLineNumberArea(const QRect &rect, int dy) {
+	if (dy)
+		m_lineNumberArea->scroll(0, dy);
+	else
+		m_lineNumberArea->update(0, rect.y(), m_lineNumberArea->width(),
+		                         rect.height());
+
+	if (rect.contains(viewport()->rect()))
+		updateLineNumberAreaWidth(0);
+}
+
+void SourceEditor::resizeEvent(QResizeEvent *event) {
+	QPlainTextEdit::resizeEvent(event);
+
+	QRect cr = contentsRect();
+	m_lineNumberArea->setGeometry(
+	    QRect(cr.left(), cr.top(), lineNumberAreaWidth(), cr.height()));
+}
+
+void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
+	QPainter painter(m_lineNumberArea);
+	painter.fillRect(event->rect(), QColor("#252525"));
+
+	QTextBlock block = firstVisibleBlock();
+	int blockNumber = block.blockNumber();
+	int top = static_cast<int>(
+	    blockBoundingGeometry(block).translated(contentOffset()).top());
+	int bottom = top + static_cast<int>(blockBoundingRect(block).height());
+
+	const int iconX = 2;
+	const int iconSize = fontMetrics().height() - 2;
+
+	// file corrente mostrato in questo editor (impostato da showLocation())
+	const QString curFile = property("currentFile").toString();
+
+	while (block.isValid() && top <= event->rect().bottom()) {
+		if (block.isVisible() && bottom >= event->rect().top()) {
+
+			int lineIndex = blockNumber + 1;
+
+			// --- BREAKPOINT DAL DEBUGGER, NON DA m_breakpoints ---
+			bool hasBp = false;
+			if (m_session && !curFile.isEmpty()) {
+				const auto bps = m_session->breakpoints();
+				for (const BreakpointInfo &bp : bps) {
+					if (bp.file == curFile && bp.line == lineIndex) {
+						hasBp = true;
+						break;
+					}
+				}
+			}
+
+			if (hasBp) {
+				painter.setBrush(QColor("#cc2222"));
+				painter.setPen(Qt::NoPen);
+				painter.drawEllipse(iconX, top + 2, iconSize, iconSize);
+			}
+
+			// --- CURRENT PROGRAM COUNTER ---
+			if (lineIndex == m_currentPC) {
+				painter.setRenderHint(QPainter::Antialiasing);
+				painter.setBrush(QColor("#ffd700"));
+				painter.setPen(Qt::NoPen);
+
+				QPointF p1(iconX + 8, top + iconSize / 2);
+				QPointF p2(iconX, top + iconSize / 2 - 6);
+				QPointF p3(iconX, top + iconSize / 2 + 6);
+
+				painter.drawPolygon(QPolygonF({p1, p2, p3}));
+			}
+
+			// --- NUMERO DI RIGA ---
+			QString number = QString::number(lineIndex);
+			painter.setPen(QColor("#aaaaaa"));
+			painter.drawText(0, top, m_lineNumberArea->width() - 2,
+			                 fontMetrics().height(), Qt::AlignRight, number);
+		}
+
+		block = block.next();
+		top = bottom;
+		bottom = top + static_cast<int>(blockBoundingRect(block).height());
+		++blockNumber;
+	}
+}
+
+void SourceEditor::setCurrentPC(int line) {
+	m_currentPC = line;
+
+	// aggiorna solo il margine, altrimenti non si vede la freccia
+	if (m_lineNumberArea)
+		m_lineNumberArea->update();
+
+	// opzionale: aggiorna riga evidenziata
+	highlightCurrentLine();
+}
+
+void SourceEditor::mousePressEvent(QMouseEvent *event) {
+	// lascia Qt gestire selezione testo
+	QPlainTextEdit::mousePressEvent(event);
+
+	QTextCursor c = cursorForPosition(event->pos());
+	int line = c.blockNumber() + 1;
+
+	QString file;
+	int dummy;
+	currentLocation(file, dummy);
+
+	// SOLO click nel margine sinistro
+	if (event->button() == Qt::LeftButton &&
+	    event->x() < m_lineNumberArea->width()) {
+		if (!file.isEmpty() && m_session)
+			m_session->toggleBreakpointAt(file, line);
+
+		return;
+	}
+
+	// click destro: run until cursor
+	if (event->button() == Qt::RightButton && m_session) {
+		currentLocation(file, line);
+		m_session->execUntil(QString("%1:%2").arg(file).arg(line));
+		return;
+	}
+}
+
+void SourceEditor::currentLocation(QString &file, int &line) const {
+	file = this->property("currentFile")
+	           .toString(); // verrà impostata da showLocation()
+	line = textCursor().blockNumber() + 1;
+}

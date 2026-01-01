@@ -1,0 +1,15 @@
+This software is Copyright (c) [2026] [Manuele Conti].
+
+License: BSD 3-Clause (see LICENSE file)
+
+Qt5 Licensing
+-------------
+This program uses the Qt5 Framework.
+Qt is licensed separately under LGPL (2.1 or 3.0).
+Users must be able to replace Qt shared libraries in the application directory.
+
+If you distribute binaries:
+- Keep Qt5 DLLs/shared libs separate (do NOT statically link unless you have a Qt commercial license)
+- Include a reference to the Qt license (already inside LICENSE)
+- Recommended: include a link to Qt sources if required by LGPL
+

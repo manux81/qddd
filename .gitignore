@@ -1,0 +1,60 @@
+# Build folders
+/build/
+/build-*/
+/*build*/
+/out/
+/bin/
+/lib/
+
+# CMake generated files
+CMakeFiles/
+/CMakeCache.txt
+cmake_install.cmake
+Makefile
+install_manifest.txt
+
+# Qt specific – generated MOC/UI/QRC artifacts
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+*.moc
+
+# Project user-local config
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.qbs.user.*
+*.creator.user
+*.creator.user.*
+
+# Qt Creator / CLion / IDE junk
+*.autosave
+*.swp
+*.swo
+*.kate-swp
+.idea/
+.vscode/
+*.user
+
+# Compiled binaries / shared libs
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# Logs and temp
+*.log
+*.tmp
+*.cache
+
+# macOS artifacts
+.DS_Store
+*.dSYM/
+
+# Windows artifacts
+Thumbs.db
+
