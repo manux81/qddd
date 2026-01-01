@@ -145,7 +145,7 @@ class DebugSession : public QObject {
 
   private:
 	QProcess m_proc;
-	Backend m_backend = Backend::LLDB_MI;
+	Backend m_backend = Backend::GDB_MI;
 	QString m_programPath;
 	QByteArray m_buffer;
 
