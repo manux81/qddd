@@ -161,13 +161,19 @@ void MainWindow::setupMenusAndToolbars() {
 	QMenu *programMenu = menuBar()->addMenu(tr("&Program"));
 
 	QAction *runAct = programMenu->addAction(tr("Run"));
+	runAct->setShortcut(Qt::Key_F2);
+	QAction *runAgainAct = programMenu->addAction(tr("Run Again"));
+	runAgainAct->setShortcut(Qt::Key_F3);
 	QAction *contAct = programMenu->addAction(tr("Continue"));
+	contAct->setShortcut(Qt::Key_F9);
 	QAction *stepInAct = programMenu->addAction(tr("Step Into"));
+	stepInAct->setShortcut(Qt::Key_F5);
 	QAction *stepOverAct = programMenu->addAction(tr("Step Over"));
+	stepOverAct->setShortcut(Qt::Key_F6);
 	QAction *stepOutAct = programMenu->addAction(tr("Step Out"));
-
 	QAction *interruptAct = programMenu->addAction(tr("Interrupt"));
 	QAction *untilAct = programMenu->addAction(tr("Run Until Cursor"));
+	untilAct->setShortcut(Qt::Key_F7);
 	QAction *upAct = programMenu->addAction(tr("Up"));
 	QAction *downAct = programMenu->addAction(tr("Down"));
 	QAction *toggleBpAct = programMenu->addAction(tr("Toggle Breakpoint"));
