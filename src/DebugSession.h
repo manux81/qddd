@@ -112,6 +112,7 @@ class DebugSession : public QObject {
 	void sessionUpdated();
 	void breakpointsChanged(const QList<BreakpointInfo> &list);
 	void debuggerExited(int exitCode, QProcess::ExitStatus status);
+	void complexVariablesUpdated(QList<VarNode *> roots);
 
   private slots:
 	void onReadyReadStdout();

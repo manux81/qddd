@@ -51,7 +51,9 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 	m_variablesView->setSession(m_session.get());
 	m_sourceEditor->setSession(m_session.get());
 
-	// IMPORTANTE: ascolta gli update della sessione
+	m_dataController =
+	    new GraphComplexController(m_session.get(), m_dataDisplay, this);
+
 	connect(m_session.get(), &DebugSession::sessionUpdated, this,
 	        &MainWindow::updateFromSession);
 
@@ -83,7 +85,7 @@ void MainWindow::setupUi() {
 	tabifyDockWidget(m_varsDock, m_stackDock);
 
 	m_dataDock = new QDockWidget(tr("Data Display"), this);
-	m_dataDisplay = new DataDisplayView(m_dataDock);
+	m_dataDisplay = new GraphicalVariablesView(m_dataDock);
 	m_dataDock->setWidget(m_dataDisplay);
 	addDockWidget(Qt::BottomDockWidgetArea, m_dataDock);
 

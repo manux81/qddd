@@ -91,6 +91,8 @@ static bool attachToTree(QList<VarNode *> &roots, const QString &parentId,
 }
 
 DebugSession::DebugSession(QObject *parent) : QObject(parent) {
+	m_useComplexVarView = true;
+
 	connect(&m_proc, &QProcess::readyReadStandardOutput, this,
 	        &DebugSession::onReadyReadStdout);
 
@@ -423,9 +425,6 @@ void DebugSession::fetchData() {
 	enqueueCommand({"-stack-list-frames", nullptr, false});
 	enqueueCommand({"-stack-info-frame", nullptr, false});
 	enqueueCommand({"-stack-list-variables --all-values", nullptr, false});
-
-	if (m_useComplexVarView)
-		fetchComplexVars();
 }
 
 void DebugSession::requestRefresh() { fetchData(); }
@@ -486,16 +485,24 @@ void DebugSession::handleVarList(const QString &line) {
 	m_vars = vars;
 	m_pendingVars = false;
 
-	// --- LLDB FIX (optional):
-    /*
-	for (auto &v : m_vars) {
-		if (v.type.isEmpty() && !v.name.isEmpty()) {
-			QString cmd =
-			    QString("-data-evaluate-expression \"expr -T %1\"").arg(v.name);
-			enqueueCommand({cmd, nullptr, false});
-		}
-	}
-	*/
+// --- NUOVO: costruisce una rappresentazione "complessa" semplice dalle variabili locali ---
+qDeleteAll(m_cvars);
+m_cvars.clear();
+
+for (const auto &v : m_vars) {
+	auto *node = new VarNode;
+	node->name = v.name;
+	node->value = v.value;
+	node->type = v.type;
+	node->hasChildren = false;
+	node->varId = v.name;    // usiamo il nome come id univoco semplice
+	// node->children rimane vuoto
+	m_cvars.append(node);
+}
+
+// Notifica la vista grafica
+emit complexVariablesUpdated(m_cvars);
+
 }
 
 void DebugSession::handleFrameInfo(const QString &line) {
@@ -627,9 +634,7 @@ void DebugSession::handleBreakpointDeleted(const QString &line) {
 }
 
 void DebugSession::fetchComplexVars() {
-	m_cvars.clear();
-	enqueueCommand({"-var-create root * \"*\"", nullptr, false});
-	enqueueCommand({"-var-list-children --all-values root", nullptr, false});
+
 }
 
 void DebugSession::parseComplexVarTree(const QString &line) {
@@ -638,25 +643,38 @@ void DebugSession::parseComplexVarTree(const QString &line) {
 
 	QList<VarNode *> nodes = parseMiChildren(payload);
 
-	if (m_cvars.isEmpty()) {
-		m_cvars = nodes;
-	} else {
-		QString id;
-		if (line.contains("id=\""))
-			id = line.section("id=\"", 1, 1).section("\"", 0, 0);
+	// quando arriva la prima risposta di un var-create,
+	// nodes contiene UNA sola entry con identificatore es: obj_i
+	if (nodes.isEmpty())
+		return;
 
-		if (!id.isEmpty()) {
-			attachToTree(m_cvars, id, nodes);
-		}
+	// estrai id della variabile se presente
+	QString id;
+	if (line.contains("id=\""))
+		id = line.section("id=\"", 1, 1).section("\"", 0, 0);
+
+	// caso: primo livello => nuova radice
+	if (id.isEmpty()) {
+		for (VarNode *n : nodes)
+			m_cvars.append(n);      // AGGIUNGI ROOT MULTIPLI
+	} else {
+		// caso: figli = attacca ricorsivamente
+		attachToTree(m_cvars, id, nodes);
 	}
 
+	// se un nodo ha figli, richiedili
 	for (VarNode *n : nodes) {
-		if (n->hasChildren && !n->varId.isEmpty())
+		if (n->hasChildren && !n->varId.isEmpty()) {
 			enqueueCommand(
 			    {QString("-var-list-children --all-values %1").arg(n->varId),
 			     nullptr, false});
+		}
 	}
+
+	// FINALMENTE: emetti aggiornamento verso la UI
+	emit complexVariablesUpdated(m_cvars);
 }
+
 
 QString DebugSession::evaluateExpression(const QString &expr) {
 	if (expr.isEmpty())

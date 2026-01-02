@@ -28,72 +28,64 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
 #pragma once
 
-#include <QMainWindow>
-#include <memory>
+#include <QGraphicsView>
+#include <QColor>
+#include <QMap>
+#include <QVector>
+#include <QString>
 
-#include "BreakpointsView.h"
-#include "ConsoleWidget.h"
-#include "DebugSession.h"
-#include "SourceEditor.h"
-#include "StackView.h"
-#include "VariablesView.h"
+class QGraphicsScene;
 
-// NUOVO: sostituisce DataDisplayView
-#include "GraphicalVariablesView.h"
-#include "GraphComplexController.h"
+struct GraphNodeField {
+	QString name;
+	QString type;
+	QString value;
+};
 
-class QDockWidget;
-class QAction;
-class QToolBar;
+struct GraphNode {
+	QString id;                    // chiave univoca (es. varId / indirizzo)
+	QString title;                 // titolo card (nome variabile)
+	QVector<GraphNodeField> fields;
+	QColor color;                  // colore card
+};
 
-class MainWindow : public QMainWindow {
+struct GraphEdge {
+	QString fromId;
+	QString toId;
+	QString label;
+};
+
+class GraphicalVariablesView : public QGraphicsView {
 	Q_OBJECT
   public:
-	explicit MainWindow(const QString &initialProgram = QString(),
-	                    QWidget *parent = nullptr);
-	~MainWindow() override = default;
+	explicit GraphicalVariablesView(QWidget *parent = nullptr);
+	~GraphicalVariablesView() override;
 
-  private slots:
-	void openProgram();
-	void runProgram();
-	void continueProgram();
-	void stepInto();
-	void stepOver();
-	void stepOut();
-	void interrupt();
-	void until();
-	void up();
-	void down();
-	void toggleBp();
+	// Rimpiazza l'intero grafo
+	void setGraph(const QVector<GraphNode> &nodes,
+	              const QVector<GraphEdge> &edges);
 
-	void updateFromSession();
+	// Aggiorna solo il "value" principale di un nodo
+	void updateNodeValue(const QString &id, const QString &value);
+
+	// Aggiorna tutti i campi di un nodo
+	void updateNodeFields(const QString &id,
+	                      const QVector<GraphNodeField> &fields);
+
+  signals:
+	void nodeDoubleClicked(const QString &id);
+
+  protected:
+	void wheelEvent(QWheelEvent *event) override;
+	void mouseDoubleClickEvent(QMouseEvent *event) override;
 
   private:
-	void setupUi();
-	void setupMenusAndToolbars();
-	void startDebugger(const QString &programPath);
+	void clearGraph();
+	void layoutBreadthFirst();
 
-	std::unique_ptr<DebugSession> m_session;
-
-	SourceEditor *m_sourceEditor = nullptr;
-	VariablesView *m_variablesView = nullptr;
-	StackView *m_stackView = nullptr;
-	GraphicalVariablesView *m_dataDisplay = nullptr;
-	ConsoleWidget *m_consoleWidget = nullptr;
-	BreakpointsView *m_breakView = nullptr;
-
-	// Controller che collega DebugSession ↔ GraphicalVariablesView
-	GraphComplexController *m_dataController = nullptr;
-
-	QDockWidget *m_varsDock = nullptr;
-	QDockWidget *m_stackDock = nullptr;
-	QDockWidget *m_dataDock = nullptr;
-	QDockWidget *m_consoleDock = nullptr;
-	QDockWidget *m_breakDock = nullptr;
-
-	QString m_currentProgram;
-	bool m_breakOnMainInserted = false;
+	struct Impl;
+	Impl *m_impl;
+	QGraphicsScene *m_scene;
 };

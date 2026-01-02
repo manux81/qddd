@@ -28,72 +28,30 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
 #pragma once
 
-#include <QMainWindow>
-#include <memory>
-
-#include "BreakpointsView.h"
-#include "ConsoleWidget.h"
+#include <QObject>
 #include "DebugSession.h"
-#include "SourceEditor.h"
-#include "StackView.h"
-#include "VariablesView.h"
-
-// NUOVO: sostituisce DataDisplayView
 #include "GraphicalVariablesView.h"
-#include "GraphComplexController.h"
 
-class QDockWidget;
-class QAction;
-class QToolBar;
-
-class MainWindow : public QMainWindow {
+// Controller che traduce VarNode (albero complesso del debugger)
+// in GraphNode/GraphEdge per la GraphicalVariablesView.
+class GraphComplexController : public QObject {
 	Q_OBJECT
   public:
-	explicit MainWindow(const QString &initialProgram = QString(),
-	                    QWidget *parent = nullptr);
-	~MainWindow() override = default;
+	GraphComplexController(DebugSession *session,
+	                       GraphicalVariablesView *view,
+	                       QObject *parent = nullptr);
 
   private slots:
-	void openProgram();
-	void runProgram();
-	void continueProgram();
-	void stepInto();
-	void stepOver();
-	void stepOut();
-	void interrupt();
-	void until();
-	void up();
-	void down();
-	void toggleBp();
-
-	void updateFromSession();
+	void onComplexVars(QList<VarNode *> roots);
+	void onNodeDblClicked(const QString &id);
 
   private:
-	void setupUi();
-	void setupMenusAndToolbars();
-	void startDebugger(const QString &programPath);
+	DebugSession *m_session;
+	GraphicalVariablesView *m_view;
 
-	std::unique_ptr<DebugSession> m_session;
-
-	SourceEditor *m_sourceEditor = nullptr;
-	VariablesView *m_variablesView = nullptr;
-	StackView *m_stackView = nullptr;
-	GraphicalVariablesView *m_dataDisplay = nullptr;
-	ConsoleWidget *m_consoleWidget = nullptr;
-	BreakpointsView *m_breakView = nullptr;
-
-	// Controller che collega DebugSession ↔ GraphicalVariablesView
-	GraphComplexController *m_dataController = nullptr;
-
-	QDockWidget *m_varsDock = nullptr;
-	QDockWidget *m_stackDock = nullptr;
-	QDockWidget *m_dataDock = nullptr;
-	QDockWidget *m_consoleDock = nullptr;
-	QDockWidget *m_breakDock = nullptr;
-
-	QString m_currentProgram;
-	bool m_breakOnMainInserted = false;
+	void walk(VarNode *n, QVector<GraphNode> &nodes,
+	          QVector<GraphEdge> &edges, const QString &parentId);
+	QColor typeToColor(const QString &type);
 };

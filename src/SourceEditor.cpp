@@ -168,7 +168,6 @@ void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 
 			int lineIndex = blockNumber + 1;
 
-			// --- BREAKPOINT DAL DEBUGGER, NON DA m_breakpoints ---
 			bool hasBp = false;
 			if (m_session && !curFile.isEmpty()) {
 				const auto bps = m_session->breakpoints();
@@ -183,7 +182,7 @@ void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 			if (hasBp) {
 				painter.setBrush(QColor("#cc2222"));
 				painter.setPen(Qt::NoPen);
-				painter.drawEllipse(iconX, top + 2, iconSize, iconSize);
+				painter.drawEllipse(iconX, top + 4, iconSize / 2, iconSize / 2);
 			}
 
 			// --- CURRENT PROGRAM COUNTER ---
