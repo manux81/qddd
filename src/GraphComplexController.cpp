@@ -31,6 +31,39 @@
 
 #include "GraphComplexController.h"
 
+static void buildFields(
+    VarNode* n,
+    QVector<GraphNodeField>& out,
+    int depth
+) {
+    if (!n) return;
+
+    GraphNodeField f;
+    f.name = n->name;
+    f.type = n->type;
+    f.value = n->value;
+    f.depth = depth;
+
+    f.isExpandable = !n->children.isEmpty();
+    f.expanded = true;
+
+    // se è un puntatore, salva l'indirizzo target
+    if (n->type.contains('*')) {
+        QString v = n->value.trimmed();
+        if (v.startsWith("0x"))
+            f.targetId = v;
+    }
+
+    out.push_back(f);
+
+    if (!f.expanded)
+        return;
+
+    for (VarNode* c : n->children)
+        buildFields(c, out, depth + 1);
+}
+
+
 GraphComplexController::GraphComplexController(DebugSession *session,
                                                GraphicalVariablesView *view,
                                                QObject *parent)
@@ -58,20 +91,14 @@ void GraphComplexController::walk(VarNode *n, QVector<GraphNode> &nodes,
 	if (!n)
 		return;
 
-	GraphNode g;
-	g.id = !n->varId.isEmpty()
-	           ? n->varId
-	           : QString("node_%1")
-	                 .arg(reinterpret_cast<quintptr>(n), 0, 16);
-	g.title = n->name;
-	g.color = typeToColor(n->type);
-	g.fields = {
-	    { "type",  "", n->type  },
-	    { "value", "", n->value }
-	};
+GraphNode g;
+g.id    = n->varId;
+g.title = n->name;
+g.color = typeToColor(n->type);
 
+buildFields(n, g.fields, 0);
+nodes.push_back(g);
 
-	nodes.push_back(g);
 
 	if (!parentId.isEmpty()) {
 		GraphEdge e;

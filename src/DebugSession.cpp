@@ -485,23 +485,46 @@ void DebugSession::handleVarList(const QString &line) {
 	m_vars = vars;
 	m_pendingVars = false;
 
-// --- NUOVO: costruisce una rappresentazione "complessa" semplice dalle variabili locali ---
 qDeleteAll(m_cvars);
 m_cvars.clear();
 
+auto pendingAddr = QSharedPointer<int>::create(0);
+
 for (const auto &v : m_vars) {
-	auto *node = new VarNode;
-	node->name = v.name;
-	node->value = v.value;
-	node->type = v.type;
-	node->hasChildren = false;
-	node->varId = v.name;    // usiamo il nome come id univoco semplice
-	// node->children rimane vuoto
-	m_cvars.append(node);
+    auto *node = new VarNode;
+    node->name = v.name;
+    node->value = v.value;
+    node->type = v.type;
+    node->hasChildren = false;
+
+    // placeholder temporaneo
+    node->varId = v.name;
+
+    m_cvars.append(node);
+
+    const QString expr = "&" + v.name;
+    (*pendingAddr)++;
+
+    enqueueCommand({
+        QString("-data-evaluate-expression %1").arg(expr),
+        [this, node, pendingAddr](const QString &line) {
+            QRegularExpression re(R"(value=\"([^\"]+)\")");
+            QRegularExpressionMatch m = re.match(line);
+            if (m.hasMatch()) {
+                node->varId = m.captured(1).trimmed().toLower();
+            }
+
+            (*pendingAddr)--;
+
+            if (*pendingAddr == 0) {
+                emit complexVariablesUpdated(m_cvars);
+            }
+        },
+        false
+    });
 }
 
-// Notifica la vista grafica
-emit complexVariablesUpdated(m_cvars);
+
 
 }
 

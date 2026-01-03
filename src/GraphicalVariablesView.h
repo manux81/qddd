@@ -28,64 +28,69 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+
 #pragma once
 
 #include <QGraphicsView>
 #include <QColor>
-#include <QMap>
 #include <QVector>
 #include <QString>
 
 class QGraphicsScene;
 
 struct GraphNodeField {
-	QString name;
-	QString type;
-	QString value;
+    QString name;
+    QString type;
+    QString value;
+
+    int depth = 0;
+    bool isExpandable = false;
+    bool expanded = true;
+    QString targetId;
 };
 
 struct GraphNode {
-	QString id;                    // chiave univoca (es. varId / indirizzo)
-	QString title;                 // titolo card (nome variabile)
-	QVector<GraphNodeField> fields;
-	QColor color;                  // colore card
+    QString id;
+    QString title;
+    QVector<GraphNodeField> fields;
+    QColor color;
 };
 
 struct GraphEdge {
-	QString fromId;
-	QString toId;
-	QString label;
+    QString fromId;
+    QString toId;
+    QString label;
 };
 
 class GraphicalVariablesView : public QGraphicsView {
-	Q_OBJECT
-  public:
-	explicit GraphicalVariablesView(QWidget *parent = nullptr);
-	~GraphicalVariablesView() override;
+    Q_OBJECT
+public:
+    explicit GraphicalVariablesView(QWidget *parent = nullptr);
+    ~GraphicalVariablesView() override;
 
-	// Rimpiazza l'intero grafo
-	void setGraph(const QVector<GraphNode> &nodes,
-	              const QVector<GraphEdge> &edges);
+    void setGraph(const QVector<GraphNode>& nodes,
+                  const QVector<GraphEdge>& edges);
 
-	// Aggiorna solo il "value" principale di un nodo
-	void updateNodeValue(const QString &id, const QString &value);
+signals:
+    void nodeDoubleClicked(const QString& id);
 
-	// Aggiorna tutti i campi di un nodo
-	void updateNodeFields(const QString &id,
-	                      const QVector<GraphNodeField> &fields);
+protected:
+    void wheelEvent(QWheelEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void drawBackground(QPainter *p, const QRectF &rect) override;
 
-  signals:
-	void nodeDoubleClicked(const QString &id);
+public slots:
+    void zoomIn();
+    void zoomOut();
+    void resetZoom();
+    void fitGraph();
 
-  protected:
-	void wheelEvent(QWheelEvent *event) override;
-	void mouseDoubleClickEvent(QMouseEvent *event) override;
+private:
+    void rebuildEdges(); // stub
 
-  private:
-	void clearGraph();
-	void layoutBreadthFirst();
-
-	struct Impl;
-	Impl *m_impl;
-	QGraphicsScene *m_scene;
+    struct Impl;
+    Impl *m_impl;
+    QGraphicsScene *m_scene;
 };
+
