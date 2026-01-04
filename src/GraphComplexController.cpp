@@ -42,9 +42,6 @@ static void buildFields(VarNode* n, QVector<GraphNodeField>& out, int depth)
         buildFields(c, out, depth + 1);
 }
 
-
-
-
 /* =======================================================
  * GraphComplexController
  * =====================================================*/
