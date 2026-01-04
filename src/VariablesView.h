@@ -56,6 +56,7 @@ class VariablesView : public QTreeView {
 
 	QStandardItemModel *m_model;
 	DebugSession *m_session = nullptr;
+	QHash<QString, QString> m_previousValues;
 };
 
 

@@ -33,20 +33,19 @@
 
 #include <QFontDatabase>
 #include <QHeaderView>
+#include <QPainter>
+#include <QPalette>
 #include <QStandardItem>
 #include <QStandardItemModel>
 #include <QStyledItemDelegate>
-#include <QPalette>
-#include <QPainter>
-
+#include <QSet>
+#include <QHash>
 
 namespace {
 
-/*
- * ============================================================
- *  PARSER HELPERS (robusto per struct annidate LLDB)
- * ============================================================
- */
+/* ============================================================
+ *  PARSER HELPERS
+ * ============================================================ */
 
 QStringList splitTopLevel(const QString &s) {
 	QStringList result;
@@ -77,7 +76,7 @@ bool splitNameValue(const QString &s, QString &name, QString &value) {
 	int depth = 0;
 
 	for (int i = 0; i < s.size(); ++i) {
-		const QChar c = s[i];
+		QChar c = s[i];
 
 		if (c == '{')
 			++depth;
@@ -93,11 +92,9 @@ bool splitNameValue(const QString &s, QString &name, QString &value) {
 	return false;
 }
 
-/*
- * ============================================================
- *  ICON SEMANTICS (VS Code Codicons reali)
- * ============================================================
- */
+/* ============================================================
+ *  VISUAL SEMANTICS
+ * ============================================================ */
 
 enum class VarVisualType {
 	Scalar,
@@ -122,85 +119,74 @@ VarVisualType visualType(const VarNode *n) {
 	return VarVisualType::Scalar;
 }
 
-// Colori semantici stile Visual Studio
-static QColor colorForType(VarVisualType type) {
+QColor colorForType(VarVisualType type) {
 	switch (type) {
-
-	case VarVisualType::Pointer:
-		// indirizzi / reference → azzurro
-		return QColor(97, 175, 239);   // VS blue
-
-	case VarVisualType::Struct:
-		// aggregate / struct → verde tenue
-		return QColor(152, 195, 121);  // VS green
-
-	case VarVisualType::Object:
-		// classi / QObject → giallo caldo
-		return QColor(229, 192, 123);  // VS yellow
-
-	case VarVisualType::Container:
-		// array / vector → viola tenue
-		return QColor(198, 120, 221);  // VS purple
-
-	case VarVisualType::Internal:
-		// implementation detail → grigio spento
-		return QColor(130, 130, 130);
-
+	case VarVisualType::Pointer:   return QColor(97, 175, 239);
+	case VarVisualType::Struct:    return QColor(152, 195, 121);
+	case VarVisualType::Object:    return QColor(229, 192, 123);
+	case VarVisualType::Container: return QColor(198, 120, 221);
+	case VarVisualType::Internal:  return QColor(130, 130, 130);
 	case VarVisualType::Scalar:
-	default:
-		// variabili normali → testo standard
-		return QColor(220, 220, 220);
+	default:                       return QColor(220, 220, 220);
 	}
 }
 
-static QIcon coloredIcon(const QString &path, const QColor &color, int size = 16)
-{
-	QIcon baseIcon(path);
+/* ============================================================
+ *  ICON RENDERING (SVG → colored pixmap)
+ * ============================================================ */
+
+QIcon coloredIcon(const QString &path, const QColor &color, int size = 16) {
 	QPixmap pm(size, size);
 	pm.fill(Qt::transparent);
 
+	QIcon base(path);
 	QPainter p(&pm);
 	p.setRenderHint(QPainter::Antialiasing, true);
 
-	// Render SVG in pixmap
-	baseIcon.paint(&p, QRect(0, 0, size, size));
-
-	// Applica colore (tinta)
+	base.paint(&p, QRect(0, 0, size, size));
 	p.setCompositionMode(QPainter::CompositionMode_SourceIn);
 	p.fillRect(pm.rect(), color);
 
-	p.end();
 	return QIcon(pm);
 }
 
-static QIcon iconForType(VarVisualType type)
-{
-	const QColor color = colorForType(type);
-
+QIcon iconForType(VarVisualType type) {
+	const QColor c = colorForType(type);
 	switch (type) {
 	case VarVisualType::Pointer:
-		return coloredIcon(":/icons/resources/icons/symbol-field.svg", color);
+		return coloredIcon(":/icons/resources/icons/symbol-field.svg", c);
 	case VarVisualType::Struct:
-		return coloredIcon(":/icons/resources/icons/symbol-structure.svg", color);
+		return coloredIcon(":/icons/resources/icons/symbol-structure.svg", c);
 	case VarVisualType::Object:
-		return coloredIcon(":/icons/resources/icons/symbol-class.svg", color);
+		return coloredIcon(":/icons/resources/icons/symbol-class.svg", c);
 	case VarVisualType::Container:
-		return coloredIcon(":/icons/resources/icons/symbol-array.svg", color);
+		return coloredIcon(":/icons/resources/icons/symbol-array.svg", c);
 	case VarVisualType::Internal:
-		return coloredIcon(":/icons/resources/icons/symbol-key.svg", color);
+		return coloredIcon(":/icons/resources/icons/symbol-key.svg", c);
 	case VarVisualType::Scalar:
 	default:
-		return coloredIcon(":/icons/resources/icons/symbol-variable.svg", color);
+		return coloredIcon(":/icons/resources/icons/symbol-variable.svg", c);
 	}
+}
+
+/* ============================================================
+ *  PATH UTILITY (per expand + diff)
+ * ============================================================ */
+
+QString itemPath(QStandardItem *item) {
+	QStringList parts;
+	while (item) {
+		parts.prepend(item->text());
+		item = item->parent();
+	}
+	return parts.join(".");
 }
 
 } // namespace
 
-/*
- * ============================================================
- *  VALUE DELEGATE (monospace stile debugger)
- * ============================================================
- */
+/* ============================================================
+ *  VALUE DELEGATE
+ * ============================================================ */
 
 class ValueDelegate : public QStyledItemDelegate {
 public:
@@ -215,11 +201,9 @@ public:
 	}
 };
 
-/*
- * ============================================================
+/* ============================================================
  *  VARIABLES VIEW
- * ============================================================
- */
+ * ============================================================ */
 
 VariablesView::VariablesView(QWidget *parent)
     : QTreeView(parent)
@@ -232,8 +216,8 @@ VariablesView::VariablesView(QWidget *parent)
 	header()->setHighlightSections(false);
 
 	setAlternatingRowColors(true);
-	setRootIsDecorated(true);
 	setUniformRowHeights(true);
+	setRootIsDecorated(true);
 	setIndentation(14);
 	setIconSize(QSize(20, 20));
 
@@ -249,10 +233,9 @@ void VariablesView::setSession(DebugSession *session) {
 
 	m_session = session;
 
-	if (m_session) {
+	if (m_session)
 		connect(m_session, &DebugSession::sessionUpdated,
 		        this, &VariablesView::refresh);
-	}
 }
 
 void VariablesView::clearVariables() {
@@ -264,16 +247,69 @@ void VariablesView::refresh() {
 	if (!m_session)
 		return;
 
+	/* -------- save expanded state -------- */
+	QSet<QString> expanded;
+	std::function<void(QStandardItem*)> save =
+	    [&](QStandardItem *it) {
+		    if (!it) return;
+		    if (isExpanded(m_model->indexFromItem(it)))
+			    expanded.insert(itemPath(it));
+		    for (int i = 0; i < it->rowCount(); ++i)
+			    save(it->child(i));
+	    };
+
+	for (int i = 0; i < m_model->rowCount(); ++i)
+		save(m_model->item(i));
+
+	/* -------- rebuild -------- */
 	clearVariables();
 
 	for (const VariableInfo &v : m_session->variables()) {
-		auto *node = new VarNode;
-		node->name = v.name;
-		node->value = v.value;
-		node->type = v.type;
-		node->hasChildren = false;
-		addNode(nullptr, node);
+		auto *n = new VarNode;
+		n->name = v.name;
+		n->value = v.value;
+		n->type = v.type;
+		addNode(nullptr, n);
 	}
+
+	/* -------- restore expanded -------- */
+	std::function<void(QStandardItem*)> restore =
+	    [&](QStandardItem *it) {
+		    if (!it) return;
+		    if (expanded.contains(itemPath(it)))
+			    expand(m_model->indexFromItem(it));
+		    for (int i = 0; i < it->rowCount(); ++i)
+			    restore(it->child(i));
+	    };
+
+	for (int i = 0; i < m_model->rowCount(); ++i)
+		restore(m_model->item(i));
+
+	/* -------- update value cache -------- */
+	m_previousValues.clear();
+	std::function<void(QStandardItem*)> collect =
+	    [&](QStandardItem *it) {
+		    if (!it) return;
+		    QString path = itemPath(it);
+		    QStandardItem *valueItem = nullptr;
+
+if (it->parent())
+	valueItem = it->parent()->child(it->row(), 1);
+else
+	valueItem = m_model->item(it->row(), 1);
+
+if (!valueItem)
+	return;
+
+QString val = valueItem->text();
+
+		    m_previousValues[path] = val;
+		    for (int i = 0; i < it->rowCount(); ++i)
+			    collect(it->child(i));
+	    };
+
+	for (int i = 0; i < m_model->rowCount(); ++i)
+		collect(m_model->item(i));
 }
 
 void VariablesView::addNode(QStandardItem *parent, VarNode *node) {
@@ -284,64 +320,38 @@ void VariablesView::addNode(QStandardItem *parent, VarNode *node) {
 	auto *valueItem = new QStandardItem(node->value);
 	auto *typeItem  = new QStandardItem(node->type);
 
-	// ---------- ICON + SEMANTIC STYLING ----------
 	const VarVisualType vt = visualType(node);
 	nameItem->setIcon(iconForType(vt));
 
-	// icone leggermente più chiare del testo (VS-style)
-	nameItem->setForeground(palette().color(QPalette::Text).lighter(130));
+	const QString path = parent
+	    ? itemPath(parent) + "." + node->name
+	    : node->name;
 
-
-	if (vt == VarVisualType::Internal) {
-		QFont f = nameItem->font();
-		f.setItalic(true);
-		nameItem->setFont(f);
-		nameItem->setForeground(QColor(150, 150, 150));
+	const QString oldVal = m_previousValues.value(path);
+	if (!oldVal.isEmpty() && oldVal != node->value) {
+		valueItem->setBackground(QColor(60, 60, 60));
+		valueItem->setForeground(QColor(255, 180, 80));
 	}
 
-	if (node->value.startsWith("0x")) {
-		valueItem->setForeground(QColor(140, 180, 220));
-		valueItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-	}
-
-	// ---------- APPEND ROW ----------
 	QList<QStandardItem *> row{ nameItem, valueItem, typeItem };
 	if (parent)
 		parent->appendRow(row);
 	else
 		m_model->appendRow(row);
 
-	// ---------- FALLBACK PARSER ----------
-	const QString value = node->value.trimmed();
-	const bool shouldParseStruct =
-	    node->children.isEmpty() &&
-	    value.startsWith('{') &&
-	    value.endsWith('}');
-
-	if (shouldParseStruct) {
-		const QString inside = value.mid(1, value.length() - 2);
-		const QStringList fields = splitTopLevel(inside);
-
-		for (const QString &field : fields) {
-			QString name, val;
-			if (!splitNameValue(field, name, val))
-				continue;
-
-			auto *child = new VarNode;
-			child->name = name;
-			child->value = val;
-			child->type.clear();
-			child->hasChildren =
-			    val.startsWith('{') && val.endsWith('}');
-			node->children.append(child);
+	const QString v = node->value.trimmed();
+	if (node->children.isEmpty() && v.startsWith('{') && v.endsWith('}')) {
+		const QString inside = v.mid(1, v.length() - 2);
+		for (const QString &f : splitTopLevel(inside)) {
+			QString n, val;
+			if (splitNameValue(f, n, val)) {
+				auto *c = new VarNode;
+				c->name = n;
+				c->value = val;
+				addNode(nameItem, c);
+			}
 		}
-
-		if (!node->children.isEmpty()) {
-			valueItem->setText("...");
-			valueItem->setForeground(QColor(160, 160, 160));
-		}
+		valueItem->setText("{...}");
+		valueItem->setForeground(QColor(160, 160, 160));
 	}
-
-	for (VarNode *child : node->children)
-		addNode(nameItem, child);
 }
