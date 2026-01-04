@@ -1,62 +1,41 @@
-/*
- * Copyright (c) [2026], Manuele Conti
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * 3. Neither the name of Manuele Conti nor the names of its
- *    contributors may be used to endorse or promote products derived from this
- *    software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
 #include "GraphComplexController.h"
 
-static void buildFields(
-    VarNode* n,
-    QVector<GraphNodeField>& out,
-    int depth
-) {
+/* -------------------------------------------------------
+ * Utility: ricerca ricorsiva nodo per varId
+ * -----------------------------------------------------*/
+static VarNode* findNodeById(VarNode* n, const QString& id)
+{
+    if (!n) return nullptr;
+    if (n->varId == id) return n;
+
+    for (VarNode* c : n->children) {
+        if (auto* r = findNodeById(c, id))
+            return r;
+    }
+    return nullptr;
+}
+
+/* -------------------------------------------------------
+ * Costruzione flat dei campi (tree-view style)
+ * -----------------------------------------------------*/
+static void buildFields(VarNode* n, QVector<GraphNodeField>& out, int depth)
+{
     if (!n) return;
 
     GraphNodeField f;
-    f.name = n->name;
-    f.type = n->type;
-    f.value = n->value;
-    f.depth = depth;
-
+    f.id           = n->varId;
+    f.name         = n->name;
+    f.depth        = depth;
     f.isExpandable = !n->children.isEmpty();
-    f.expanded = true;
+    f.expanded     = n->expanded;
+    f.targetId     = n->type.contains('*') ? n->value : QString();
 
-    // se è un puntatore, salva l'indirizzo target
-    if (n->type.contains('*')) {
-        QString v = n->value.trimmed();
-        if (v.startsWith("0x"))
-            f.targetId = v;
-    }
+    // valore solo se nodo chiuso
+    f.value = n->expanded ? QString() : n->value;
 
     out.push_back(f);
 
-    if (!f.expanded)
+    if (!n->expanded)
         return;
 
     for (VarNode* c : n->children)
@@ -64,70 +43,92 @@ static void buildFields(
 }
 
 
-GraphComplexController::GraphComplexController(DebugSession *session,
-                                               GraphicalVariablesView *view,
-                                               QObject *parent)
-    : QObject(parent), m_session(session), m_view(view) {
-	connect(m_session, &DebugSession::complexVariablesUpdated, this,
-	        &GraphComplexController::onComplexVars);
 
-	connect(m_view, &GraphicalVariablesView::nodeDoubleClicked, this,
-	        &GraphComplexController::onNodeDblClicked);
+
+/* =======================================================
+ * GraphComplexController
+ * =====================================================*/
+GraphComplexController::GraphComplexController(
+    DebugSession *session,
+    GraphicalVariablesView *view,
+    QObject *parent
+)
+    : QObject(parent),
+      m_session(session),
+      m_view(view)
+{
+    connect(m_session, &DebugSession::complexVariablesUpdated,
+            this, &GraphComplexController::onComplexVars);
+
+    connect(m_view, &GraphicalVariablesView::toggleNodeExpanded,
+            this, &GraphComplexController::onToggleExpanded);
+
+    connect(m_view, &GraphicalVariablesView::nodeDoubleClicked,
+            this, &GraphComplexController::onNodeDblClicked);
 }
 
-void GraphComplexController::onComplexVars(QList<VarNode *> roots) {
-	QVector<GraphNode> nodes;
-	QVector<GraphEdge> edges;
+/* -------------------------------------------------------
+ * Rebuild completo del grafo
+ * -----------------------------------------------------*/
+void GraphComplexController::onComplexVars(QList<VarNode*> roots)
+{
+    QVector<GraphNode> nodes;
+    QVector<GraphEdge> edges;
 
-	for (VarNode *root : roots)
-		walk(root, nodes, edges, QString());
+    for (VarNode* root : roots) {
+        if (!root)
+            continue;
 
-	m_view->setGraph(nodes, edges);
+        GraphNode g;
+        g.id    = root->varId;
+        g.title = root->name;
+        g.color = typeToColor(root->type);
+
+        buildFields(root, g.fields, 0);
+        nodes.push_back(g);
+    }
+
+    m_view->setGraph(nodes, edges);
 }
 
-void GraphComplexController::walk(VarNode *n, QVector<GraphNode> &nodes,
-                                  QVector<GraphEdge> &edges,
-                                  const QString &parentId) {
-	if (!n)
-		return;
+/* -------------------------------------------------------
+ * Toggle espansione (ricorsivo)
+ * -----------------------------------------------------*/
+void GraphComplexController::onToggleExpanded(const QString& id)
+{
+    for (VarNode* r : m_session->complexVariables()) {
+        if (auto* n = findNodeById(r, id)) {
+            n->expanded = !n->expanded;
 
-GraphNode g;
-g.id    = n->varId;
-g.title = n->name;
-g.color = typeToColor(n->type);
-
-buildFields(n, g.fields, 0);
-nodes.push_back(g);
-
-
-	if (!parentId.isEmpty()) {
-		GraphEdge e;
-		e.fromId = parentId;
-		e.toId = g.id;
-		e.label = QString();
-		edges.push_back(e);
-	}
-
-	for (VarNode *child : n->children)
-		walk(child, nodes, edges, g.id);
+            emit m_session->complexVariablesUpdated(
+                m_session->complexVariables()
+            );
+            return;
+        }
+    }
 }
 
-QColor GraphComplexController::typeToColor(const QString &type) {
-	const QString t = type.toLower();
-	if (t.contains("int"))
-		return QColor("#BBDEFB"); // blu chiaro
-	if (t.contains("float") || t.contains("double"))
-		return QColor("#FFCCBC"); // arancio chiaro
-	if (t.contains("char") || t.contains("string"))
-		return QColor("#C8E6C9"); // verde chiaro
-	if (t.contains('*') || t.contains("&"))
-		return QColor("#F8BBD0"); // rosa
-	return QColor("#E0E0E0");
+/* -------------------------------------------------------
+ * Colore per tipo
+ * -----------------------------------------------------*/
+QColor GraphComplexController::typeToColor(const QString &type)
+{
+    const QString t = type.toLower();
+    if (t.contains("int"))
+        return QColor("#BBDEFB");
+    if (t.contains("float") || t.contains("double"))
+        return QColor("#FFCCBC");
+    if (t.contains("char") || t.contains("string"))
+        return QColor("#C8E6C9");
+    if (t.contains('*') || t.contains("&"))
+        return QColor("#F8BBD0");
+    return QColor("#E0E0E0");
 }
 
-void GraphComplexController::onNodeDblClicked(const QString &id) {
-	// Hook per future espansioni lazy, per ora non facciamo nulla.
-	// Esempio eventuale:
-	// m_session->evaluateExpression(...);
-	Q_UNUSED(id);
+/* -------------------------------------------------------
+ * Hook futuro (lazy loading, ecc.)
+ * -----------------------------------------------------*/
+void GraphComplexController::onNodeDblClicked(const QString &id)
+{
+    Q_UNUSED(id);
 }

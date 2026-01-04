@@ -39,6 +39,7 @@
 class QGraphicsScene;
 
 struct GraphNodeField {
+	QString id;
     QString name;
     QString type;
     QString value;
@@ -73,6 +74,7 @@ public:
 
 signals:
     void nodeDoubleClicked(const QString& id);
+	void toggleNodeExpanded(const QString& nodeId);
 
 protected:
     void wheelEvent(QWheelEvent *event) override;
@@ -87,7 +89,7 @@ public slots:
     void fitGraph();
 
 private:
-    void rebuildEdges(); // stub
+    void rebuildEdges();
 
     struct Impl;
     Impl *m_impl;

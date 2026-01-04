@@ -36,6 +36,97 @@
 #include <QTextStream>
 #include <QRegularExpression>
 
+static QString normalizeAddress(QString s)
+{
+    s = s.trimmed().toLower();
+    if (!s.isEmpty() && !s.startsWith("0x"))
+        s.prepend("0x");
+    return s;
+}
+
+// Split by comma at top-level only (ignora virgole dentro {...})
+static QStringList splitTopLevelCommas(const QString& s)
+{
+    QStringList out;
+    QString cur;
+    int depth = 0;
+
+    for (int i = 0; i < s.size(); ++i) {
+        const QChar c = s[i];
+        if (c == '{') { depth++; cur += c; }
+        else if (c == '}') { depth--; cur += c; }
+        else if (c == ',' && depth == 0) {
+            out << cur.trimmed();
+            cur.clear();
+        } else {
+            cur += c;
+        }
+    }
+    if (!cur.trimmed().isEmpty())
+        out << cur.trimmed();
+
+    return out;
+}
+
+static bool looksLikePointer(const QString& v)
+{
+    const QString s = v.trimmed().toLower();
+    return s.startsWith("0x") && s.size() >= 3;
+}
+
+static bool looksLikeStruct(const QString& v)
+{
+    const QString s = v.trimmed();
+    return s.startsWith("{") && s.endsWith("}");
+}
+
+// Parser minimo per "{a = 1, b = {..}, c = 0x..}"
+static void expandInlineStructIntoChildren(VarNode* node,
+                                           const QString& value,
+                                           int depth,
+                                           int maxDepth)
+{
+    if (!node) return;
+    if (depth >= maxDepth) return;
+
+    QString v = value.trimmed();
+    if (!looksLikeStruct(v))
+        return;
+
+    // strip outer { }
+    v = v.mid(1, v.size() - 2).trimmed();
+    if (v.isEmpty())
+        return;
+
+    const QStringList entries = splitTopLevelCommas(v);
+
+    for (const QString& e : entries) {
+        const int eq = e.indexOf('=');
+        if (eq <= 0)
+            continue;
+
+        auto* c = new VarNode;
+        c->name = e.left(eq).trimmed();
+        c->value = e.mid(eq + 1).trimmed();
+		c->parent = node;
+
+        // regole children/expandable:
+        // - pointer => "expandable" (nella tua UI lo tratti come espandibile/edge)
+        c->hasChildren = looksLikePointer(c->value);
+
+        node->children.append(c);
+
+        // ricorsione SOLO su struct annidata (limitata)
+        if (looksLikeStruct(c->value)) {
+            expandInlineStructIntoChildren(c, c->value, depth + 1, maxDepth);
+        }
+    }
+
+    // se abbiamo creato almeno un figlio, il nodo è espandibile
+    if (!node->children.isEmpty())
+        node->hasChildren = true;
+}
+
 static QString decodeCString(QString s) {
 	if (s.startsWith("\"") && s.endsWith("\""))
 		s = s.mid(1, s.length() - 2);
@@ -52,6 +143,7 @@ static QList<VarNode *> parseMiChildren(const QString &payload) {
 	QStringList entries = payload.split("},{");
 	for (QString e : entries) {
 		VarNode *n = new VarNode;
+		n->parent = nullptr;
 		if (e.contains("name=\""))
 			n->name = e.section("name=\"", 1, 1).section("\"", 0, 0);
 		if (e.contains("value=\""))
@@ -69,26 +161,37 @@ static QList<VarNode *> parseMiChildren(const QString &payload) {
 	return list;
 }
 
-static bool attachToTree(QList<VarNode *> &roots, const QString &parentId,
-                         QList<VarNode *> children) {
-	std::function<bool(VarNode *)> rec = [&](VarNode *node) -> bool {
-		if (node->varId == parentId) {
-			node->children = children;
-			return true;
-		}
-		for (VarNode *c : node->children) {
-			if (rec(c))
-				return true;
-		}
-		return false;
-	};
+static bool attachToTree(QList<VarNode *> &roots,
+                         const QString &parentId,
+                         const QList<VarNode *> &children)
+{
+    std::function<bool(VarNode *)> rec = [&](VarNode *node) -> bool {
+        if (node->varId == parentId) {
 
-	for (VarNode *r : roots)
-		if (rec(r))
-			return true;
+            // ATTACCA figli + imposta parent
+            for (VarNode *c : children) {
+                c->parent = node;              // <<< FONDAMENTALE
+                node->children.append(c);      // <<< NON sovrascrivere
+            }
 
-	return false;
+            return true;
+        }
+
+        for (VarNode *c : node->children) {
+            if (rec(c))
+                return true;
+        }
+        return false;
+    };
+
+    for (VarNode *r : roots) {
+        if (rec(r))
+            return true;
+    }
+
+    return false;
 }
+
 
 DebugSession::DebugSession(QObject *parent) : QObject(parent) {
 	m_useComplexVarView = true;
@@ -378,8 +481,6 @@ void DebugSession::parseMiLine(const QString &line) {
 		handleStackList(line);
 	else if (line.startsWith("^done,variables="))
 		handleVarList(line);
-	else if (line.startsWith("^done,children="))
-		parseComplexVarTree(line);
 	else if (line.startsWith("^done,frame="))
 		handleFrameInfo(line);
 	else if (line.startsWith("^done,BreakpointTable="))
@@ -464,69 +565,80 @@ void DebugSession::handleStackList(const QString &line) {
 	}
 }
 
-void DebugSession::handleVarList(const QString &line) {
-	QList<VariableInfo> vars;
-	QString cpy = line;
-	cpy.remove("^done,variables=");
+void DebugSession::handleVarList(const QString &line)
+{
+    QList<VariableInfo> vars;
+    QString cpy = line;
+    cpy.remove("^done,variables=");
 
-	QStringList entries = cpy.split("},{");
-	for (QString e : entries) {
-		VariableInfo v;
-		if (e.contains("name=\""))
-			v.name = e.section("name=\"", 1, 1).section("\"", 0, 0);
-		if (e.contains("value=\""))
-			v.value = e.section("value=\"", 1, 1).section("\"", 0, 0);
-		if (e.contains("type=\""))
-			v.type = e.section("type=\"", 1, 1).section("\"", 0, 0);
+    QStringList entries = cpy.split("},{");
+    for (QString e : entries) {
+        VariableInfo v;
+        if (e.contains("name=\""))
+            v.name = e.section("name=\"", 1, 1).section("\"", 0, 0);
+        if (e.contains("value=\""))
+            v.value = e.section("value=\"", 1, 1).section("\"", 0, 0);
+        vars.append(v);
+    }
+    m_vars = vars;
+    m_pendingVars = false;
 
-		vars.append(v);
-	}
+    // ricostruisci albero "complesso"
+    qDeleteAll(m_cvars);
+    m_cvars.clear();
 
-	m_vars = vars;
-	m_pendingVars = false;
+    // Limite anti-esplosione (Qt objects enormi)
+    constexpr int INLINE_MAX_DEPTH = 2;
 
-qDeleteAll(m_cvars);
-m_cvars.clear();
+    auto pendingAddr = QSharedPointer<int>::create(0);
 
-auto pendingAddr = QSharedPointer<int>::create(0);
+    for (const auto &v : m_vars) {
+        auto *node = new VarNode;
+        node->name = v.name;
+        node->value = v.value;
+        node->type = v.type;
 
-for (const auto &v : m_vars) {
-    auto *node = new VarNode;
-    node->name = v.name;
-    node->value = v.value;
-    node->type = v.type;
-    node->hasChildren = false;
+        // default: espandibile se struct/pointer
+        node->hasChildren = looksLikePointer(node->value);
 
-    // placeholder temporaneo
-    node->varId = v.name;
+        // placeholder temporaneo (verrà rimpiazzato con address)
+        node->varId = v.name;
 
-    m_cvars.append(node);
+        // Espansione inline: "{x=..., y=..., next=...}" -> children
+        if (looksLikeStruct(node->value)) {
+            expandInlineStructIntoChildren(node, node->value, 0, INLINE_MAX_DEPTH);
+        }
 
-    const QString expr = "&" + v.name;
-    (*pendingAddr)++;
+        m_cvars.append(node);
 
-    enqueueCommand({
-        QString("-data-evaluate-expression %1").arg(expr),
-        [this, node, pendingAddr](const QString &line) {
-            QRegularExpression re(R"(value=\"([^\"]+)\")");
-            QRegularExpressionMatch m = re.match(line);
-            if (m.hasMatch()) {
-                node->varId = m.captured(1).trimmed().toLower();
-            }
+        // Recupera address: &name
+        const QString expr = "&" + v.name;
+        (*pendingAddr)++;
 
-            (*pendingAddr)--;
+        enqueueCommand({
+            QString("-data-evaluate-expression %1").arg(expr),
+            [this, node, pendingAddr](const QString &replyLine) {
+                QRegularExpression re(R"(value=\"([^\"]+)\")");
+                QRegularExpressionMatch m = re.match(replyLine);
+                if (m.hasMatch()) {
+                    node->varId = normalizeAddress(m.captured(1));
+                }
 
-            if (*pendingAddr == 0) {
-                emit complexVariablesUpdated(m_cvars);
-            }
-        },
-        false
-    });
+                (*pendingAddr)--;
+
+                if (*pendingAddr == 0) {
+                    emit complexVariablesUpdated(m_cvars);
+                }
+            },
+            false
+        });
+    }
+
+    // Se non ci sono variabili, emetti subito
+    if (m_vars.isEmpty())
+        emit complexVariablesUpdated(m_cvars);
 }
 
-
-
-}
 
 void DebugSession::handleFrameInfo(const QString &line) {
 	QString cpy = line;
@@ -679,22 +791,13 @@ void DebugSession::parseComplexVarTree(const QString &line) {
 	// caso: primo livello => nuova radice
 	if (id.isEmpty()) {
 		for (VarNode *n : nodes)
-			m_cvars.append(n);      // AGGIUNGI ROOT MULTIPLI
+			m_cvars.append(n);
 	} else {
 		// caso: figli = attacca ricorsivamente
 		attachToTree(m_cvars, id, nodes);
 	}
 
-	// se un nodo ha figli, richiedili
-	for (VarNode *n : nodes) {
-		if (n->hasChildren && !n->varId.isEmpty()) {
-			enqueueCommand(
-			    {QString("-var-list-children --all-values %1").arg(n->varId),
-			     nullptr, false});
-		}
-	}
 
-	// FINALMENTE: emetti aggiornamento verso la UI
 	emit complexVariablesUpdated(m_cvars);
 }
 

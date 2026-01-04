@@ -34,6 +34,8 @@
 #include "DebugSession.h"
 #include <QStandardItem>
 #include <QTreeView>
+#include <QStyledItemDelegate>
+#include <QFontDatabase>
 
 class QStandardItemModel;
 
@@ -50,8 +52,11 @@ class VariablesView : public QTreeView {
 
   private:
 	void addNode(QStandardItem *parent,
-	             VarNode *node); // <-- ADD THIS DECLARATION
+	             VarNode *node);
 
 	QStandardItemModel *m_model;
 	DebugSession *m_session = nullptr;
 };
+
+
+

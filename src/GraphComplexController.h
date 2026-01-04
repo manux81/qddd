@@ -46,6 +46,8 @@ class GraphComplexController : public QObject {
   private slots:
 	void onComplexVars(QList<VarNode *> roots);
 	void onNodeDblClicked(const QString &id);
+	void onToggleExpanded(const QString& id);
+	
 
   private:
 	DebugSession *m_session;
