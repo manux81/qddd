@@ -511,7 +511,7 @@ void DebugSession::handleStopped(const QString &line) {
 	if (line.contains("line=\""))
 		m_currentLine =
 		    line.section("line=\"", 1, 1).section("\"", 0, 0).toInt();
-
+	m_stepCounter++;
 	emit sessionUpdated();
 	if (m_backend == Backend::GDB_MI) {
 		enqueueCommand({"-break-list", nullptr, false});

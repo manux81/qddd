@@ -71,8 +71,6 @@ SourceEditor::SourceEditor(QWidget *parent)
 }
 
 void SourceEditor::showLocation(const QString &file, int line) {
-	// salva il file corrente per run-until-cursor / toggle-breakpoint /
-	// location query
 	setProperty("currentFile", file);
 
 	QFile f(file);
@@ -81,15 +79,12 @@ void SourceEditor::showLocation(const QString &file, int line) {
 
 	setPlainText(QString::fromUtf8(f.readAll()));
 
-	// posiziona il cursore sulla riga richiesta
 	QTextCursor cursor(document()->findBlockByLineNumber(line - 1));
 	setTextCursor(cursor);
 	centerCursor();
 
-	// evidenzia riga corrente
 	highlightCurrentLine();
 
-	// aggiorna margine line-number / breakpoint / freccia PC
 	if (m_lineNumberArea)
 		m_lineNumberArea->update();
 }
@@ -200,7 +195,7 @@ void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 
 			// --- NUMERO DI RIGA ---
 			QString number = QString::number(lineIndex);
-			painter.setPen(QColor("#aaaaaa"));
+			painter.setPen(QColor("#0099dd"));
 			painter.drawText(0, top, m_lineNumberArea->width() - 2,
 			                 fontMetrics().height(), Qt::AlignRight, number);
 		}
@@ -215,16 +210,13 @@ void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 void SourceEditor::setCurrentPC(int line) {
 	m_currentPC = line;
 
-	// aggiorna solo il margine, altrimenti non si vede la freccia
 	if (m_lineNumberArea)
 		m_lineNumberArea->update();
 
-	// opzionale: aggiorna riga evidenziata
 	highlightCurrentLine();
 }
 
 void SourceEditor::mousePressEvent(QMouseEvent *event) {
-	// lascia Qt gestire selezione testo
 	QPlainTextEdit::mousePressEvent(event);
 
 	QTextCursor c = cursorForPosition(event->pos());
@@ -234,7 +226,6 @@ void SourceEditor::mousePressEvent(QMouseEvent *event) {
 	int dummy;
 	currentLocation(file, dummy);
 
-	// SOLO click nel margine sinistro
 	if (event->button() == Qt::LeftButton &&
 	    event->x() < m_lineNumberArea->width()) {
 		if (!file.isEmpty() && m_session)
@@ -253,6 +244,6 @@ void SourceEditor::mousePressEvent(QMouseEvent *event) {
 
 void SourceEditor::currentLocation(QString &file, int &line) const {
 	file = this->property("currentFile")
-	           .toString(); // verrà impostata da showLocation()
+	           .toString();
 	line = textCursor().blockNumber() + 1;
 }

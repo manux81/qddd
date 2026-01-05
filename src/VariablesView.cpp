@@ -41,11 +41,9 @@
 #include <QSet>
 #include <QHash>
 
-namespace {
+static constexpr int ChangedRole = Qt::UserRole + 1;
 
-/* ============================================================
- *  PARSER HELPERS
- * ============================================================ */
+namespace {
 
 QStringList splitTopLevel(const QString &s) {
 	QStringList result;
@@ -74,17 +72,15 @@ QStringList splitTopLevel(const QString &s) {
 
 bool splitNameValue(const QString &s, QString &name, QString &value) {
 	int depth = 0;
-
 	for (int i = 0; i < s.size(); ++i) {
-		QChar c = s[i];
-
+		const QChar c = s[i];
 		if (c == '{')
 			++depth;
 		else if (c == '}')
 			--depth;
 
 		if (c == '=' && depth == 0) {
-			name  = s.left(i).trimmed();
+			name = s.left(i).trimmed();
 			value = s.mid(i + 1).trimmed();
 			return true;
 		}
@@ -126,13 +122,12 @@ QColor colorForType(VarVisualType type) {
 	case VarVisualType::Object:    return QColor(229, 192, 123);
 	case VarVisualType::Container: return QColor(198, 120, 221);
 	case VarVisualType::Internal:  return QColor(130, 130, 130);
-	case VarVisualType::Scalar:
 	default:                       return QColor(220, 220, 220);
 	}
 }
 
 /* ============================================================
- *  ICON RENDERING (SVG → colored pixmap)
+ *  ICON RENDERING
  * ============================================================ */
 
 QIcon coloredIcon(const QString &path, const QColor &color, int size = 16) {
@@ -163,15 +158,10 @@ QIcon iconForType(VarVisualType type) {
 		return coloredIcon(":/icons/resources/icons/symbol-array.svg", c);
 	case VarVisualType::Internal:
 		return coloredIcon(":/icons/resources/icons/symbol-key.svg", c);
-	case VarVisualType::Scalar:
 	default:
 		return coloredIcon(":/icons/resources/icons/symbol-variable.svg", c);
 	}
 }
-
-/* ============================================================
- *  PATH UTILITY (per expand + diff)
- * ============================================================ */
 
 QString itemPath(QStandardItem *item) {
 	QStringList parts;
@@ -185,19 +175,34 @@ QString itemPath(QStandardItem *item) {
 } // namespace
 
 /* ============================================================
- *  VALUE DELEGATE
+ *  VALUE DELEGATE (highlight stile VS)
  * ============================================================ */
 
 class ValueDelegate : public QStyledItemDelegate {
-public:
+  public:
 	explicit ValueDelegate(QObject *parent = nullptr)
 	    : QStyledItemDelegate(parent) {}
 
 	void paint(QPainter *p, const QStyleOptionViewItem &opt,
 	           const QModelIndex &idx) const override {
 		QStyleOptionViewItem o(opt);
+		initStyleOption(&o, idx);
+
 		o.font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+
 		QStyledItemDelegate::paint(p, o, idx);
+
+		const bool changed = idx.data(ChangedRole).toBool();
+		if (changed) {
+			p->save();
+
+            QColor bg(0, 60, 20, 120);// overlay trasparente
+			//QColor bg(255, 0, 0, 120); // rosso TEST
+
+			p->fillRect(o.rect, bg);
+
+			p->restore();
+		}
 	}
 };
 
@@ -207,9 +212,9 @@ public:
 
 VariablesView::VariablesView(QWidget *parent)
     : QTreeView(parent)
-    , m_model(new QStandardItemModel(this)) {
-
-	m_model->setHorizontalHeaderLabels({tr("Name"), tr("Value"), tr("Type")});
+    , m_model(new QStandardItemModel(this))
+{
+    m_model->setHorizontalHeaderLabels({tr("Name"), tr("Value")/*, tr("Type")*/});
 	setModel(m_model);
 
 	header()->setStretchLastSection(true);
@@ -240,28 +245,36 @@ void VariablesView::setSession(DebugSession *session) {
 
 void VariablesView::clearVariables() {
 	m_model->clear();
-	m_model->setHorizontalHeaderLabels({tr("Name"), tr("Value"), tr("Type")});
+    m_model->setHorizontalHeaderLabels({tr("Name"), tr("Value")/*, tr("Type")*/});
 }
 
 void VariablesView::refresh() {
 	if (!m_session)
 		return;
 
-	/* -------- save expanded state -------- */
+	const quint64 currentStep = m_session->stepCounter();
+	const bool isNewStep = (currentStep != m_lastSeenStep);
+
+	if (isNewStep) {
+		m_lastSeenStep = currentStep;
+		m_previousValues.clear();
+		m_changedInCurrentStep.clear();
+	}
+
 	QSet<QString> expanded;
-	std::function<void(QStandardItem*)> save =
-	    [&](QStandardItem *it) {
-		    if (!it) return;
-		    if (isExpanded(m_model->indexFromItem(it)))
-			    expanded.insert(itemPath(it));
-		    for (int i = 0; i < it->rowCount(); ++i)
-			    save(it->child(i));
-	    };
+
+	std::function<void(QStandardItem *)> save = [&](QStandardItem *it) {
+		if (!it)
+			return;
+		if (isExpanded(m_model->indexFromItem(it)))
+			expanded.insert(itemPath(it));
+		for (int i = 0; i < it->rowCount(); ++i)
+			save(it->child(i));
+	};
 
 	for (int i = 0; i < m_model->rowCount(); ++i)
 		save(m_model->item(i));
 
-	/* -------- rebuild -------- */
 	clearVariables();
 
 	for (const VariableInfo &v : m_session->variables()) {
@@ -272,41 +285,32 @@ void VariablesView::refresh() {
 		addNode(nullptr, n);
 	}
 
-	/* -------- restore expanded -------- */
-	std::function<void(QStandardItem*)> restore =
-	    [&](QStandardItem *it) {
-		    if (!it) return;
-		    if (expanded.contains(itemPath(it)))
-			    expand(m_model->indexFromItem(it));
-		    for (int i = 0; i < it->rowCount(); ++i)
-			    restore(it->child(i));
-	    };
+	std::function<void(QStandardItem *)> restore = [&](QStandardItem *it) {
+		if (!it)
+			return;
+		if (expanded.contains(itemPath(it)))
+			expand(m_model->indexFromItem(it));
+		for (int i = 0; i < it->rowCount(); ++i)
+			restore(it->child(i));
+	};
 
 	for (int i = 0; i < m_model->rowCount(); ++i)
 		restore(m_model->item(i));
 
-	/* -------- update value cache -------- */
-	m_previousValues.clear();
-	std::function<void(QStandardItem*)> collect =
-	    [&](QStandardItem *it) {
-		    if (!it) return;
-		    QString path = itemPath(it);
-		    QStandardItem *valueItem = nullptr;
+	std::function<void(QStandardItem *)> collect = [&](QStandardItem *it) {
+		if (!it)
+			return;
 
-if (it->parent())
-	valueItem = it->parent()->child(it->row(), 1);
-else
-	valueItem = m_model->item(it->row(), 1);
+		QStandardItem *valueItem = it->parent()
+		                               ? it->parent()->child(it->row(), 1)
+		                               : m_model->item(it->row(), 1);
 
-if (!valueItem)
-	return;
+		if (valueItem)
+			m_previousValues[itemPath(it)] = valueItem->text();
 
-QString val = valueItem->text();
-
-		    m_previousValues[path] = val;
-		    for (int i = 0; i < it->rowCount(); ++i)
-			    collect(it->child(i));
-	    };
+		for (int i = 0; i < it->rowCount(); ++i)
+			collect(it->child(i));
+	};
 
 	for (int i = 0; i < m_model->rowCount(); ++i)
 		collect(m_model->item(i));
@@ -318,7 +322,7 @@ void VariablesView::addNode(QStandardItem *parent, VarNode *node) {
 
 	auto *nameItem  = new QStandardItem(node->name);
 	auto *valueItem = new QStandardItem(node->value);
-	auto *typeItem  = new QStandardItem(node->type);
+    //auto *typeItem  = new QStandardItem(node->type);
 
 	const VarVisualType vt = visualType(node);
 	nameItem->setIcon(iconForType(vt));
@@ -327,21 +331,36 @@ void VariablesView::addNode(QStandardItem *parent, VarNode *node) {
 	    ? itemPath(parent) + "." + node->name
 	    : node->name;
 
-	const QString oldVal = m_previousValues.value(path);
-	if (!oldVal.isEmpty() && oldVal != node->value) {
-		valueItem->setBackground(QColor(60, 60, 60));
-		valueItem->setForeground(QColor(255, 180, 80));
+	valueItem->setData(false, ChangedRole);
+
+	const QString trimmed = node->value.trimmed();
+	const bool isStructLike = trimmed.startsWith('{') && trimmed.endsWith('}');
+	const bool isLeafValue  = !isStructLike;   // evidenziamo SOLO i leaf
+
+	bool changed = false;
+
+	if (isLeafValue) {
+    	if (m_changedInCurrentStep.contains(path)) {
+        	changed = true;
+   		} else if (m_previousValues.contains(path) &&
+             m_previousValues.value(path) != node->value) {
+        	changed = true;
+			m_changedInCurrentStep.insert(path);
+    	}
 	}
 
-	QList<QStandardItem *> row{ nameItem, valueItem, typeItem };
+	valueItem->setData(changed, ChangedRole);
+
+    QList<QStandardItem *> row{ nameItem, valueItem /*, typeItem*/ };
 	if (parent)
 		parent->appendRow(row);
 	else
 		m_model->appendRow(row);
 
-	const QString v = node->value.trimmed();
-	if (node->children.isEmpty() && v.startsWith('{') && v.endsWith('}')) {
-		const QString inside = v.mid(1, v.length() - 2);
+
+	if (node->children.isEmpty() && isStructLike) {
+		const QString inside = trimmed.mid(1, trimmed.length() - 2);
+
 		for (const QString &f : splitTopLevel(inside)) {
 			QString n, val;
 			if (splitNameValue(f, n, val)) {
@@ -351,7 +370,11 @@ void VariablesView::addNode(QStandardItem *parent, VarNode *node) {
 				addNode(nameItem, c);
 			}
 		}
-		valueItem->setText("{...}");
+
+		valueItem->setText("[ ]");
 		valueItem->setForeground(QColor(160, 160, 160));
 	}
 }
+
+
+

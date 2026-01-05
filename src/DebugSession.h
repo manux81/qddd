@@ -96,6 +96,7 @@ class DebugSession : public QObject {
 	void toggleBreakpointEnabled(int n, bool en);
 	void toggleBreakpointAt(const QString &file, int line);
 
+
 	void sendCommand(const QString &cmd);
 	QString evaluateExpression(const QString &expr);
 
@@ -108,6 +109,7 @@ class DebugSession : public QObject {
 	int currentLine() const;
 
 	void setUseComplexVarView(bool b) { m_useComplexVarView = b; }
+	quint64 stepCounter() const { return m_stepCounter; }
 
   signals:
 	void outputReceived(const QString &text);
@@ -168,4 +170,5 @@ class DebugSession : public QObject {
 	bool m_pendingVars = false;
 	bool m_pendingExec = false;
 	bool m_useComplexVarView = false;
+	quint64 m_stepCounter = 0U;
 };
