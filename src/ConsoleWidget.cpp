@@ -44,7 +44,6 @@ ConsoleWidget::ConsoleWidget(QWidget *parent)
 	auto *layout = new QVBoxLayout(this);
 	m_output->setReadOnly(true);
 	m_output->setWordWrapMode(QTextOption::NoWrap);
-
 	m_input->setPlaceholderText(tr("Comando GDB / MI..."));
 
 	layout->addWidget(m_output);
@@ -58,11 +57,13 @@ ConsoleWidget::ConsoleWidget(QWidget *parent)
 void ConsoleWidget::setSession(DebugSession *session) {
 	if (m_session) {
 		disconnect(m_session, nullptr, this, nullptr);
+		m_session = nullptr;
 	}
-	m_session = session;
-	if (m_session) {
-		connect(m_session, &DebugSession::outputReceived, this,
+
+	if (session) {
+		connect(session, &DebugSession::outputReceived, this,
 		        &ConsoleWidget::appendOutput);
+		m_session = session;
 	}
 }
 
