@@ -14,8 +14,6 @@ add_executable(qddd
     VariablesView.h
     StackView.cpp
     StackView.h
-    DataDisplayView.cpp
-    DataDisplayView.h
     GraphicalVariablesView.cpp
     GraphicalVariablesView.h
     GraphComplexController.cpp
