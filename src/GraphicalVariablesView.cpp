@@ -257,18 +257,12 @@ class NodeItem : public QGraphicsItem {
 			const auto &f = m_node.fields[i];
 
 			const qreal indent = f.depth * INDENT_W;
-
-			// il triangolo ha SEMPRE uno slot, anche se non visibile
 			const qreal triSlot = TRI_SIZE + 6;
-
 			const qreal triX = m_rect.left() + H_PADDING + indent;
 			const qreal textX = triX + triSlot;
-
 			const qreal textW =
 			    m_rect.width() - (textX - m_rect.left()) - H_PADDING;
-
 			const QString text = f.name.isEmpty() ? f.value : f.name + " = " + f.value;
-
 
 			QRect br = fm.boundingRect(0, 0, int(textW), 20000,
 			                           Qt::TextWordWrap, text);

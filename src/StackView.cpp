@@ -97,7 +97,6 @@ void StackView::selectFrame(int index) {
 	QModelIndex idx = m_model->index(index, 0);
 	if (idx.isValid()) {
 		setCurrentIndex(idx);
-		// attiva navigazione editor
 		onItemActivated(idx);
 	}
 }

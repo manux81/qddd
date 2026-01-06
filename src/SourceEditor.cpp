@@ -154,8 +154,6 @@ void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 
 	const int iconX = 2;
 	const int iconSize = fontMetrics().height() - 2;
-
-	// file corrente mostrato in questo editor (impostato da showLocation())
 	const QString curFile = property("currentFile").toString();
 
 	while (block.isValid() && top <= event->rect().bottom()) {
@@ -180,7 +178,6 @@ void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 				painter.drawEllipse(iconX, top + 4, iconSize / 2, iconSize / 2);
 			}
 
-			// --- CURRENT PROGRAM COUNTER ---
 			if (lineIndex == m_currentPC) {
 				painter.setRenderHint(QPainter::Antialiasing);
 				painter.setBrush(QColor("#ffd700"));
@@ -234,7 +231,6 @@ void SourceEditor::mousePressEvent(QMouseEvent *event) {
 		return;
 	}
 
-	// click destro: run until cursor
 	if (event->button() == Qt::RightButton && m_session) {
 		currentLocation(file, line);
 		m_session->execUntil(QString("%1:%2").arg(file).arg(line));

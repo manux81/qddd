@@ -248,12 +248,11 @@ void MainWindow::setupMenusAndToolbars() {
 	helpMenu->addAction(tr("About"));
 
 	QToolBar *dbgBar = new QToolBar(tr("Program Controls"), this);
-
 	dbgBar->setMovable(true);
 	dbgBar->setFloatable(true);
 	dbgBar->setAllowedAreas(Qt::AllToolBarAreas);
-	dbgBar->setIconSize(QSize(18, 18)); // dimensione icone
-	dbgBar->setFixedHeight(32);         // altezza barra visiva
+	dbgBar->setIconSize(QSize(18, 18));
+	dbgBar->setFixedHeight(32);
 	dbgBar->setStyleSheet(R"(
     QToolBar {
         background: #252526;
@@ -274,7 +273,7 @@ void MainWindow::setupMenusAndToolbars() {
     QToolButton:pressed {
         background: #1e1e1e;
     }
-)");
+	)");
 
 	dbgBar->addAction(runAct);
 	dbgBar->addAction(contAct);

@@ -39,9 +39,8 @@ QDDDSplash::QDDDSplash(const QString &imagePath, QWidget *parent)
     : QWidget(parent), m_pix(imagePath) {
 	setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
 	setAttribute(Qt::WA_TranslucentBackground);
-	resize(450, 260); // splash piccolo standard
+	resize(450, 260);
 
-	// centra sullo schermo
 	auto screen = QGuiApplication::primaryScreen()->availableGeometry();
 	move(screen.center().x() - width() / 2, screen.center().y() - height() / 2);
 
@@ -65,7 +64,6 @@ void QDDDSplash::paintEvent(QPaintEvent *) {
 	QPainter p(this);
 	p.setRenderHint(QPainter::SmoothPixmapTransform);
 
-	// scale inside centered box
 	QSize scaled = m_pix.size();
 	scaled.scale(size(), Qt::KeepAspectRatio);
 

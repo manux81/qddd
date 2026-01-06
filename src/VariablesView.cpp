@@ -195,12 +195,8 @@ class ValueDelegate : public QStyledItemDelegate {
 		const bool changed = idx.data(ChangedRole).toBool();
 		if (changed) {
 			p->save();
-
-            QColor bg(0, 60, 20, 120);// overlay trasparente
-			//QColor bg(255, 0, 0, 120); // rosso TEST
-
+            QColor bg(0, 60, 20, 120);
 			p->fillRect(o.rect, bg);
-
 			p->restore();
 		}
 	}
@@ -233,14 +229,16 @@ void VariablesView::setSession(DebugSession *session) {
 	if (m_session == session)
 		return;
 
-	if (m_session)
+	if (m_session) {
 		disconnect(m_session, nullptr, this, nullptr);
-
+		m_session = nullptr;
+	}
 	m_session = session;
 
-	if (m_session)
+	if (session) {
 		connect(m_session, &DebugSession::sessionUpdated,
 		        this, &VariablesView::refresh);
+	}
 }
 
 void VariablesView::clearVariables() {
@@ -286,8 +284,10 @@ void VariablesView::refresh() {
 	}
 
 	std::function<void(QStandardItem *)> restore = [&](QStandardItem *it) {
-		if (!it)
+		if (!it) {
 			return;
+		}
+
 		if (expanded.contains(itemPath(it)))
 			expand(m_model->indexFromItem(it));
 		for (int i = 0; i < it->rowCount(); ++i)
@@ -298,9 +298,9 @@ void VariablesView::refresh() {
 		restore(m_model->item(i));
 
 	std::function<void(QStandardItem *)> collect = [&](QStandardItem *it) {
-		if (!it)
+        if (!it) {
 			return;
-
+        }
 		QStandardItem *valueItem = it->parent()
 		                               ? it->parent()->child(it->row(), 1)
 		                               : m_model->item(it->row(), 1);
@@ -335,7 +335,7 @@ void VariablesView::addNode(QStandardItem *parent, VarNode *node) {
 
 	const QString trimmed = node->value.trimmed();
 	const bool isStructLike = trimmed.startsWith('{') && trimmed.endsWith('}');
-	const bool isLeafValue  = !isStructLike;   // evidenziamo SOLO i leaf
+	const bool isLeafValue  = !isStructLike;
 
 	bool changed = false;
 
