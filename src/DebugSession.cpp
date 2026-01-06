@@ -167,11 +167,9 @@ static bool attachToTree(QList<VarNode *> &roots,
 {
     std::function<bool(VarNode *)> rec = [&](VarNode *node) -> bool {
         if (node->varId == parentId) {
-
-            // ATTACCA figli + imposta parent
             for (VarNode *c : children) {
-                c->parent = node;              // <<< FONDAMENTALE
-                node->children.append(c);      // <<< NON sovrascrivere
+                c->parent = node;
+                node->children.append(c);
             }
 
             return true;
