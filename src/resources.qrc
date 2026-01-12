@@ -16,6 +16,8 @@
    <file>resources/icons/symbol-class.svg</file>
    <file>resources/icons/symbol-key.svg</file>
    <file>resources/icons/symbol-array.svg</file>
+   <file>resources/icons/debug-breakpoint-log.svg</file>
+   <file>resources/icons/debug-breakpoint-log-unverified.svg</file>
  </qresource>
 </RCC>
 
