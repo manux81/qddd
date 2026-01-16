@@ -356,7 +356,6 @@ QString DebugSession::translateUserCommand(const QString &cmd) const {
 
 QList<StackFrame> DebugSession::stackFrames() const { return m_stack; }
 
-QList<VariableInfo> DebugSession::variables() const { return m_vars; }
 
 QList<VarNode *> DebugSession::complexVariables() const { return m_cvars; }
 
@@ -565,52 +564,42 @@ void DebugSession::handleStackList(const QString &line) {
 
 void DebugSession::handleVarList(const QString &line)
 {
-    QList<VariableInfo> vars;
     QString cpy = line;
     cpy.remove("^done,variables=");
 
     QStringList entries = cpy.split("},{");
-    for (QString e : entries) {
-        VariableInfo v;
-        if (e.contains("name=\""))
-            v.name = e.section("name=\"", 1, 1).section("\"", 0, 0);
-        if (e.contains("value=\""))
-            v.value = e.section("value=\"", 1, 1).section("\"", 0, 0);
-        vars.append(v);
-    }
-    m_vars = vars;
-    m_pendingVars = false;
 
-    // ricostruisci albero "complesso"
     qDeleteAll(m_cvars);
     m_cvars.clear();
 
-    // Limite anti-esplosione (Qt objects enormi)
     constexpr int INLINE_MAX_DEPTH = 2;
-
     auto pendingAddr = QSharedPointer<int>::create(0);
 
-    for (const auto &v : m_vars) {
+    for (QString e : entries) {
         auto *node = new VarNode;
-        node->name = v.name;
-        node->value = v.value;
-        node->type = v.type;
 
-        // default: espandibile se struct/pointer
+        if (e.contains("name=\""))
+            node->name = e.section("name=\"", 1, 1).section("\"", 0, 0);
+        if (e.contains("value=\""))
+            node->value = e.section("value=\"", 1, 1).section("\"", 0, 0);
+        if (e.contains("type=\""))
+            node->type = e.section("type=\"", 1, 1).section("\"", 0, 0);
+
+        // default: espandibile se pointer
         node->hasChildren = looksLikePointer(node->value);
 
-        // placeholder temporaneo (verrà rimpiazzato con address)
-        node->varId = v.name;
+        // placeholder temporaneo
+        node->varId = node->name;
 
-        // Espansione inline: "{x=..., y=..., next=...}" -> children
+        // inline struct expansion
         if (looksLikeStruct(node->value)) {
             expandInlineStructIntoChildren(node, node->value, 0, INLINE_MAX_DEPTH);
         }
 
         m_cvars.append(node);
 
-        // Recupera address: &name
-        const QString expr = "&" + v.name;
+        // recupera address (&name)
+        const QString expr = "&" + node->name;
         (*pendingAddr)++;
 
         enqueueCommand({
@@ -632,10 +621,13 @@ void DebugSession::handleVarList(const QString &line)
         });
     }
 
-    // Se non ci sono variabili, emetti subito
-    if (m_vars.isEmpty())
+    m_pendingVars = false;
+
+    // nessuna variabile → emetti subito
+    if (entries.isEmpty() || m_cvars.isEmpty())
         emit complexVariablesUpdated(m_cvars);
 }
+
 
 
 void DebugSession::handleFrameInfo(const QString &line) {

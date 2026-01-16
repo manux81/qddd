@@ -44,12 +44,6 @@ struct StackFrame {
 	QString function;
 };
 
-struct VariableInfo {
-	QString name;
-	QString value;
-	QString type;
-};
-
 struct VarNode {
 	QString name;
 	QString value;
@@ -101,7 +95,6 @@ class DebugSession : public QObject {
 	QString evaluateExpression(const QString &expr);
 
 	QList<StackFrame> stackFrames() const;
-	QList<VariableInfo> variables() const;
 	QList<VarNode *> complexVariables() const;
 	QList<BreakpointInfo> breakpoints() const;
 
@@ -159,7 +152,6 @@ class DebugSession : public QObject {
 	MiCommand m_currentCmd;
 
 	QList<StackFrame> m_stack;
-	QList<VariableInfo> m_vars;
 	QList<VarNode *> m_cvars;
 	QList<BreakpointInfo> m_bps;
 

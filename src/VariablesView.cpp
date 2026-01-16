@@ -275,13 +275,9 @@ void VariablesView::refresh() {
 
 	clearVariables();
 
-	for (const VariableInfo &v : m_session->variables()) {
-		auto *n = new VarNode;
-		n->name = v.name;
-		n->value = v.value;
-		n->type = v.type;
-		addNode(nullptr, n);
-	}
+    for (VarNode *n : m_session->complexVariables()) {
+        addNode(nullptr, n);
+    }
 
 	std::function<void(QStandardItem *)> restore = [&](QStandardItem *it) {
 		if (!it) {
@@ -358,22 +354,15 @@ void VariablesView::addNode(QStandardItem *parent, VarNode *node) {
 		m_model->appendRow(row);
 
 
-	if (node->children.isEmpty() && isStructLike) {
-		const QString inside = trimmed.mid(1, trimmed.length() - 2);
+    if (!node->children.isEmpty()) {
+        for (VarNode *c : node->children) {
+            addNode(nameItem, c);
+        }
 
-		for (const QString &f : splitTopLevel(inside)) {
-			QString n, val;
-			if (splitNameValue(f, n, val)) {
-				auto *c = new VarNode;
-				c->name = n;
-				c->value = val;
-				addNode(nameItem, c);
-			}
-		}
+        valueItem->setText("[ ]");
+        valueItem->setForeground(QColor(160, 160, 160));
+    }
 
-		valueItem->setText("[ ]");
-		valueItem->setForeground(QColor(160, 160, 160));
-	}
 }
 
 

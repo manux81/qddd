@@ -51,9 +51,6 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 	m_variablesView->setSession(m_session.get());
 	m_sourceEditor->setSession(m_session.get());
 
-	m_dataController =
-	    new GraphComplexController(m_session.get(), m_dataDisplay, this);
-
 	connect(m_session.get(), &DebugSession::sessionUpdated, this,
 	        &MainWindow::updateFromSession);
 

@@ -41,9 +41,8 @@
 #include "StackView.h"
 #include "VariablesView.h"
 
-// NUOVO: sostituisce DataDisplayView
 #include "GraphicalVariablesView.h"
-#include "GraphComplexController.h"
+
 
 class QDockWidget;
 class QAction;
@@ -84,9 +83,6 @@ class MainWindow : public QMainWindow {
 	GraphicalVariablesView *m_dataDisplay = nullptr;
 	ConsoleWidget *m_consoleWidget = nullptr;
 	BreakpointsView *m_breakView = nullptr;
-
-	// Controller che collega DebugSession ↔ GraphicalVariablesView
-	GraphComplexController *m_dataController = nullptr;
 
 	QDockWidget *m_varsDock = nullptr;
 	QDockWidget *m_stackDock = nullptr;
