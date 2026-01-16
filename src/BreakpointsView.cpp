@@ -30,7 +30,7 @@
  */
 
 #include "BreakpointsView.h"
-#include "DebugSession.h" // DebugSession + BreakpointInfo
+#include "DebugSession.h"
 
 #include <QAction>
 #include <QHeaderView>
@@ -178,8 +178,9 @@ void BreakpointsView::onItemChanged(QStandardItem *item) {
 		return;
 
 	const bool en = (item->checkState() == Qt::Checked);
+	m_blockItemChanged = true;
 	item->setIcon(en ? iconEnabled() : iconDisabled());
-
+	m_blockItemChanged = false;
 	m_session->toggleBreakpointEnabled(number, en);
 }
 
