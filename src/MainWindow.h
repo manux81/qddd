@@ -80,7 +80,7 @@ class MainWindow : public QMainWindow {
 	SourceEditor *m_sourceEditor = nullptr;
 	VariablesView *m_variablesView = nullptr;
 	StackView *m_stackView = nullptr;
-	GraphicalVariablesView *m_dataDisplay = nullptr;
+    GraphicalVariablesView *m_graphicalView = nullptr;
 	ConsoleWidget *m_consoleWidget = nullptr;
 	BreakpointsView *m_breakView = nullptr;
 

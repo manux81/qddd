@@ -52,7 +52,6 @@ struct VarNode {
 	bool hasChildren = false;
 	QList<VarNode *> children;
 	VarNode* parent = nullptr;
-	bool expanded = false;
 };
 
 struct BreakpointInfo {

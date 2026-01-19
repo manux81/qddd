@@ -16,8 +16,6 @@ add_executable(qddd
     StackView.h
     GraphicalVariablesView.cpp
     GraphicalVariablesView.h
-    GraphComplexController.cpp
-    GraphComplexController.h
     ConsoleWidget.cpp
     ConsoleWidget.h
     BreakpointsView.cpp

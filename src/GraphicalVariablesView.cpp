@@ -30,417 +30,371 @@
  */
 
 #include "GraphicalVariablesView.h"
+#include "DebugSession.h"
 
-#include <QDebug>
-#include <QFontMetrics>
-#include <QGraphicsItem>
-#include <QGraphicsScene>
-#include <QLinearGradient>
-#include <QMouseEvent>
 #include <QPainter>
-#include <QStyleOptionGraphicsItem>
-#include <QToolButton>
-#include <QVBoxLayout>
 #include <QWheelEvent>
-#include <QtMath>
+#include <QMouseEvent>
 
-// =====================================================
-// Helpers
-// =====================================================
 
-namespace {
+// =======================================================
+// Blender-style socket geometry
+// =======================================================
 
-constexpr qreal H_PADDING = 12.0;
-constexpr qreal V_PADDING = 6.0;
-constexpr qreal BASE_HEIGHT = 36.0;
-constexpr qreal MAX_TEXT_W = 420.0;
+static constexpr int SocketRadius = 4;
+static constexpr int SocketOffset = -6;
 
-// =====================================================
-// NodeItem
-// =====================================================
 
-class NodeItem : public QGraphicsItem {
-  public:
-	static constexpr int INDENT_W = 14;
-	static constexpr int TRI_SIZE = 8;
+// =======================================================
+// GraphicalNodeItem
+// =======================================================
 
-	explicit NodeItem(const GraphNode &n) : m_node(n) {
-		setFlags(ItemIsMovable | ItemIsSelectable);
-		setZValue(1);
-		rebuildLayout();
-	}
-
-	QString id() const { return m_node.id; }
-
-	QRectF boundingRect() const override {
-		// un po' di “slack” per ombra e bordo
-		return m_rect.adjusted(-10, -10, 10, 10);
-	}
-
-	int fieldAt(const QPointF &pos) const {
-		// hit-test sui field rect (solo quelli visibili)
-		for (int i = 0; i < m_lines.size(); ++i) {
-			if (m_lines[i].hitRect.contains(pos))
-				return m_lines[i].fieldIndex;
-		}
-		return -1;
-	}
-
-	auto &mutableField(int i) { return m_node.fields[i]; }
-
-	void updateLayout() {
-		prepareGeometryChange();
-		rebuildLayout();
-		update();
-	}
-
-  protected:
-	void paint(QPainter *p, const QStyleOptionGraphicsItem *opt,
-	           QWidget *) override {
-		p->setRenderHint(QPainter::Antialiasing, true);
-
-		const bool selected = opt->state & QStyle::State_Selected;
-
-		QColor base = m_node.color.isValid() ? m_node.color : QColor("#ECEFF1");
-		QColor border = selected ? QColor("#1976D2") : QColor(0, 0, 0, 90);
-
-		// shadow
-		QPainterPath shadow;
-		shadow.addRoundedRect(m_rect.translated(3, 3), 10, 10);
-		p->setPen(Qt::NoPen);
-		p->setBrush(QColor(0, 0, 0, 40));
-		p->drawPath(shadow);
-
-		// body
-		QLinearGradient grad(m_rect.topLeft(), m_rect.bottomLeft());
-		grad.setColorAt(0.0, base.lighter(108));
-		grad.setColorAt(1.0, base.darker(104));
-		p->setBrush(grad);
-		p->drawRoundedRect(m_rect, 10, 10);
-
-		// title bar
-		p->setBrush(base.darker(115));
-		p->drawRoundedRect(m_titleRect, 10, 10);
-		p->drawRect(m_titleRect.adjusted(0, 10, 0, 0));
-
-		// title text
-		QFont titleFont = p->font();
-		titleFont.setBold(true);
-		p->setFont(titleFont);
-		p->setPen(Qt::white);
-		p->drawText(m_titleTextRect, Qt::AlignVCenter | Qt::AlignLeft,
-		            m_titleText);
-
-		// fields
-		QFont fieldFont = p->font();
-		fieldFont.setBold(false);
-		p->setFont(fieldFont);
-		p->setPen(Qt::black);
-
-		for (const auto &ln : m_lines) {
-			const auto &f = m_node.fields[ln.fieldIndex];
-
-			// triangle (if expandable)
-			if (f.isExpandable) {
-				const qreal x = ln.triX;
-				const qreal y = ln.textRect.top(); // top aligned
-				QPointF tri[3];
-				if (f.expanded) {
-					tri[0] = {x, y + 4};
-					tri[1] = {x + TRI_SIZE, y + 4};
-					tri[2] = {x + TRI_SIZE / 2.0, y + 4 + TRI_SIZE};
-				} else {
-					tri[0] = {x, y + 4};
-					tri[1] = {x, y + 4 + TRI_SIZE};
-					tri[2] = {x + TRI_SIZE, y + 4 + TRI_SIZE / 2.0};
-				}
-				p->setBrush(Qt::black);
-				p->drawPolygon(tri, 3);
-			}
-			// text (real wrap)
-			QString text = (f.name.isEmpty()) ? f.value : QString("%1:    %2").arg((f.depth == 0) ? "value" : f.name, f.value);
-
-			p->setBrush(Qt::NoBrush);
-			p->drawText(ln.textRect,
-			            Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, text);
-		}
-
-		// border last
-		p->setBrush(Qt::NoBrush);
-		p->setPen(QPen(border, selected ? 2.0 : 1.2));
-		p->drawRoundedRect(m_rect, 10, 10);
-	}
-
-  private:
-	struct Line {
-		int fieldIndex = -1;
-		QRectF textRect; // where text is drawn
-		QRectF hitRect;  // row area for clicking
-		qreal triX = 0;  // triangle x position
-	};
-
-	bool isVisibleField(int index) const {
-		int d = m_node.fields[index].depth;
-		for (int i = index - 1; i >= 0; --i) {
-			if (m_node.fields[i].depth < d) {
-				if (!m_node.fields[i].expanded)
-					return false;
-				d = m_node.fields[i].depth;
-			}
-		}
-		return true;
-	}
-
-	void rebuildLayout() {
-		// IMPORTANT: font metrics must match paint() fonts
-		QFont baseFont; // default
-		QFontMetrics fm(baseFont);
-
-		QFont titleFont = baseFont;
-		titleFont.setBold(true);
-		QFontMetrics tfm(titleFont);
-
-		// title metrics
-		m_titleText = m_node.title + " [" + m_node.id + "]";
-		const qreal titleH = 26.0;
-
-		// width starts from title
-		qreal w = qreal(tfm.horizontalAdvance(m_titleText));
-		qreal h = titleH + 8 /*gap after title*/ + 8 /*bottom pad*/;
-
-		// build field lines first with a provisional wrap width (cap)
-		// If you want fewer wraps for huge LLDB strings, raise this (e.g.
-		// 720/900).
-		const qreal wrapMax = 720.0;
-
-		m_lines.clear();
-
-		// First pass: determine required w/h
-		for (int i = 0; i < m_node.fields.size(); ++i) {
-			if (!isVisibleField(i))
-				continue;
-
-			const auto &f = m_node.fields[i];
-
-			const qreal indent = f.depth * INDENT_W;
-			const qreal triPad = f.isExpandable ? (TRI_SIZE + 6) : 0;
-
-			const qreal availW = qMax<qreal>(80.0, wrapMax - indent - triPad);
-
-			const QString text = f.name + " = " + f.value;
-
-			QRect br = fm.boundingRect(0, 0, int(availW), 20000,
-			                           Qt::TextWordWrap, text);
-
-			const qreal rowH = qMax<qreal>(18.0, br.height());
-			h += rowH + V_PADDING;
-
-			w = qMax(w, qreal(br.width()) + indent + triPad);
-		}
-
-		w += 2 * H_PADDING;
-
-		m_rect = QRectF(-w / 2.0, -h / 2.0, w, h);
-
-		// title rects
-		m_titleRect =
-		    QRectF(m_rect.left(), m_rect.top(), m_rect.width(), titleH);
-		m_titleTextRect = m_titleRect.adjusted(8, 0, -8, 0);
-
-		// Second pass: assign actual rects per field using final width
-		qreal y = m_titleRect.bottom() + 8;
-
-		for (int i = 0; i < m_node.fields.size(); ++i) {
-			if (!isVisibleField(i))
-				continue;
-
-			const auto &f = m_node.fields[i];
-
-			const qreal indent = f.depth * INDENT_W;
-			const qreal triSlot = TRI_SIZE + 6;
-			const qreal triX = m_rect.left() + H_PADDING + indent;
-			const qreal textX = triX + triSlot;
-			const qreal textW =
-			    m_rect.width() - (textX - m_rect.left()) - H_PADDING;
-			const QString text = f.name.isEmpty() ? f.value : f.name + " = " + f.value;
-
-			QRect br = fm.boundingRect(0, 0, int(textW), 20000,
-			                           Qt::TextWordWrap, text);
-			const qreal rowH = qMax<qreal>(18.0, br.height());
-
-			Line ln;
-			ln.fieldIndex = i;
-			ln.triX = triX;
-			ln.textRect = QRectF(textX, y, textW, rowH);
-			ln.hitRect =
-			    QRectF(m_rect.left(), y, m_rect.width(), rowH); // click on row
-			m_lines.push_back(ln);
-
-			y += rowH + V_PADDING;
-		}
-	}
-
-	GraphNode m_node;
-	QRectF m_rect;
-
-	QString m_titleText;
-	QRectF m_titleRect;
-	QRectF m_titleTextRect;
-
-	QVector<Line> m_lines;
-};
-
-} // namespace
-
-// =====================================================
-// GraphicalVariablesView
-// =====================================================
-
-struct GraphicalVariablesView::Impl {
-	QVector<NodeItem *> nodes;
-};
-
-GraphicalVariablesView::GraphicalVariablesView(QWidget *parent)
-    : QGraphicsView(parent), m_impl(new Impl),
-      m_scene(new QGraphicsScene(this)) {
-	setScene(m_scene);
-	setDragMode(ScrollHandDrag);
-	setTransformationAnchor(AnchorUnderMouse);
-	setRenderHint(QPainter::Antialiasing);
-	setStyleSheet("QGraphicsView { border: none; }");
-
-	// ---- overlay zoom (Google Maps style)
-	auto *overlay = new QWidget(this);
-	auto *vl = new QVBoxLayout(overlay);
-	vl->setContentsMargins(4, 4, 4, 4);
-
-	auto mk = [&](const QString &t) {
-		auto *b = new QToolButton(overlay);
-		b->setText(t);
-		b->setAutoRaise(true);
-		b->setFixedSize(28, 28);
-		vl->addWidget(b);
-		return b;
-	};
-
-	connect(mk("+"), &QToolButton::clicked, this,
-	        &GraphicalVariablesView::zoomIn);
-	connect(mk("−"), &QToolButton::clicked, this,
-	        &GraphicalVariablesView::zoomOut);
-	connect(mk("⤢"), &QToolButton::clicked, this,
-	        &GraphicalVariablesView::fitGraph);
-	connect(mk("⟳"), &QToolButton::clicked, this,
-	        &GraphicalVariablesView::resetZoom);
-
-	overlay->move(10, 10);
-	overlay->show();
-}
-
-GraphicalVariablesView::~GraphicalVariablesView() { delete m_impl; }
-
-
-
-
-void GraphicalVariablesView::wheelEvent(QWheelEvent *e) {
-	const qreal s = 1.15;
-	scale(e->angleDelta().y() > 0 ? s : 1 / s,
-	      e->angleDelta().y() > 0 ? s : 1 / s);
-}
-
-void GraphicalVariablesView::mousePressEvent(QMouseEvent *e)
+GraphicalNodeItem::GraphicalNodeItem(VarNode* node)
+    : m_node(node)
 {
-    if (auto* it = itemAt(e->pos())) {
-        if (auto* n = dynamic_cast<NodeItem*>(it)) {
-            QPointF lp = n->mapFromScene(mapToScene(e->pos()));
-            int idx = n->fieldAt(lp);
-            if (idx >= 0) {
-				auto& f = n->mutableField(idx);
-				if (!f.isExpandable) {
-					QGraphicsView::mousePressEvent(e);
-					return;
-				}
-				emit toggleNodeExpanded(f.id);
-                return;
-            }
+    setFlag(ItemIsSelectable);
+    setFlag(ItemIsMovable);
+    recalculateWidth();
+}
+
+VarNode* GraphicalNodeItem::node() const
+{
+    return m_node;
+}
+
+QRectF GraphicalNodeItem::boundingRect() const
+{
+    int rows = expanded ? m_node->children.size() : 0;
+    int height = HeaderHeight + rows * RowHeight;
+
+    return QRectF(
+        -SocketOffset - SocketRadius,
+        0,
+        m_width + 2 * (SocketOffset + SocketRadius),
+        height
+    );
+}
+
+void GraphicalNodeItem::paint(QPainter* p,
+                              const QStyleOptionGraphicsItem*,
+                              QWidget*)
+{
+    p->setRenderHint(QPainter::Antialiasing);
+
+    drawHeader(p);
+
+    if (expanded || m_node->parent == nullptr)
+        drawSource(p);
+}
+
+void GraphicalNodeItem::drawHeader(QPainter* p)
+{
+    QRectF header(0, 0, m_width, HeaderHeight);
+
+    QColor bg(70, 70, 70);
+    if (m_node->parent == nullptr)
+        bg = QColor(90, 70, 40);
+
+    p->setPen(Qt::NoPen);
+    p->setBrush(bg);
+    p->drawRoundedRect(header, 6, 6);
+
+    p->setPen(Qt::white);
+
+    QString title = m_node->type.isEmpty()
+        ? m_node->name
+        : QString("%1 : %2").arg(m_node->name, m_node->type);
+
+    p->drawText(15, 15, title);
+
+
+    QPointF in(-SocketOffset, (HeaderHeight / 2) - 2);
+
+    p->setPen(Qt::NoPen);
+    p->setBrush(QColor(200, 200, 200));
+    p->drawEllipse(in, SocketRadius, SocketRadius);
+}
+
+void GraphicalNodeItem::drawSource(QPainter* p)
+{
+    int y = HeaderHeight - 5;
+
+    for (VarNode* child : m_node->children) {
+
+        QRectF row(0, y, m_width, RowHeight);
+
+        p->setPen(Qt::NoPen);
+        p->setBrush(QColor(45, 45, 45));
+        p->drawRect(row);
+
+        p->setPen(Qt::white);
+
+        QString text =
+            QString("%1 = %2")
+                .arg(child->name, child->value);
+
+        p->drawText(12, y + 16, text);
+
+        // outlet socket
+        if (child->value.startsWith("0x")) {
+
+            QPointF out(
+                m_width + SocketOffset,
+                y + RowHeight / 2
+            );
+
+            p->setPen(Qt::NoPen);
+            p->setBrush(QColor(200, 200, 200));
+            p->drawEllipse(out, SocketRadius, SocketRadius);
         }
+
+        y += RowHeight;
     }
-    QGraphicsView::mousePressEvent(e);
+}
+
+QPointF GraphicalNodeItem::inputPort() const
+{
+    return mapToScene(QPointF(
+        -SocketOffset,
+        HeaderHeight / 2
+    ));
+}
+
+QPointF GraphicalNodeItem::outputPortFor(VarNode* child) const
+{
+    int index = m_node->children.indexOf(child);
+
+    if (index < 0)
+        return mapToScene(QPointF(m_width + SocketOffset,
+                                  HeaderHeight / 2));
+
+    qreal y =
+        HeaderHeight +
+        index * RowHeight +
+        RowHeight / 2;
+
+    return mapToScene(QPointF(
+        m_width + SocketOffset,
+        y
+    ));
+}
+
+void GraphicalNodeItem::recalculateWidth()
+{
+    QFont font;
+    QFontMetrics fm(font);
+
+    int maxWidth = 0;
+
+    // header
+    QString headerText =
+        m_node->type.isEmpty()
+            ? m_node->name
+            : QString("%1 : %2").arg(m_node->name, m_node->type);
+
+    maxWidth = fm.horizontalAdvance(headerText);
+
+    // children
+    for (VarNode* child : m_node->children) {
+        QString row =
+            QString("%1 = %2")
+                .arg(child->name, child->value);
+
+        maxWidth = qMax(maxWidth, fm.horizontalAdvance(row));
+    }
+
+    constexpr int leftPadding  = 12;
+    constexpr int rightPadding = 20;
+
+    m_width = maxWidth + leftPadding + rightPadding;
 }
 
 
-void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent *e) {
-	if (auto *it = itemAt(e->pos())) {
-		if (auto *n = dynamic_cast<NodeItem *>(it)) {
-			emit nodeDoubleClicked(n->id());
-			return;
-		}
-	}
-	QGraphicsView::mouseDoubleClickEvent(e);
+
+// =======================================================
+// GraphicalEdgeItem
+// =======================================================
+
+GraphicalEdgeItem::GraphicalEdgeItem(GraphicalNodeItem* from,
+                                     GraphicalNodeItem* to)
+    : m_from(from)
+    , m_to(to)
+{
+    setZValue(-1);
+
+    QPen pen(QColor(180, 180, 180));
+    pen.setWidthF(2.0);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+
+    setPen(pen);
 }
 
-void GraphicalVariablesView::drawBackground(QPainter *p, const QRectF &rect) {
-	p->fillRect(rect, QColor("#f7f7f5"));
 
-	const int small = 20;
-	const int big = 100;
+void GraphicalEdgeItem::updatePosition()
+{
+    QPointF p1 = m_from->outputPortFor(nullptr);
+    QPointF p2 = m_to->inputPort();
 
-	QPen thin(QColor(0, 0, 0, 25));
-	QPen thick(QColor(0, 0, 0, 45));
+    const qreal dx = qAbs(p2.x() - p1.x());
+    const qreal handle = qMax(dx * 0.5, 60.0);
 
-	const int l = int(std::floor(rect.left()));
-	const int r = int(std::ceil(rect.right()));
-	const int t = int(std::floor(rect.top()));
-	const int b = int(std::ceil(rect.bottom()));
+    QPointF c1 = p1 + QPointF(handle, 0);
+    QPointF c2 = p2 - QPointF(handle, 0);
 
-	p->setPen(thin);
-	for (int x = l - l % small; x < r; x += small)
-		p->drawLine(x, t, x, b);
-	for (int y = t - t % small; y < b; y += small)
-		p->drawLine(l, y, r, y);
+    QPainterPath path;
+    path.moveTo(p1);
+    path.cubicTo(c1, c2, p2);
 
-	p->setPen(thick);
-	for (int x = l - l % big; x < r; x += big)
-		p->drawLine(x, t, x, b);
-	for (int y = t - t % big; y < b; y += big)
-		p->drawLine(l, y, r, y);
+    setPath(path);
 }
 
-void GraphicalVariablesView::zoomIn() { scale(1.2, 1.2); }
-void GraphicalVariablesView::zoomOut() { scale(1 / 1.2, 1 / 1.2); }
-void GraphicalVariablesView::resetZoom() { resetTransform(); }
 
-void GraphicalVariablesView::fitGraph() {
-	fitInView(scene()->itemsBoundingRect().adjusted(-40, -40, 40, 40),
-	          Qt::KeepAspectRatio);
+
+// =======================================================
+// GraphicalVariablesView
+// =======================================================
+
+GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
+    : QGraphicsView(parent)
+{
+    m_scene = new QGraphicsScene(this);
+    setScene(m_scene);
+
+    m_scene->setSceneRect(-5000, -5000, 10000, 10000);
+
+    setRenderHint(QPainter::Antialiasing);
+    setDragMode(ScrollHandDrag);
 }
 
-void GraphicalVariablesView::setGraph(const QVector<GraphNode> &nodes,
-                                      const QVector<GraphEdge> &) {
-	qDebug() << "setGraph nodes:";
-	for (const auto &n : nodes) {
-		qDebug() << "  GraphNode:" << n.title << "id=" << n.id
-		         << "fields=" << n.fields.size();
-	}
-	QMap<QString, QPointF> mempos;
-	for (const auto &ni : m_impl->nodes) {
-		mempos[ni->id()] = ni->pos();
-	}
-	m_scene->clear();
-	m_impl->nodes.clear();
+GraphicalVariablesView::~GraphicalVariablesView() = default;
 
-	qreal x = 0;
-	for (const auto &n : nodes) {
-		auto *ni = new NodeItem(n);
-		m_scene->addItem(ni);
-		if (mempos.contains(ni->id())) ni->setPos(mempos[ni->id()]);
-		else ni->setPos(x, 0);
-		m_impl->nodes.push_back(ni);
-		x += ni->boundingRect().width() + 80;
-	}
-
-	fitGraph();
+void GraphicalVariablesView::setSession(DebugSession* session)
+{
+    m_session = session;
+    refresh();
 }
 
-void GraphicalVariablesView::rebuildEdges() {
-	// stub
+void GraphicalVariablesView::refresh()
+{
+    if (!m_session)
+        return;
+
+    m_scene->clear();
+
+    const QList<VarNode*> roots =
+        m_session->complexVariables();
+
+    int y = 0;
+    const int rootSpacing = 120;
+
+    for (VarNode* root : roots) {
+
+        auto* rootItem =
+            new GraphicalNodeItem(root);
+
+        m_scene->addItem(rootItem);
+
+        layoutTree(rootItem, 0, y);
+
+        y += rootSpacing;
+    }
+}
+
+void GraphicalVariablesView::layoutTree(GraphicalNodeItem* item,
+                                        int depth,
+                                        int& y)
+{
+    const int xSpacing = 320;
+    const int ySpacing = 160;
+
+    item->setPos(depth * xSpacing, y);
+
+    if (!item->expanded)
+        return;
+
+    int childY = y;
+
+    for (VarNode* child : item->node()->children) {
+
+        if (!child->hasChildren)
+            continue;
+
+        auto* childItem =
+            new GraphicalNodeItem(child);
+
+        m_scene->addItem(childItem);
+
+        childY += ySpacing;
+
+        layoutTree(childItem, depth + 1, childY);
+
+        auto* edge = new GraphicalEdgeItem(item, childItem);
+
+        m_scene->addItem(edge);
+
+        item->addEdge(edge);
+        childItem->addEdge(edge);
+
+        edge->updatePosition();
+
+    }
+}
+
+void GraphicalNodeItem::addEdge(GraphicalEdgeItem* e)
+{
+    m_edges << e;
+}
+
+
+void GraphicalVariablesView::wheelEvent(QWheelEvent* event)
+{
+    const double factor = 1.15;
+
+    if (event->angleDelta().y() > 0)
+        scale(factor, factor);
+    else
+        scale(1.0 / factor, 1.0 / factor);
+}
+
+void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    auto* item =
+        dynamic_cast<GraphicalNodeItem*>(itemAt(event->pos()));
+
+    if (item) {
+        item->expanded = !item->expanded;
+        item->recalculateWidth();
+
+        refresh();
+    }
+
+    QGraphicsView::mouseDoubleClickEvent(event);
+}
+
+void GraphicalVariablesView::drawBackground(QPainter* p,
+                                            const QRectF& rect)
+{
+    const int small = 20;
+    const int big   = 100;
+
+    QPen thin(QColor(0, 0, 0, 25));
+    QPen thick(QColor(0, 0, 0, 45));
+
+    const int l = int(std::floor(rect.left()));
+    const int r = int(std::ceil(rect.right()));
+    const int t = int(std::floor(rect.top()));
+    const int b = int(std::ceil(rect.bottom()));
+
+    p->setPen(thin);
+    for (int x = l - l % small; x <= r; x += small)
+        p->drawLine(x, t, x, b);
+    for (int y = t - t % small; y <= b; y += small)
+        p->drawLine(l, y, r, y);
+
+    p->setPen(thick);
+    for (int x = l - l % big; x <= r; x += big)
+        p->drawLine(x, t, x, b);
+    for (int y = t - t % big; y <= b; y += big)
+        p->drawLine(l, y, r, y);
 }

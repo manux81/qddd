@@ -31,68 +31,93 @@
 
 #pragma once
 
+#include "DebugSession.h"
+
 #include <QGraphicsView>
+#include <QGraphicsItem>
+#include <QGraphicsLineItem>
+#include <QGraphicsPathItem>
 #include <QColor>
-#include <QVector>
 #include <QString>
 
-class QGraphicsScene;
+class GraphicalNodeItem;
 
-struct GraphNodeField {
-	QString id;
-    QString name;
-    QString type;
-    QString value;
-
-    int depth = 0;
-    bool isExpandable = false;
-    bool expanded = true;
-    QString targetId;
-};
-
-struct GraphNode {
-    QString id;
-    QString title;
-    QVector<GraphNodeField> fields;
-    QColor color;
-};
-
-struct GraphEdge {
-    QString fromId;
-    QString toId;
-    QString label;
-};
-
-class GraphicalVariablesView : public QGraphicsView {
-    Q_OBJECT
+class GraphicalEdgeItem : public QGraphicsPathItem
+{
 public:
-    explicit GraphicalVariablesView(QWidget *parent = nullptr);
-    ~GraphicalVariablesView() override;
+    GraphicalEdgeItem(GraphicalNodeItem* from,
+                      GraphicalNodeItem* to);
 
-    void setGraph(const QVector<GraphNode>& nodes,
-                  const QVector<GraphEdge>& edges);
-
-signals:
-    void nodeDoubleClicked(const QString& id);
-	void toggleNodeExpanded(const QString& nodeId);
-
-protected:
-    void wheelEvent(QWheelEvent *event) override;
-    void mousePressEvent(QMouseEvent *event) override;
-    void mouseDoubleClickEvent(QMouseEvent *event) override;
-    void drawBackground(QPainter *p, const QRectF &rect) override;
-
-public slots:
-    void zoomIn();
-    void zoomOut();
-    void resetZoom();
-    void fitGraph();
+    void updatePosition();
 
 private:
-    void rebuildEdges();
-
-    struct Impl;
-    Impl *m_impl;
-    QGraphicsScene *m_scene;
+    GraphicalNodeItem* m_from;
+    GraphicalNodeItem* m_to;
 };
 
+
+class GraphicalNodeItem : public QGraphicsItem
+{
+public:
+    explicit GraphicalNodeItem(VarNode* node);
+
+    QRectF boundingRect() const override;
+    void paint(QPainter* painter,
+               const QStyleOptionGraphicsItem* option,
+               QWidget* widget) override;
+
+    VarNode* node() const;
+
+    QPointF inputPort() const;
+    QPointF outputPortFor(VarNode* child) const;
+    void recalculateWidth();
+    void addEdge(GraphicalEdgeItem* e);
+    bool expanded = false;
+
+private:
+    void drawHeader(QPainter* painter);
+    void drawSource(QPainter* painter);
+
+
+private:
+    VarNode* m_node = nullptr;
+    QList<GraphicalEdgeItem*> m_edges;
+    int m_width = 260;
+
+    static constexpr int HeaderHeight = 26;
+    static constexpr int RowHeight    = 22;
+    static constexpr int PortRadius   = 5;
+    static constexpr int LeftPadding  = 10;
+    static constexpr int RightPadding = 10;
+};
+
+
+
+class GraphicalVariablesView : public QGraphicsView
+{
+    Q_OBJECT
+
+public:
+    explicit GraphicalVariablesView(QWidget* parent = nullptr);
+    ~GraphicalVariablesView() override;
+
+    void setSession(DebugSession* session);
+
+public slots:
+    void refresh();
+
+protected:
+    void wheelEvent(QWheelEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void drawBackground(QPainter* painter,
+                        const QRectF& rect) override;
+
+private:
+    void layoutTree(GraphicalNodeItem* item,
+                    int depth,
+                    int& y);
+
+private:
+    QGraphicsScene* m_scene = nullptr;
+    DebugSession*   m_session = nullptr;
+};

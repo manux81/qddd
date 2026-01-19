@@ -275,9 +275,9 @@ void VariablesView::refresh() {
 
 	clearVariables();
 
-    for (VarNode *n : m_session->complexVariables()) {
-        addNode(nullptr, n);
-    }
+	for (VarNode *n : m_session->complexVariables()) {
+		addNode(nullptr, n);
+	}
 
 	std::function<void(QStandardItem *)> restore = [&](QStandardItem *it) {
 		if (!it) {
@@ -330,8 +330,7 @@ void VariablesView::addNode(QStandardItem *parent, VarNode *node) {
 	valueItem->setData(false, ChangedRole);
 
 	const QString trimmed = node->value.trimmed();
-	const bool isStructLike = trimmed.startsWith('{') && trimmed.endsWith('}');
-	const bool isLeafValue  = !isStructLike;
+	const bool isLeafValue = node->children.isEmpty();
 
 	bool changed = false;
 
