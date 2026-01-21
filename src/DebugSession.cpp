@@ -112,12 +112,14 @@ static void expandInlineStructIntoChildren(VarNode* node,
 
         // regole children/expandable:
         // - pointer => "expandable" (nella tua UI lo tratti come espandibile/edge)
-        c->hasChildren = looksLikePointer(c->value);
+        c->isPointer = looksLikePointer(c->value);
+		c->hasChildren = looksLikeStruct(c->value);
+
 
         node->children.append(c);
 
         // ricorsione SOLO su struct annidata (limitata)
-        if (looksLikeStruct(c->value)) {
+        if (c->hasChildren) {
             expandInlineStructIntoChildren(c, c->value, depth + 1, maxDepth);
         }
     }
@@ -572,7 +574,7 @@ void DebugSession::handleVarList(const QString &line)
     qDeleteAll(m_cvars);
     m_cvars.clear();
 
-    constexpr int INLINE_MAX_DEPTH = 2;
+    constexpr int INLINE_MAX_DEPTH = 5;
     auto pendingAddr = QSharedPointer<int>::create(0);
 
     for (QString e : entries) {
@@ -598,7 +600,7 @@ void DebugSession::handleVarList(const QString &line)
 
         m_cvars.append(node);
 
-        // recupera address (&name)
+
         const QString expr = "&" + node->name;
         (*pendingAddr)++;
 
@@ -608,7 +610,7 @@ void DebugSession::handleVarList(const QString &line)
                 QRegularExpression re(R"(value=\"([^\"]+)\")");
                 QRegularExpressionMatch m = re.match(replyLine);
                 if (m.hasMatch()) {
-                    node->varId = normalizeAddress(m.captured(1));
+                    node->addr = normalizeAddress(m.captured(1));
                 }
 
                 (*pendingAddr)--;
@@ -623,7 +625,6 @@ void DebugSession::handleVarList(const QString &line)
 
     m_pendingVars = false;
 
-    // nessuna variabile → emetti subito
     if (entries.isEmpty() || m_cvars.isEmpty())
         emit complexVariablesUpdated(m_cvars);
 }
@@ -758,9 +759,32 @@ void DebugSession::handleBreakpointDeleted(const QString &line) {
 	emit breakpointsChanged(m_bps);
 }
 
-void DebugSession::fetchComplexVars() {
+void DebugSession::fetchComplexVars(VarNode* node)
+{
+    if (!node || node->varId.isEmpty())
+        return;
 
+    // 1) create var object
+    enqueueCommand({
+        QString("-var-create %1 * %2")
+            .arg(node->name)
+            .arg(node->varId),
+        [this, node](const QString&) {
+
+            // 2) list children
+            enqueueCommand({
+                QString("-var-list-children --all-values %1")
+                    .arg(node->varId),
+                [this](const QString& line) {
+                    parseComplexVarTree(line);
+                },
+                false
+            });
+        },
+        false
+    });
 }
+
 
 void DebugSession::parseComplexVarTree(const QString &line) {
 	QString payload = line;

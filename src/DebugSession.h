@@ -48,8 +48,10 @@ struct VarNode {
 	QString name;
 	QString value;
 	QString type;
+	QString addr;
 	QString varId;
 	bool hasChildren = false;
+	bool isPointer = false;
 	QList<VarNode *> children;
 	VarNode* parent = nullptr;
 };
@@ -136,7 +138,7 @@ class DebugSession : public QObject {
 	void handleBreakpointEvent(const QString &line);
 	void handleBreakpointDeleted(const QString &line);
 
-	void fetchComplexVars();
+	void fetchComplexVars(VarNode* node);
 	void parseComplexVarTree(const QString &line);
 	QString translateUserCommand(const QString &cmd) const;
 

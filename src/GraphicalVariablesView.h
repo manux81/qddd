@@ -72,12 +72,17 @@ public:
     QPointF outputPortFor(VarNode* child) const;
     void recalculateWidth();
     void addEdge(GraphicalEdgeItem* e);
-    bool expanded = false;
+    QHash<VarNode*, bool> m_expanded;
+
 
 private:
     void drawHeader(QPainter* painter);
     void drawSource(QPainter* painter);
 
+protected:
+    void mousePressEvent(QGraphicsSceneMouseEvent*) override;
+    QVariant itemChange(GraphicsItemChange change,
+                        const QVariant& value) override;
 
 private:
     VarNode* m_node = nullptr;
@@ -112,10 +117,11 @@ protected:
     void drawBackground(QPainter* painter,
                         const QRectF& rect) override;
 
+
 private:
     void layoutTree(GraphicalNodeItem* item,
                     int depth,
-                    int& y);
+                    int& y) __deprecated;
 
 private:
     QGraphicsScene* m_scene = nullptr;
