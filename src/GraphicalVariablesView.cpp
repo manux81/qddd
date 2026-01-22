@@ -477,9 +477,73 @@ GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
 
     setRenderHint(QPainter::Antialiasing);
     setDragMode(ScrollHandDrag);
+    setTransformationAnchor(AnchorUnderMouse);
+
+    //overlay zoom
+    auto *overlay = new QWidget(this);
+    overlay->setStyleSheet(R"(
+        QWidget {
+            background: rgba(30, 30, 30, 220);
+            border: 1px solid #555;
+            border-radius: 6px;
+        }
+
+        QToolButton {
+            color: white;
+            background: transparent;
+            border: none;
+            font-size: 16px;
+        }
+
+        QToolButton:hover {
+            background: #3a3a3a;
+            border-radius: 4px;
+        }
+
+        QToolButton:pressed {
+            background: #5a5a5a;
+        }
+    )");
+
+    auto *vl = new QVBoxLayout(overlay);
+    vl->setContentsMargins(6, 6, 6, 6);
+    vl->setSpacing(4);
+
+    auto mk = [&](const QString &t) {
+        auto *b = new QToolButton(overlay);
+        b->setText(t);
+        b->setAutoRaise(true);
+        b->setFixedSize(28, 28);
+        vl->addWidget(b);
+        return b;
+    };
+
+    connect(mk("+"), &QToolButton::clicked, this,
+            &GraphicalVariablesView::zoomIn);
+
+    connect(mk("-"), &QToolButton::clicked, this,
+            &GraphicalVariablesView::zoomOut);
+
+    connect(mk("⤢"), &QToolButton::clicked, this,
+            &GraphicalVariablesView::fitGraph);
+
+    connect(mk("⟳"), &QToolButton::clicked, this,
+            &GraphicalVariablesView::resetZoom);
+
+    overlay->move(10, 10);
+    overlay->show();
 }
 
 GraphicalVariablesView::~GraphicalVariablesView() = default;
+
+void GraphicalVariablesView::zoomIn() { scale(1.2, 1.2); }
+void GraphicalVariablesView::zoomOut() { scale(1 / 1.2, 1 / 1.2); }
+void GraphicalVariablesView::fitGraph() {
+    	fitInView(scene()->itemsBoundingRect().adjusted(-40, -40, 40, 40),
+	          Qt::KeepAspectRatio);
+}
+void GraphicalVariablesView::resetZoom() { resetTransform(); }
+
 
 void GraphicalVariablesView::setSession(DebugSession* session)
 {

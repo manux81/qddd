@@ -37,6 +37,8 @@
 #include <QGraphicsItem>
 #include <QGraphicsLineItem>
 #include <QGraphicsPathItem>
+#include <QToolButton>
+#include <QVBoxLayout>
 #include <QColor>
 #include <QString>
 
@@ -110,6 +112,11 @@ public:
 
 public slots:
     void refresh();
+    void zoomIn();
+    void zoomOut();
+    void resetZoom();
+    void fitGraph();
+
 
 protected:
     void wheelEvent(QWheelEvent* event) override;
