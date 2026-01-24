@@ -163,9 +163,11 @@ QRectF GraphicalNodeItem::boundingRect() const
                            const_cast<QHash<VarNode*, bool>&>(m_expanded),
                            rows);
 
+    int rowCount = rows.isEmpty() ? 1 : rows.size();
+
     int height =
         HeaderHeight +
-        rows.size() * RowHeight;
+        rowCount * RowHeight;
 
     return QRectF(
         -8,
@@ -174,6 +176,7 @@ QRectF GraphicalNodeItem::boundingRect() const
         height
     );
 }
+
 
 
 // -------------------------------------------------------
@@ -283,6 +286,26 @@ void GraphicalNodeItem::drawSource(QPainter* p)
         buildRowsRecursive(c, 0, m_expanded, rows);
 
     int y = HeaderHeight;
+    if (rows.size() == 0) {
+        VarNode* n = m_node;
+
+        QRectF rowRect(0, HeaderHeight, m_width, RowHeight);
+
+        p->setPen(Qt::NoPen);
+        p->setBrush(QColor(45, 45, 45));
+        p->drawRect(rowRect);
+
+        p->setPen(Qt::white);
+
+        QString text = QString("%1").arg( n->value);
+        p->drawText(
+            rowRect.adjusted(12, 0, -12, 0),
+            Qt::AlignVCenter | Qt::AlignLeft,
+            text
+        );
+
+        return;
+    }
 
     for (int i = 0; i < rows.size(); ++i) {
 
