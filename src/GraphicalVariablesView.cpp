@@ -454,7 +454,6 @@ QPointF GraphicalNodeItem::outputPortFor(VarNode* child) const
     ));
 }
 
-
 // =======================================================
 // GraphicalEdgeItem
 // =======================================================
@@ -516,62 +515,61 @@ GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
     setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
 
-setStyleSheet(R"(
-QScrollBar:vertical {
-    background: transparent;
-    width: 8px;
-    margin: 4px 2px 4px 2px;
-}
+    setStyleSheet(R"(
+    QScrollBar:vertical {
+        background: transparent;
+        width: 8px;
+        margin: 4px 2px 4px 2px;
+    }
 
-QScrollBar::handle:vertical {
-    background: rgba(200, 200, 200, 120);
-    border-radius: 4px;
-    min-height: 30px;
-}
+    QScrollBar::handle:vertical {
+        background: rgba(200, 200, 200, 120);
+        border-radius: 4px;
+        min-height: 30px;
+    }
 
-QScrollBar::handle:vertical:hover {
-    background: rgba(220, 220, 220, 180);
-}
+    QScrollBar::handle:vertical:hover {
+        background: rgba(220, 220, 220, 180);
+    }
 
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
+    QScrollBar::add-line:vertical,
+    QScrollBar::sub-line:vertical {
+        height: 0px;
+    }
 
-QScrollBar::add-page:vertical,
-QScrollBar::sub-page:vertical {
-    background: transparent;
-}
+    QScrollBar::add-page:vertical,
+    QScrollBar::sub-page:vertical {
+        background: transparent;
+    }
 
-/* ---- horizontal ---- */
+    /* ---- horizontal ---- */
 
-QScrollBar:horizontal {
-    background: transparent;
-    height: 8px;
-    margin: 2px 4px 2px 4px;
-}
+    QScrollBar:horizontal {
+        background: transparent;
+        height: 8px;
+        margin: 2px 4px 2px 4px;
+    }
 
-QScrollBar::handle:horizontal {
-    background: rgba(200, 200, 200, 120);
-    border-radius: 4px;
-    min-width: 30px;
-}
+    QScrollBar::handle:horizontal {
+        background: rgba(200, 200, 200, 120);
+        border-radius: 4px;
+        min-width: 30px;
+    }
 
-QScrollBar::handle:horizontal:hover {
-    background: rgba(220, 220, 220, 180);
-}
+    QScrollBar::handle:horizontal:hover {
+        background: rgba(220, 220, 220, 180);
+    }
 
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
-    width: 0px;
-}
+    QScrollBar::add-line:horizontal,
+    QScrollBar::sub-line:horizontal {
+        width: 0px;
+    }
 
-QScrollBar::add-page:horizontal,
-QScrollBar::sub-page:horizontal {
-    background: transparent;
-}
-)");
-
+    QScrollBar::add-page:horizontal,
+    QScrollBar::sub-page:horizontal {
+        background: transparent;
+    }
+    )");
 
     //overlay zoom
     auto *overlay = new QWidget(this);
