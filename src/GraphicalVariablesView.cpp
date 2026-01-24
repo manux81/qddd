@@ -183,36 +183,69 @@ void GraphicalNodeItem::paint(QPainter* p,
                               QWidget*)
 {
     p->setRenderHint(QPainter::Antialiasing);
-
-    drawHeader(p);
+    const QRectF r = boundingRect().adjusted(8, 0, -8, 0);
+    drawHeader(p, r);
     drawSource(p);
 }
 
 
 // -------------------------------------------------------
 
-void GraphicalNodeItem::drawHeader(QPainter* p)
+void GraphicalNodeItem::drawHeader(QPainter* p, const QRectF& r)
 {
-    QRectF header(0, 0, m_width, HeaderHeight);
+    const qreal radius = 10.0;
 
-    QColor bg(70, 70, 70);
-    if (m_node->parent == nullptr)
-        bg = QColor(90, 70, 40);
+    QRectF header(
+        r.left(),
+        r.top(),
+        r.width(),
+        HeaderHeight
+    );
+
+    QColor base = m_node->parent == nullptr
+        ? QColor(150, 110, 50)
+        : QColor(80, 80, 80);
+
+    QLinearGradient grad(
+        header.topLeft(),
+        header.bottomLeft());
+
+    grad.setColorAt(0.0, base.lighter(120));
+    grad.setColorAt(1.0, base.darker(120));
+
+    QPainterPath path;
+
+    path.moveTo(header.left(), header.bottom());
+    path.lineTo(header.left(), header.top() + radius);
+
+    path.quadTo(
+        header.topLeft(),
+        header.topLeft() + QPointF(radius, 0)
+    );
+
+    path.lineTo(header.right() - radius, header.top());
+
+    path.quadTo(
+        header.topRight(),
+        header.topRight() + QPointF(0, radius)
+    );
+
+    path.lineTo(header.right(), header.bottom());
+    path.closeSubpath();
 
     p->setPen(Qt::NoPen);
-    p->setBrush(bg);
-    p->drawRoundedRect(header, 6, 6);
+    p->setBrush(grad);
+    p->drawPath(path);
 
     p->setPen(Qt::white);
-
-    QString title = 
+    p->drawText(
+        header.adjusted(12, 0, -12, 0),
+        Qt::AlignVCenter | Qt::AlignLeft,
         m_node->addr.isEmpty()
             ? m_node->name
-            : QString("%1 : %2").arg(m_node->name, m_node->addr);
-
-    p->drawText(15, 17, title);
+            : QString("%1 : %2").arg(m_node->name, m_node->addr)
+    );
 }
-
 
 // -------------------------------------------------------
 
@@ -423,7 +456,6 @@ QPointF GraphicalNodeItem::outputPortFor(VarNode* child) const
     ));
 }
 
-
 // =======================================================
 // GraphicalEdgeItem
 // =======================================================
@@ -479,7 +511,67 @@ GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
 
     setRenderHint(QPainter::Antialiasing);
     setDragMode(ScrollHandDrag);
-    setTransformationAnchor(AnchorUnderMouse);
+    setTransformationAnchor(AnchorViewCenter);
+    setResizeAnchor(AnchorViewCenter);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+
+
+    setStyleSheet(R"(
+    QScrollBar:vertical {
+        background: transparent;
+        width: 8px;
+        margin: 4px 2px 4px 2px;
+    }
+
+    QScrollBar::handle:vertical {
+        background: rgba(200, 200, 200, 120);
+        border-radius: 4px;
+        min-height: 30px;
+    }
+
+    QScrollBar::handle:vertical:hover {
+        background: rgba(220, 220, 220, 180);
+    }
+
+    QScrollBar::add-line:vertical,
+    QScrollBar::sub-line:vertical {
+        height: 0px;
+    }
+
+    QScrollBar::add-page:vertical,
+    QScrollBar::sub-page:vertical {
+        background: transparent;
+    }
+
+    /* ---- horizontal ---- */
+
+    QScrollBar:horizontal {
+        background: transparent;
+        height: 8px;
+        margin: 2px 4px 2px 4px;
+    }
+
+    QScrollBar::handle:horizontal {
+        background: rgba(200, 200, 200, 120);
+        border-radius: 4px;
+        min-width: 30px;
+    }
+
+    QScrollBar::handle:horizontal:hover {
+        background: rgba(220, 220, 220, 180);
+    }
+
+    QScrollBar::add-line:horizontal,
+    QScrollBar::sub-line:horizontal {
+        width: 0px;
+    }
+
+    QScrollBar::add-page:horizontal,
+    QScrollBar::sub-page:horizontal {
+        background: transparent;
+    }
+    )");
 
     //overlay zoom
     auto *overlay = new QWidget(this);

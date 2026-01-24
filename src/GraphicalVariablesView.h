@@ -78,7 +78,7 @@ public:
 
 
 private:
-    void drawHeader(QPainter* painter);
+    void drawHeader(QPainter* painter, const QRectF& r);
     void drawSource(QPainter* painter);
 
 protected:
