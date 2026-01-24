@@ -352,11 +352,12 @@ void GraphicalNodeItem::recalculateWidth()
 
 
     QString title =
-        m_node->varId.isEmpty()
+        m_node->addr.isEmpty()
             ? m_node->name
-            : QString("%1 : %2").arg(m_node->name, m_node->varId);
+            : QString("%1 : %2").arg(m_node->name, m_node->addr);
 
     int maxWidth = fm.horizontalAdvance(title);
+
 
     for (const VisibleRow& r : rows) {
         VarNode* n = r.node;
