@@ -50,14 +50,11 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 	m_stackView->setSession(m_session.get());
 	m_variablesView->setSession(m_session.get());
 	m_sourceEditor->setSession(m_session.get());
-
-	m_dataController =
-	    new GraphComplexController(m_session.get(), m_dataDisplay, this);
+	m_graphicalView->setSession(m_session.get());
 
 	connect(m_session.get(), &DebugSession::sessionUpdated, this,
 	        &MainWindow::updateFromSession);
 
-	// doppio click sullo stack → sposta editor
 	connect(m_stackView, &StackView::frameActivated, m_sourceEditor,
 	        &SourceEditor::showLocation);
 
@@ -85,8 +82,8 @@ void MainWindow::setupUi() {
 	tabifyDockWidget(m_varsDock, m_stackDock);
 
 	m_dataDock = new QDockWidget(tr("Data Display"), this);
-	m_dataDisplay = new GraphicalVariablesView(m_dataDock);
-	m_dataDock->setWidget(m_dataDisplay);
+    m_graphicalView = new GraphicalVariablesView(m_dataDock);
+    m_dataDock->setWidget(m_graphicalView);
 	addDockWidget(Qt::BottomDockWidgetArea, m_dataDock);
 
 	m_consoleDock = new QDockWidget(tr("Console"), this);
@@ -95,12 +92,13 @@ void MainWindow::setupUi() {
 	addDockWidget(Qt::BottomDockWidgetArea, m_consoleDock);
 	tabifyDockWidget(m_dataDock, m_consoleDock);
 
+
 	connect(m_stackView, &StackView::frameActivated, this,
 	        [&](QString file, int line) {
 		        m_sourceEditor->setCurrentPC(line);
 		        m_sourceEditor->showLocation(file, line);
 	        });
-	// ======== BREAKPOINTS TAB ========
+
 	m_breakDock = new QDockWidget(tr("Breakpoints"), this);
 	m_breakView = new BreakpointsView(m_breakDock);
 	m_breakDock->setWidget(m_breakView);
@@ -348,4 +346,5 @@ void MainWindow::updateFromSession() {
 		m_sourceEditor->showLocation(file, line);
 		m_sourceEditor->setCurrentPC(line);
 	}
+	m_graphicalView->refresh();
 }

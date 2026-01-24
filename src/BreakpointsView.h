@@ -30,25 +30,59 @@
  */
 
 #pragma once
-#include "DebugSession.h"
-#include <QStandardItemModel>
+
 #include <QTreeView>
+#include <QStandardItemModel>
+#include <QList>
 
-class BreakpointsView : public QTreeView {
-	Q_OBJECT
-  public:
-	explicit BreakpointsView(QWidget *parent = nullptr);
+#include "DebugSession.h"
 
-	void setSession(DebugSession *session);
+class BreakpointsView : public QTreeView
+{
+    Q_OBJECT
+public:
+    explicit BreakpointsView(QWidget *parent = nullptr);
 
-  public slots:
-	void refresh();
-	void onBpListChanged(const QList<BreakpointInfo> &list);
+    // richiesto dal tuo MainWindow
+    void setSession(DebugSession *session);
 
-  signals:
-	void breakpointSelected(const QString &loc);
+signals:
+    // richiesto dal tuo MainWindow
+    void breakpointSelected(const QString &location);
 
-  private:
-	QStandardItemModel *m_model;
-	DebugSession *m_session = nullptr;
+private slots:
+    void showContextMenu(const QPoint &pos);
+    void onActivated(const QModelIndex &index);
+    void onItemChanged(QStandardItem *item);
+
+    // riceve lista breakpoint dal backend
+    void onBreakpointsChanged(const QList<BreakpointInfo> &list);
+
+private:
+    enum Columns {
+        ColEnabled = 0,
+        ColNumber,
+        ColLocation,   // "file:line"
+        ColFile,
+        ColLine,
+        ColCount
+    };
+
+    enum Roles {
+        RoleBkptNumber = Qt::UserRole + 1
+    };
+
+    void setupModel();
+    void setupView();
+
+    void rebuild(const QList<BreakpointInfo> &list);
+    QIcon iconEnabled() const;
+    QIcon iconDisabled() const;
+
+private:
+    DebugSession *m_session = nullptr;
+    QStandardItemModel *m_model = nullptr;
+
+    // evita loop quando aggiorniamo il model programmaticamente
+    bool m_blockItemChanged = false;
 };

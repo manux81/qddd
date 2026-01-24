@@ -44,21 +44,16 @@ struct StackFrame {
 	QString function;
 };
 
-struct VariableInfo {
-	QString name;
-	QString value;
-	QString type;
-};
-
 struct VarNode {
 	QString name;
 	QString value;
 	QString type;
+	QString addr;
 	QString varId;
 	bool hasChildren = false;
+	bool isPointer = false;
 	QList<VarNode *> children;
 	VarNode* parent = nullptr;
-	bool expanded = false;
 };
 
 struct BreakpointInfo {
@@ -101,7 +96,6 @@ class DebugSession : public QObject {
 	QString evaluateExpression(const QString &expr);
 
 	QList<StackFrame> stackFrames() const;
-	QList<VariableInfo> variables() const;
 	QList<VarNode *> complexVariables() const;
 	QList<BreakpointInfo> breakpoints() const;
 
@@ -144,7 +138,7 @@ class DebugSession : public QObject {
 	void handleBreakpointEvent(const QString &line);
 	void handleBreakpointDeleted(const QString &line);
 
-	void fetchComplexVars();
+	void fetchComplexVars(VarNode* node);
 	void parseComplexVarTree(const QString &line);
 	QString translateUserCommand(const QString &cmd) const;
 
@@ -159,7 +153,6 @@ class DebugSession : public QObject {
 	MiCommand m_currentCmd;
 
 	QList<StackFrame> m_stack;
-	QList<VariableInfo> m_vars;
 	QList<VarNode *> m_cvars;
 	QList<BreakpointInfo> m_bps;
 
