@@ -128,7 +128,7 @@ protected:
 private:
     void layoutTree(GraphicalNodeItem* item,
                     int depth,
-                    int& y) __deprecated;
+                    int& y) /* __deprecated */;
 
 private:
     QGraphicsScene* m_scene = nullptr;
