@@ -32,6 +32,7 @@
 #include "GraphicalVariablesView.h"
 #include "DebugSession.h"
 
+#include <cmath>
 #include <QPainter>
 #include <QWheelEvent>
 #include <QMouseEvent>
