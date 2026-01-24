@@ -1,24 +1,43 @@
-# qddd
+# qddd — Qt Debugger Development Dashboard
 
-qddd (Qt Debugger Development Dashboard) is a **Qt-based desktop application**
-that provides a graphical interface to interact with **GDB via the Machine Interface (MI)**.
+qddd is a **Qt-based graphical debugger frontend** focused on
+**visualizing complex program state during debugging**.
 
-The project is primarily intended as a **development and learning tool**, focusing on
-debugger internals, MI-based communication, and clean separation between UI and
-debugging logic.
+Instead of presenting variables as plain text,
+qddd aims to provide a **structural and graphical view of runtime data**,
+making it easier to understand relationships between objects,
+pointers, and nested structures.
+
+The project communicates with **GDB through the Machine Interface (MI)** and
+is designed with a strict separation between the UI layer and the debugging backend.
 
 > ⚠️ Work in progress / experimental project
 
 ---
 
+## Why qddd?
+
+Traditional debuggers are excellent for stepping through code,
+but they often become hard to use when dealing with:
+
+- deeply nested structures
+- pointer-heavy data models
+- complex object graphs
+- runtime relationships between variables
+
+qddd focuses on **understanding program state**, not only execution flow.
+
+---
+
 ## ✨ Features
 
-- Modern Qt-based graphical interface
-- Interactive console for **GDB / MI** commands
-- Debug session lifecycle management
-- Real-time debugger output visualization
-- Tree-based model for variables and structured data
-- Architecture designed around UI / Debug backend separation
+- Qt-based desktop UI
+- Direct communication with **GDB / MI**
+- Interactive debugger console
+- Structured variable model
+- Expandable hierarchical data visualization
+- Graph-style rendering of related variables
+- Clear separation between UI and debugger backend
 
 ---
 
@@ -28,30 +47,30 @@ debugging logic.
   <img src="docs/screenshots/main.png" width="700">
 </p>
 
-*Screenshot for illustrative purposes – UI is subject to change.*
+*UI and layout are evolving as the project develops.*
 
 ---
 
 ## 🧩 Architecture Overview
 
-The project is organized around a few core components:
+The project is structured around a few core components:
 
-- **DebugSession**
-  - Manages the GDB process lifecycle
-  - Handles MI communication
-  - Emits Qt signals for output and debugger events
+### DebugSession
+- Manages the GDB process lifecycle
+- Handles MI protocol communication
+- Translates debugger events into Qt signals
 
-- **ConsoleWidget**
-  - Interactive input/output console for GDB/MI commands
-  - Displays raw debugger output
+### ConsoleWidget
+- Interactive MI command console
+- Displays raw debugger input and output
 
-- **Variable Model**
-  - Represents debugger variables as a tree structure
-  - Supports hierarchical attachment of children nodes
-  - Designed to reflect complex data layouts
+### Variable Model
+- Tree-based representation of debugger variables
+- Designed to reflect real memory layouts
+- Supports hierarchical expansion and future graph-based extensions
 
-This separation allows the UI to remain mostly independent from
-the underlying debugging engine.
+This architecture allows the UI to remain largely independent
+from the underlying debugging engine.
 
 ---
 
@@ -59,14 +78,12 @@ the underlying debugging engine.
 
 - Qt 5 or Qt 6
 - C++17 compatible compiler
-- GDB (with MI support)
-- CMake (recommended)
+- GDB with MI support
+- CMake
 
 ---
 
 ## 🚀 Build & Run
-
-Example build steps using CMake:
 
 ```bash
 git clone https://github.com/manux81/qddd.git
@@ -75,5 +92,3 @@ mkdir build && cd build
 cmake ..
 make
 ./qddd
-
-
