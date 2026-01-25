@@ -41,6 +41,8 @@
 #include <QVBoxLayout>
 #include <QColor>
 #include <QString>
+#include <QTimer>
+#include <QtMath>
 
 class GraphicalNodeItem;
 
@@ -55,6 +57,14 @@ public:
 private:
     GraphicalNodeItem* m_from;
     GraphicalNodeItem* m_to;
+
+    static constexpr int SEGMENTS = 10;
+    QPointF m_pos[SEGMENTS];
+    QPointF m_vel[SEGMENTS];
+    QPointF m_targetEnd;
+    QTimer m_timer;
+
+    void tick();
 };
 
 

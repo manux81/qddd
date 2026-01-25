@@ -39,6 +39,7 @@
 #include <QGraphicsSceneMouseEvent>
 
 
+
 // =======================================================
 // Helpers
 // =======================================================
@@ -496,26 +497,78 @@ GraphicalEdgeItem::GraphicalEdgeItem(GraphicalNodeItem* from,
     pen.setJoinStyle(Qt::RoundJoin);
 
     setPen(pen);
+
+    for (int i = 0; i < SEGMENTS; ++i) {
+        m_pos[i] = QPointF();
+        m_vel[i] = QPointF();
+    }
+
+    QObject::connect(&m_timer, &QTimer::timeout,
+        [this]() { tick(); }
+    );
 }
 
 void GraphicalEdgeItem::updatePosition()
 {
-    QPointF p1 = m_from->outputPortFor(nullptr);
-    QPointF p2 = m_to->inputPort();
+    QPointF start = m_from->outputPortFor(nullptr);
+    QPointF end = m_to->inputPort();
 
-    const qreal dx = qAbs(p2.x() - p1.x());
-    const qreal handle = qMax(dx * 0.5, 60.0);
+    m_pos[0] = start;
+    m_targetEnd = end;
 
-    QPointF c1 = p1 + QPointF(handle, 0);
-    QPointF c2 = p2 - QPointF(handle, 0);
+    if (m_pos[SEGMENTS -1].isNull()) {
+        for (int i = 0; i < SEGMENTS; ++i) {
+            m_pos[i] = start;
+        }
+    }
 
-    QPainterPath path;
-    path.moveTo(p1);
-    path.cubicTo(c1, c2, p2);
-
-    setPath(path);
+    if (!m_timer.isActive()) {
+        m_timer.start(5);
+    }
 }
 
+ void GraphicalEdgeItem::tick()
+ {
+    constexpr qreal k = 0.5;
+    constexpr qreal damping = 0.5;
+
+
+    m_pos[0] = m_from->outputPortFor(nullptr);
+
+    for (int i = 1; i < SEGMENTS - 1; ++i) {
+        QPointF f =
+            (m_pos[i-1] - m_pos[i]) * k +
+            (m_pos[i+1] - m_pos[i]) * k;
+
+        m_vel[i] += f;
+        m_vel[i] *= damping;
+    }
+
+
+    QPointF endForce = (m_targetEnd - m_pos[SEGMENTS-1]) * k;
+    m_vel[SEGMENTS-1] += endForce;
+    m_vel[SEGMENTS-1] *= damping;
+
+
+    for (int i = 1; i < SEGMENTS; ++i)
+        m_pos[i] += m_vel[i];
+
+
+    QPainterPath p;
+    p.moveTo(m_pos[0]);
+    for (int i = 1; i < SEGMENTS; ++i)
+        p.lineTo(m_pos[i]);
+
+    setPath(p);
+
+    bool moving = false;
+    for (int i = 0; i < SEGMENTS; ++i)
+        if (m_vel[i].manhattanLength() > 0.1)
+            moving = true;
+
+    if (!moving)
+        m_timer.stop();
+ }
 
 
 
