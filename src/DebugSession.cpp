@@ -80,7 +80,7 @@ static bool looksLikeStruct(const QString& v)
     return s.startsWith("{") && s.endsWith("}");
 }
 
-// Parser minimo per "{a = 1, b = {..}, c = 0x..}"
+
 static void expandInlineStructIntoChildren(VarNode* node,
                                            const QString& value,
                                            int depth,
@@ -191,6 +191,7 @@ static bool attachToTree(QList<VarNode *> &roots,
 
     return false;
 }
+
 
 
 DebugSession::DebugSession(QObject *parent) : QObject(parent) {
@@ -325,6 +326,129 @@ void DebugSession::toggleBreakpointAt(const QString &file, int line) {
 
 	insertBreakpoint(QString("%1:%2").arg(file).arg(line));
 }
+
+const Snapshot* DebugSession::snapshotAt(int index) const
+{
+    if (index < 0 || index >= m_history.size())
+        return nullptr;
+
+    return &m_history[index];
+}
+
+void DebugSession::captureSnapshot()
+{
+    Snapshot s;
+    s.step = int(m_stepCounter);
+    s.timestampNs = m_timer.nsecsElapsed();
+
+    for (VarNode* r : m_cvars)
+        flattenVar(r, "", s.values);
+
+    constexpr int MAX_HISTORY = 200;
+
+    if (m_history.size() >= MAX_HISTORY)
+        m_history.pop_front();
+
+    m_history.push_back(s);
+
+    if (m_history.size() >= 2) {
+        computeDiff(
+            m_history[m_history.size() - 2],
+            m_history[m_history.size() - 1]
+        );
+    }
+}
+
+
+void DebugSession::flattenVar(
+    VarNode* node,
+    const QString& path,
+    QHash<QString, QString>& out)
+{
+    if (!node)
+        return;
+
+    const QString full =
+        path.isEmpty()
+            ? node->name
+            : path + "." + node->name;
+
+    out.insert(full, node->value);
+
+    for (VarNode* c : node->children)
+        flattenVar(c, full, out);
+}
+
+
+void DebugSession::computeDiff(
+    const Snapshot& a,
+    const Snapshot& b)
+{
+    QVector<DiffEvent> diff;
+
+    for (auto it = b.values.begin(); it != b.values.end(); ++it) {
+
+        const QString& path   = it.key();
+        const QString& newVal = it.value();
+        const QString  oldVal = a.values.value(path);
+
+        if (!a.values.contains(path)) {
+            qDebug().noquote()
+                << "  + N"
+                << path
+                << "="
+                << newVal;
+            continue;
+        }
+
+        if (oldVal != newVal) {
+            qDebug().noquote()
+                << "  * C"
+                << path
+                << "\n      old =" << oldVal
+                << "\n      new =" << newVal;
+
+            diff.append({
+                path,
+                oldVal,
+                newVal
+            });
+        }
+    }
+
+    // ---- removed values
+    for (auto it = a.values.begin(); it != a.values.end(); ++it) {
+        if (!b.values.contains(it.key())) {
+            qDebug().noquote()
+                << "  - R"
+                << it.key()
+                << "="
+                << it.value();
+        }
+    }
+
+    emit diffReady(diff, a.step, b.step);
+}
+
+
+
+
+
+
+void DebugSession::tryFinalizeSnapshot()
+{
+    if (m_pendingStack)
+        return;
+    if (m_pendingVars)
+        return;
+    if (m_pendingVarAddr > 0)
+        return;
+
+    captureSnapshot();
+    emit sessionUpdated();
+}
+
+
 
 void DebugSession::sendCommand(const QString &cmd) {
 	const QString translated = translateUserCommand(cmd);
@@ -485,8 +609,7 @@ void DebugSession::parseMiLine(const QString &line) {
 	else if (line.startsWith("^done,BreakpointTable="))
 		handleBreakpointList(line);
 
-	if (!m_pendingStack && !m_pendingVars)
-		emit sessionUpdated();
+
 }
 
 // ============================================================================
@@ -575,7 +698,7 @@ void DebugSession::handleVarList(const QString &line)
     m_cvars.clear();
 
     constexpr int INLINE_MAX_DEPTH = 5;
-    auto pendingAddr = QSharedPointer<int>::create(0);
+	m_pendingVarAddr = 0;
 
     for (QString e : entries) {
         auto *node = new VarNode;
@@ -602,22 +725,24 @@ void DebugSession::handleVarList(const QString &line)
 
 
         const QString expr = "&" + node->name;
-        (*pendingAddr)++;
+        m_pendingVarAddr++;
 
         enqueueCommand({
             QString("-data-evaluate-expression %1").arg(expr),
-            [this, node, pendingAddr](const QString &replyLine) {
+			[this, node](const QString &replyLine) {
                 QRegularExpression re(R"(value=\"([^\"]+)\")");
                 QRegularExpressionMatch m = re.match(replyLine);
                 if (m.hasMatch()) {
                     node->addr = normalizeAddress(m.captured(1));
                 }
 
-                (*pendingAddr)--;
+                m_pendingVarAddr--;
 
-                if (*pendingAddr == 0) {
+                if (m_pendingVarAddr == 0) {
                     emit complexVariablesUpdated(m_cvars);
+                	tryFinalizeSnapshot();
                 }
+
             },
             false
         });

@@ -35,6 +35,7 @@
 #include <QProcess>
 #include <QQueue>
 #include <QString>
+#include <QElapsedTimer>
 #include <functional>
 
 struct StackFrame {
@@ -45,15 +46,19 @@ struct StackFrame {
 };
 
 struct VarNode {
-	QString name;
-	QString value;
-	QString type;
-	QString addr;
-	QString varId;
-	bool hasChildren = false;
-	bool isPointer = false;
-	QList<VarNode *> children;
-	VarNode* parent = nullptr;
+    QString name;
+    QString value;
+    QString type;
+    QString addr;
+    QString varId;
+    bool hasChildren = false;
+    bool isPointer = false;
+    QList<VarNode*> children;
+    VarNode* parent = nullptr;
+
+    ~VarNode() {
+        qDeleteAll(children);
+    }
 };
 
 struct BreakpointInfo {
@@ -61,6 +66,18 @@ struct BreakpointInfo {
 	QString file;
 	int line = 0;
 	bool enabled = true;
+};
+
+struct Snapshot {
+    int step;
+    qint64 timestampNs;
+    QHash<QString, QString > values;
+};
+
+struct DiffEvent {
+	QString path;
+	QString oldValue;
+	QString newValue;
 };
 
 class DebugSession : public QObject {
@@ -90,6 +107,8 @@ class DebugSession : public QObject {
 	void clearAllBreakpoints();
 	void toggleBreakpointEnabled(int n, bool en);
 	void toggleBreakpointAt(const QString &file, int line);
+	int historySize() const { return m_history.size(); }
+	const Snapshot* snapshotAt(int index) const;
 
 
 	void sendCommand(const QString &cmd);
@@ -111,6 +130,7 @@ class DebugSession : public QObject {
 	void breakpointsChanged(const QList<BreakpointInfo> &list);
 	void debuggerExited(int exitCode, QProcess::ExitStatus status);
 	void complexVariablesUpdated(QList<VarNode *> roots);
+    void diffReady(const QVector<DiffEvent>& diff, int fromStep, int toStep);
 
   private slots:
 	void onReadyReadStdout();
@@ -141,10 +161,17 @@ class DebugSession : public QObject {
 	void fetchComplexVars(VarNode* node);
 	void parseComplexVarTree(const QString &line);
 	QString translateUserCommand(const QString &cmd) const;
+	void captureSnapshot();
+	void computeDiff(const Snapshot& a, const Snapshot& b);
+	void tryFinalizeSnapshot();
+	void flattenVar(
+    VarNode* node,
+    const QString& path,
+    QHash<QString, QString>& out);
 
-  private:
+
 	QProcess m_proc;
-	Backend m_backend = Backend::GDB_MI;
+	Backend m_backend = Backend::LLDB_MI;
 	QString m_programPath;
 	QByteArray m_buffer;
 
@@ -155,6 +182,7 @@ class DebugSession : public QObject {
 	QList<StackFrame> m_stack;
 	QList<VarNode *> m_cvars;
 	QList<BreakpointInfo> m_bps;
+	QVector<Snapshot> m_history;
 
 	QString m_currentFile;
 	int m_currentLine = 0;
@@ -162,6 +190,9 @@ class DebugSession : public QObject {
 	bool m_pendingStack = false;
 	bool m_pendingVars = false;
 	bool m_pendingExec = false;
+	int m_pendingVarAddr = 0;
 	bool m_useComplexVarView = false;
 	quint64 m_stepCounter = 0U;
+	QElapsedTimer m_timer;
+
 };
