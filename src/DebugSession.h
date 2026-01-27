@@ -31,6 +31,7 @@
 
 #pragma once
 #include <QList>
+#include <QSet>
 #include <QObject>
 #include <QProcess>
 #include <QQueue>
@@ -123,6 +124,9 @@ class DebugSession : public QObject {
 
 	void setUseComplexVarView(bool b) { m_useComplexVarView = b; }
 	quint64 stepCounter() const { return m_stepCounter; }
+	const QSet<QString>& changedPaths() const;
+
+
 
   signals:
 	void outputReceived(const QString &text);
@@ -164,10 +168,7 @@ class DebugSession : public QObject {
 	void captureSnapshot();
 	void computeDiff(const Snapshot& a, const Snapshot& b);
 	void tryFinalizeSnapshot();
-	void flattenVar(
-    VarNode* node,
-    const QString& path,
-    QHash<QString, QString>& out);
+	void flattenVar(VarNode* node, const QString& path, QHash<QString, QString>& out);
 
 
 	QProcess m_proc;
@@ -194,5 +195,5 @@ class DebugSession : public QObject {
 	bool m_useComplexVarView = false;
 	quint64 m_stepCounter = 0U;
 	QElapsedTimer m_timer;
-
+	QSet<QString> m_changedPaths;
 };

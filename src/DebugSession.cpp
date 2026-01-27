@@ -384,29 +384,31 @@ void DebugSession::computeDiff(
     const Snapshot& a,
     const Snapshot& b)
 {
+    m_changedPaths.clear();
+
     QVector<DiffEvent> diff;
 
+    // changed / added
     for (auto it = b.values.begin(); it != b.values.end(); ++it) {
 
         const QString& path   = it.key();
         const QString& newVal = it.value();
-        const QString  oldVal = a.values.value(path);
 
         if (!a.values.contains(path)) {
-            qDebug().noquote()
-                << "  + N"
-                << path
-                << "="
-                << newVal;
+            m_changedPaths.insert(path);
+
+            diff.append({
+                path,
+                QString(),
+                newVal
+            });
             continue;
         }
 
+        const QString& oldVal = a.values[path];
+
         if (oldVal != newVal) {
-            qDebug().noquote()
-                << "  * C"
-                << path
-                << "\n      old =" << oldVal
-                << "\n      new =" << newVal;
+            m_changedPaths.insert(path);
 
             diff.append({
                 path,
@@ -416,23 +418,26 @@ void DebugSession::computeDiff(
         }
     }
 
-    // ---- removed values
+    // removed
     for (auto it = a.values.begin(); it != a.values.end(); ++it) {
         if (!b.values.contains(it.key())) {
-            qDebug().noquote()
-                << "  - R"
-                << it.key()
-                << "="
-                << it.value();
+            m_changedPaths.insert(it.key());
+
+            diff.append({
+                it.key(),
+                it.value(),
+                QString()
+            });
         }
     }
 
     emit diffReady(diff, a.step, b.step);
 }
 
-
-
-
+const QSet<QString>& DebugSession::changedPaths() const
+{
+    return m_changedPaths;
+}
 
 
 void DebugSession::tryFinalizeSnapshot()
@@ -447,8 +452,6 @@ void DebugSession::tryFinalizeSnapshot()
     captureSnapshot();
     emit sessionUpdated();
 }
-
-
 
 void DebugSession::sendCommand(const QString &cmd) {
 	const QString translated = translateUserCommand(cmd);

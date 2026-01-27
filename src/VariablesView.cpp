@@ -246,71 +246,49 @@ void VariablesView::clearVariables() {
     m_model->setHorizontalHeaderLabels({tr("Name"), tr("Value")/*, tr("Type")*/});
 }
 
-void VariablesView::refresh() {
-	if (!m_session)
-		return;
+void VariablesView::refresh()
+{
+    if (!m_session)
+        return;
 
-	const quint64 currentStep = m_session->stepCounter();
-	const bool isNewStep = (currentStep != m_lastSeenStep);
+    QSet<QString> expanded;
 
-	if (isNewStep) {
-		m_lastSeenStep = currentStep;
-		m_previousValues.clear();
-		m_changedInCurrentStep.clear();
-	}
+    std::function<void(QStandardItem*)> save = [&](QStandardItem* it) {
+        if (!it)
+            return;
 
-	QSet<QString> expanded;
+        if (isExpanded(m_model->indexFromItem(it)))
+            expanded.insert(itemPath(it));
 
-	std::function<void(QStandardItem *)> save = [&](QStandardItem *it) {
-		if (!it)
-			return;
-		if (isExpanded(m_model->indexFromItem(it)))
-			expanded.insert(itemPath(it));
-		for (int i = 0; i < it->rowCount(); ++i)
-			save(it->child(i));
-	};
+        for (int i = 0; i < it->rowCount(); ++i)
+            save(it->child(i));
+    };
 
-	for (int i = 0; i < m_model->rowCount(); ++i)
-		save(m_model->item(i));
+    for (int i = 0; i < m_model->rowCount(); ++i)
+        save(m_model->item(i));
 
-	clearVariables();
 
-	for (VarNode *n : m_session->complexVariables()) {
-		addNode(nullptr, n);
-	}
+    clearVariables();
 
-	std::function<void(QStandardItem *)> restore = [&](QStandardItem *it) {
-		if (!it) {
-			return;
-		}
+    for (VarNode* n : m_session->complexVariables())
+        addNode(nullptr, n);
 
-		if (expanded.contains(itemPath(it)))
-			expand(m_model->indexFromItem(it));
-		for (int i = 0; i < it->rowCount(); ++i)
-			restore(it->child(i));
-	};
 
-	for (int i = 0; i < m_model->rowCount(); ++i)
-		restore(m_model->item(i));
+    std::function<void(QStandardItem*)> restore = [&](QStandardItem* it) {
+        if (!it)
+            return;
 
-	std::function<void(QStandardItem *)> collect = [&](QStandardItem *it) {
-        if (!it) {
-			return;
-        }
-		QStandardItem *valueItem = it->parent()
-		                               ? it->parent()->child(it->row(), 1)
-		                               : m_model->item(it->row(), 1);
+        if (expanded.contains(itemPath(it)))
+            expand(m_model->indexFromItem(it));
 
-		if (valueItem)
-			m_previousValues[itemPath(it)] = valueItem->text();
+        for (int i = 0; i < it->rowCount(); ++i)
+            restore(it->child(i));
+    };
 
-		for (int i = 0; i < it->rowCount(); ++i)
-			collect(it->child(i));
-	};
-
-	for (int i = 0; i < m_model->rowCount(); ++i)
-		collect(m_model->item(i));
+    for (int i = 0; i < m_model->rowCount(); ++i)
+        restore(m_model->item(i));
 }
+
 
 void VariablesView::addNode(QStandardItem *parent, VarNode *node) {
 	if (!node)
@@ -332,17 +310,10 @@ void VariablesView::addNode(QStandardItem *parent, VarNode *node) {
 	const QString trimmed = node->value.trimmed();
 	const bool isLeafValue = node->children.isEmpty();
 
-	bool changed = false;
-
-	if (isLeafValue) {
-    	if (m_changedInCurrentStep.contains(path)) {
-        	changed = true;
-   		} else if (m_previousValues.contains(path) &&
-             m_previousValues.value(path) != node->value) {
-        	changed = true;
-			m_changedInCurrentStep.insert(path);
-    	}
-	}
+	const bool changed =
+    	isLeafValue &&
+	    m_session &&
+	    m_session->changedPaths().contains(path);
 
 	valueItem->setData(changed, ChangedRole);
 
