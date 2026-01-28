@@ -757,43 +757,7 @@ void GraphicalVariablesView::refresh()
 
 
 
-/*deprecated */
-void GraphicalVariablesView::layoutTree(GraphicalNodeItem* item,
-                                        int depth,
-                                        int& y) 
-{
-    const int xSpacing = 320;
-    const int ySpacing = 160;
 
-    item->setPos(depth * xSpacing, y);
-
-    int childY = y;
-
-    for (VarNode* child : item->node()->children) {
-
-        if (!child->hasChildren)
-            continue;
-
-        auto* childItem =
-            new GraphicalNodeItem(child);
-
-        m_scene->addItem(childItem);
-
-        childY += ySpacing;
-
-        layoutTree(childItem, depth + 1, childY);
-
-        auto* edge = new GraphicalEdgeItem(item, childItem);
-
-        m_scene->addItem(edge);
-
-        item->addEdge(edge);
-        childItem->addEdge(edge);
-
-        edge->updatePosition();
-
-    }
-}
 
 void GraphicalVariablesView::wheelEvent(QWheelEvent* event)
 {

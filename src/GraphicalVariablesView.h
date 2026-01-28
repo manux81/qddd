@@ -134,12 +134,6 @@ protected:
     void drawBackground(QPainter* painter,
                         const QRectF& rect) override;
 
-
-private:
-    void layoutTree(GraphicalNodeItem* item,
-                    int depth,
-                    int& y) /* __deprecated */;
-
 private:
     QGraphicsScene* m_scene = nullptr;
     DebugSession*   m_session = nullptr;
