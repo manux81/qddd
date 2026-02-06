@@ -268,4 +268,5 @@ private:
 	int m_stepCounter = 0;
 	bool m_pendingStack = false;
 	bool m_pendingVariables = false;
+	int m_pendingAddressRequests = 0;
 };

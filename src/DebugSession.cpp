@@ -51,6 +51,14 @@ static QString decodeCString(QString s)
     return s;
 }
 
+static QString extractHexAddress(const QString& s)
+{
+	QRegularExpression re(R"(0x[0-9a-fA-F]+)");
+	auto m = re.match(s);
+	return m.hasMatch() ? m.captured(0) : QString{};
+}
+
+
 static bool looksLikePointer(const QString& v)
 {
     const QString s = v.trimmed().toLower();
@@ -878,7 +886,6 @@ void DebuggerSession::parseVarsFromReply(const QString& replyBlob)
         dv->name    = miGet(vblob, "name");
         dv->value   = miGet(vblob, "value");
         dv->type    = miGet(vblob, "type");
-        dv->address = miGet(vblob, "addr");
 
         dv->isPointer   = looksLikePointer(dv->value);
         dv->hasChildren = looksLikeStruct(dv->value);
@@ -891,8 +898,21 @@ void DebuggerSession::parseVarsFromReply(const QString& replyBlob)
 			2   // profondità massima (come prima)
 		);
 
-        if (!dv->name.isEmpty())
-            m_variables.push_back(std::move(dv));
+		if (!dv->name.isEmpty()) {
+			DebugVariable* raw = dv.get();
+			m_variables.push_back(std::move(dv));
+			++m_pendingAddressRequests;
+			enqueueCommand(QString("-data-evaluate-expression \"&%1\"")
+			                   .arg(raw->fullPath()),
+			               [this, raw](const QString &reply) {
+				               QString addr = extractHexAddress(reply);
+				               if (!addr.isEmpty())
+					               raw->address = addr;
+								if (--m_pendingAddressRequests == 0) {
+									emit variablesUpdated();
+								}
+			               });
+		}
     }
 }
 

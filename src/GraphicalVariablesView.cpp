@@ -36,6 +36,7 @@
 #include <QGraphicsSceneMouseEvent>
 #include <QVBoxLayout>
 #include <QToolButton>
+#include <QStyle>
 #include <cmath>
 
 
@@ -45,6 +46,18 @@
 static constexpr int SocketRadius = 4;
 static constexpr int SocketOffset = -6;
 static constexpr int IndentStep   = 14;
+static constexpr int FooterHeight = 0;
+
+
+namespace Style {
+	static const QColor NodeBg        = QColor(30, 30, 30, 220);
+	static const QColor NodeBorder    = QColor(85, 85, 85);
+	static const QColor HeaderBg      = QColor(60, 60, 60, 230);
+	static const QColor RowBg         = QColor(40, 40, 40, 220);
+	static const QColor RowAltBg      = QColor(46, 46, 46, 220);
+	static const QColor Text          = Qt::white;
+	static constexpr qreal Radius     = 6.0;
+}
 
 
 // ------------------------------------------------------------
@@ -90,7 +103,7 @@ static void drawTriangle(QPainter* p,
 			 << QPointF(c.x() + 4, c.y());
 	}
 
-	p->setBrush(Qt::white);
+	p->setBrush(QColor(220, 220, 220));
 	p->setPen(Qt::NoPen);
 	p->drawPolygon(poly);
 }
@@ -115,7 +128,7 @@ QRectF GraphicalNodeItem::boundingRect() const
 				  const_cast<QHash<DebugVariable*, bool>&>(m_expanded),
 				  rows);
 
-	int h = HeaderHeight + qMax(1, rows.size()) * RowHeight;
+	int h = HeaderHeight + qMax(1, rows.size()) * RowHeight + FooterHeight;
 	return QRectF(-8, 0, m_width + 16, h);
 }
 
@@ -124,10 +137,28 @@ void GraphicalNodeItem::paint(QPainter* p,
 							  QWidget*)
 {
 	p->setRenderHint(QPainter::Antialiasing);
-	QRectF r = boundingRect().adjusted(8, 0, -8, 0);
-	drawHeader(p, r);
+
+	QRectF outer = boundingRect().adjusted(8, 0, -8, 0);
+
+	// shadow soft (facoltativa ma molto bella)
+	p->setPen(Qt::NoPen);
+	p->setBrush(QColor(0, 0, 0, 60));
+	p->drawRoundedRect(outer.translated(2, 2),
+					   Style::Radius, Style::Radius);
+
+	// card background
+	p->setBrush(Style::NodeBg);
+	p->setPen(QPen(Style::NodeBorder, 1));
+	p->drawRoundedRect(outer,
+					   Style::Radius, Style::Radius);
+	QPainterPath clip;
+	clip.addRoundedRect(outer, Style::Radius, Style::Radius);
+	p->setClipPath(clip);
+
+	drawHeader(p, outer);
 	drawSource(p);
 }
+
 
 void GraphicalVariablesView::drawBackground(QPainter* p,
 											const QRectF& rect)
@@ -156,33 +187,50 @@ void GraphicalVariablesView::drawBackground(QPainter* p,
 		p->drawLine(l, y, r, y);
 }
 
-
 void GraphicalNodeItem::drawHeader(QPainter* p, const QRectF& r)
 {
 	QRectF h(r.left(), r.top(), r.width(), HeaderHeight);
-	p->setBrush(QColor(80, 80, 80));
-	p->setPen(Qt::NoPen);
-	p->drawRoundedRect(h, 6, 6);
 
-	p->setPen(Qt::white);
+	p->setPen(Qt::NoPen);
+	p->setBrush(Style::HeaderBg);
+
+	QPainterPath path;
+	path.moveTo(h.bottomLeft());
+	path.lineTo(h.topLeft() + QPointF(0, Style::Radius));
+	path.quadTo(h.topLeft(), h.topLeft() + QPointF(Style::Radius, 0));
+	path.lineTo(h.topRight() - QPointF(Style::Radius, 0));
+	path.quadTo(h.topRight(), h.topRight() + QPointF(0, Style::Radius));
+	path.lineTo(h.bottomRight());
+	path.closeSubpath();
+
+	p->drawPath(path);
+
+	p->setPen(Style::Text);
+
 	QString t = m_node->address.isEmpty()
 		? m_node->name
 		: QString("%1 : %2").arg(m_node->name, m_node->address);
 
-	p->drawText(h.adjusted(10, 0, -10, 0),
-				Qt::AlignVCenter | Qt::AlignLeft, t);
+	p->drawText(
+		h.adjusted(12, 0, -12, 0),
+		Qt::AlignVCenter | Qt::AlignLeft,
+		t
+	);
 }
+
 
 void GraphicalNodeItem::drawSource(QPainter* p)
 {
 	QVector<VisibleRow> rows;
+
+
 
 	for (auto& c : m_node->children)
 		buildRows(c.get(), 0, m_expanded, rows);
 
 	int y = HeaderHeight;
 
-	// ===== CASO 1: NESSUN FIGLIO → BODY BASE (COME PRIMA) =====
+
 	if (rows.isEmpty()) {
 		QRectF rowRect(0, y, m_width, RowHeight);
 
@@ -192,7 +240,6 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 
 		p->setPen(Qt::white);
 
-		// NOTA: nella versione vecchia mostravi SOLO il valore
 		p->drawText(
 			rowRect.adjusted(12, 0, -12, 0),
 			Qt::AlignVCenter | Qt::AlignLeft,
@@ -201,7 +248,6 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 		return;
 	}
 
-	// ===== CASO 2: STRUTTURA ESPANSA / COLLASSATA =====
 	for (int i = 0; i < rows.size(); ++i) {
 
 		const VisibleRow& r = rows[i];
@@ -209,13 +255,19 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 
 		QRectF rowRect(0, y, m_width, RowHeight);
 
+		QColor bg = (i % 2 == 0)
+			? Style::RowBg
+			: Style::RowAltBg;
+
+		p->setBrush(bg);
 		p->setPen(Qt::NoPen);
-		p->setBrush(QColor(45, 45, 45));
 		p->drawRect(rowRect);
+
+		p->setPen(QColor(255, 255, 255, 20));
+		p->drawLine(rowRect.bottomLeft(), rowRect.bottomRight());
 
 		int x = LeftPadding + r.indent * IndentStep + 5;
 
-		// triangolo expand (IDENTICO A PRIMA)
 		if (n->hasChildren) {
 			drawTriangle(
 				p,
@@ -242,6 +294,25 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 
 		y += RowHeight;
 	}
+
+	// ---- footer ----
+	QRectF footerRect(
+		0,
+		y,
+		m_width,
+		FooterHeight
+	);
+
+	p->setPen(QColor(255, 255, 255, 25));
+	p->drawLine(
+		footerRect.topLeft() + QPointF(8, 0),
+		footerRect.topRight() - QPointF(8, 0)
+	);
+
+	p->setPen(Qt::NoPen);
+	p->setBrush(Style::NodeBg);
+	p->drawRect(footerRect);
+
 }
 
 
@@ -497,9 +568,11 @@ void GraphicalVariablesView::refresh()
 		nodeMap[v.get()] = item;
 
 		bool ok = false;
-		quintptr addr = v->address.toULongLong(&ok, 16);
-		if (ok)
-			addrMap[addr] = item;
+		        if (!v->address.isEmpty()) {
+		            quintptr addr = v->address.toULongLong(&ok, 16);
+		            if (ok)
+		                addrMap[addr] = item;
+		        }
 
 		y += 150;
 	}
@@ -510,13 +583,13 @@ void GraphicalVariablesView::refresh()
 			if (!c->isPointer) continue;
 
 			bool ok = false;
-			quintptr addr = c->value.toULongLong(&ok, 16);
-			if (ok && addrMap.contains(addr)) {
+			quintptr target = c->value.toULongLong(&ok, 16);
+			if (ok && target != 0 && addrMap.contains(target)) {
 				auto* e = new GraphicalEdgeItem(
-					it.value(), addrMap[addr], c.get());
+					it.value(), addrMap[target], c.get());
 				m_scene->addItem(e);
 				it.value()->addEdge(e);
-				addrMap[addr]->addEdge(e);
+				addrMap[target]->addEdge(e);
 				e->updatePosition();
 			}
 		}

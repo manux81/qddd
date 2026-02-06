@@ -63,6 +63,8 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 
 	connect(m_session.get(), &DebuggerSession::snapshotCaptured, this,
 	        [this](const ExecutionSnapshot &) { m_graphicalView->refresh(); });
+	connect(m_session.get(), &DebuggerSession::variablesUpdated, m_graphicalView,
+				  &GraphicalVariablesView::refresh);
 
 	if (!m_currentProgram.isEmpty()) {
 		startDebugger(m_currentProgram);
