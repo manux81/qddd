@@ -1,7 +1,11 @@
 # qddd — Qt Debugger Development Dashboard
 
-qddd is a **Qt-based graphical debugger frontend** focused on
-**visualizing complex program state during debugging**.
+qddd is an experimental debugger UI focused on
+**visualizing complex runtime state**, not just stepping through code.
+
+It is not a full IDE debugger replacement,
+but a tool to **understand object graphs, pointers, and relationships**
+when traditional variable views break down.
 
 Instead of presenting variables as plain text,
 qddd aims to provide a **structural and graphical view of runtime data**,
