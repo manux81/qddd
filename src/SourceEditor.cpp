@@ -70,6 +70,20 @@ SourceEditor::SourceEditor(QWidget *parent)
 	highlightCurrentLine();
 }
 
+void SourceEditor::setBreakpointLines(const QSet<int>& lines)
+{
+	const QString file =
+		property("currentFile").toString();
+
+	for (int line : lines) {
+		const QString location = QString("%1:%2").arg(file).arg(line);
+		m_session->insertBreakpoint(location);
+	}
+
+	update();
+}
+
+
 void SourceEditor::showLocation(const QString &file, int line) {
 	setProperty("currentFile", file);
 
@@ -104,7 +118,26 @@ void SourceEditor::highlightCurrentLine() {
 	setExtraSelections(extra);
 }
 
-void SourceEditor::setSession(DebugSession *session) { m_session = session; }
+void SourceEditor::setSession(DebuggerSession* session)
+{
+	if (m_session == session)
+		return;
+
+	if (m_session)
+		disconnect(m_session, nullptr, this, nullptr);
+
+	m_session = session;
+	if (!m_session)
+		return;
+
+	connect(m_session, &DebuggerSession::stoppedAt,
+			this,
+			[this](const QString& file, int line, const QString&) {
+				showLocation(file, line);
+				setCurrentPC(line);
+			});
+}
+
 
 int SourceEditor::lineNumberAreaWidth() {
 	int digits = 1;
@@ -161,16 +194,13 @@ void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 
 			int lineIndex = blockNumber + 1;
 
-			bool hasBp = false;
-			if (m_session && !curFile.isEmpty()) {
-				const auto bps = m_session->breakpoints();
-				for (const BreakpointInfo &bp : bps) {
-					if (bp.file == curFile && bp.line == lineIndex) {
-						hasBp = true;
-						break;
-					}
+			const bool hasBp = std::any_of(
+				m_session->breakpoints().cbegin(),
+				m_session->breakpoints().cend(),
+				[lineIndex](const BreakpointInfo& bp) {
+					return bp.line == lineIndex;
 				}
-			}
+			);
 
 			if (hasBp) {
 				painter.setBrush(QColor("#cc2222"));
@@ -213,33 +243,42 @@ void SourceEditor::setCurrentPC(int line) {
 	highlightCurrentLine();
 }
 
-void SourceEditor::mousePressEvent(QMouseEvent *event) {
-	QPlainTextEdit::mousePressEvent(event);
+void SourceEditor::mousePressEvent(QMouseEvent *event)
+{
+    QPlainTextEdit::mousePressEvent(event);
 
-	QTextCursor c = cursorForPosition(event->pos());
-	int line = c.blockNumber() + 1;
+    QTextCursor c = cursorForPosition(event->pos());
+    int line = c.blockNumber() + 1;
 
-	QString file;
-	int dummy;
-	currentLocation(file, dummy);
+    QString file;
+    int dummy;
+    currentLocation(file, dummy);
 
-	if (event->button() == Qt::LeftButton &&
-	    event->x() < m_lineNumberArea->width()) {
-		if (!file.isEmpty() && m_session)
-			m_session->toggleBreakpointAt(file, line);
+    if (file.isEmpty())
+        return;
 
-		return;
-	}
+    if (event->button() == Qt::LeftButton &&
+        event->x() < m_lineNumberArea->width()) {
 
-	if (event->button() == Qt::RightButton && m_session) {
-		currentLocation(file, line);
-		m_session->execUntil(QString("%1:%2").arg(file).arg(line));
-		return;
-	}
+        emit toggleBreakpointRequested(file, line);
+        return;
+    }
+
+    if (event->button() == Qt::RightButton) {
+        emit runUntilRequested(file, line);
+        return;
+    }
 }
+
 
 void SourceEditor::currentLocation(QString &file, int &line) const {
 	file = this->property("currentFile")
 	           .toString();
 	line = textCursor().blockNumber() + 1;
 }
+
+void SourceEditor::setBreakpointsUpdated(const QSet<int>& lines)
+{
+    viewport()->update();
+}
+

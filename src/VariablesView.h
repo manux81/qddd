@@ -44,7 +44,7 @@ class VariablesView : public QTreeView {
   public:
 	explicit VariablesView(QWidget *parent = nullptr);
 
-	void setSession(DebugSession *session);
+	void setSession(DebuggerSession *session);
 
   public slots:
 	void clearVariables();
@@ -52,10 +52,10 @@ class VariablesView : public QTreeView {
 
   private:
 	void addNode(QStandardItem *parent,
-	             VarNode *node);
+	             DebugVariable *node);
 
 	QStandardItemModel *m_model;
-	DebugSession *m_session = nullptr;
+	DebuggerSession *m_session = nullptr;
 };
 
 

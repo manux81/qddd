@@ -54,14 +54,14 @@ ConsoleWidget::ConsoleWidget(QWidget *parent)
 	        &ConsoleWidget::onCommandEntered);
 }
 
-void ConsoleWidget::setSession(DebugSession *session) {
+void ConsoleWidget::setSession(DebuggerSession *session) {
 	if (m_session) {
 		disconnect(m_session, nullptr, this, nullptr);
 		m_session = nullptr;
 	}
 
 	if (session) {
-		connect(session, &DebugSession::outputReceived, this,
+		connect(session, &DebuggerSession::debuggerOutput, this,
 		        &ConsoleWidget::appendOutput);
 		m_session = session;
 	}
@@ -82,7 +82,7 @@ void ConsoleWidget::onCommandEntered() {
 
 	if (m_session) {
 		m_output->appendPlainText(QStringLiteral("> ") + cmd);
-		m_session->sendCommand(cmd);
+		m_session->sendRawCommand(cmd);
 	}
 	m_input->clear();
 }

@@ -35,106 +35,98 @@
 
 #include <QGraphicsView>
 #include <QGraphicsItem>
-#include <QGraphicsLineItem>
 #include <QGraphicsPathItem>
-#include <QToolButton>
-#include <QVBoxLayout>
-#include <QColor>
-#include <QString>
 #include <QTimer>
-#include <QtMath>
 
 class GraphicalNodeItem;
 
 class GraphicalEdgeItem : public QGraphicsPathItem
 {
 public:
-    GraphicalEdgeItem(GraphicalNodeItem* from,
-                      GraphicalNodeItem* to);
+	GraphicalEdgeItem(GraphicalNodeItem* from,
+					  GraphicalNodeItem* to,
+					  DebugVariable* fromChild);
 
-    void updatePosition();
+	void updatePosition();
 
 private:
-    GraphicalNodeItem* m_from;
-    GraphicalNodeItem* m_to;
+	GraphicalNodeItem* m_from;
+	GraphicalNodeItem* m_to;
+	DebugVariable*     m_fromChild;
 
-    static constexpr int SEGMENTS = 10;
-    QPointF m_pos[SEGMENTS];
-    QPointF m_vel[SEGMENTS];
-    QPointF m_targetEnd;
-    QTimer m_timer;
+	static constexpr int SEGMENTS = 10;
+	QPointF m_pos[SEGMENTS]{};
+	QPointF m_vel[SEGMENTS]{};
+	QPointF m_targetEnd;
+	QTimer  m_timer;
 
-    void tick();
+	void tick();
 };
 
 
 class GraphicalNodeItem : public QGraphicsItem
 {
 public:
-    explicit GraphicalNodeItem(VarNode* node);
+	explicit GraphicalNodeItem(DebugVariable* node);
 
-    QRectF boundingRect() const override;
-    void paint(QPainter* painter,
-               const QStyleOptionGraphicsItem* option,
-               QWidget* widget) override;
+	QRectF boundingRect() const override;
+	void paint(QPainter* painter,
+			   const QStyleOptionGraphicsItem*,
+			   QWidget*) override;
 
-    VarNode* node() const;
+	DebugVariable* node() const { return m_node; }
 
-    QPointF inputPort() const;
-    QPointF outputPortFor(VarNode* child) const;
-    void recalculateWidth();
-    void addEdge(GraphicalEdgeItem* e);
-    QHash<VarNode*, bool> m_expanded;
+	QPointF inputPort() const;
+	QPointF outputPortFor(DebugVariable* child) const;
 
-
-private:
-    void drawHeader(QPainter* painter, const QRectF& r);
-    void drawSource(QPainter* painter);
+	void recalculateWidth();
+	void addEdge(GraphicalEdgeItem* e);
 
 protected:
-    void mousePressEvent(QGraphicsSceneMouseEvent*) override;
-    QVariant itemChange(GraphicsItemChange change,
-                        const QVariant& value) override;
+	void mousePressEvent(QGraphicsSceneMouseEvent*) override;
+	QVariant itemChange(GraphicsItemChange,
+						const QVariant&) override;
 
 private:
-    VarNode* m_node = nullptr;
-    QList<GraphicalEdgeItem*> m_edges;
-    int m_width = 260;
+	void drawHeader(QPainter* painter, const QRectF& r);
+	void drawSource(QPainter* painter);
 
-    static constexpr int HeaderHeight = 26;
-    static constexpr int RowHeight    = 22;
-    static constexpr int PortRadius   = 5;
-    static constexpr int LeftPadding  = 10;
-    static constexpr int RightPadding = 10;
+private:
+	DebugVariable* m_node = nullptr;
+	QList<GraphicalEdgeItem*> m_edges;
+	QHash<DebugVariable*, bool> m_expanded;
+
+	int m_width = 260;
+
+	static constexpr int HeaderHeight = 26;
+	static constexpr int RowHeight    = 22;
+	static constexpr int LeftPadding  = 10;
 };
-
 
 
 class GraphicalVariablesView : public QGraphicsView
 {
-    Q_OBJECT
-
+	Q_OBJECT
 public:
-    explicit GraphicalVariablesView(QWidget* parent = nullptr);
-    ~GraphicalVariablesView() override;
+	explicit GraphicalVariablesView(QWidget* parent = nullptr);
+	~GraphicalVariablesView() override;
 
-    void setSession(DebugSession* session);
+	void setSession(DebuggerSession* session);
 
 public slots:
-    void refresh();
-    void zoomIn();
-    void zoomOut();
-    void resetZoom();
-    void fitGraph();
-
+	void refresh();
+	void zoomIn();
+	void zoomOut();
+	void resetZoom();
+	void fitGraph();
 
 protected:
-    void wheelEvent(QWheelEvent* event) override;
-    void mouseDoubleClickEvent(QMouseEvent* event) override;
-    void drawBackground(QPainter* painter,
-                        const QRectF& rect) override;
+	void wheelEvent(QWheelEvent*) override;
+	void mouseDoubleClickEvent(QMouseEvent*) override;
+	void drawBackground(QPainter*, const QRectF&) override;
 
 private:
-    QGraphicsScene* m_scene = nullptr;
-    DebugSession*   m_session = nullptr;
+	QGraphicsScene*  m_scene   = nullptr;
+	DebuggerSession* m_session = nullptr;
 };
+

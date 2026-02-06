@@ -43,17 +43,23 @@ class SourceEditor : public QPlainTextEdit {
 	Q_OBJECT
   public:
 	explicit SourceEditor(QWidget *parent = nullptr);
-	void setSession(DebugSession *session);
+	void setSession(DebuggerSession *session);
 	void showLocation(const QString &file, int line);
 	int lineNumberAreaWidth();
 	void lineNumberAreaPaintEvent(QPaintEvent *event);
 	void setCurrentPC(int line);
 
-	// === NEW: used by MainWindow to implement "Run Until Cursor" ===
 	void currentLocation(QString &file, int &line) const;
+	void setBreakpointLines(const QSet<int>& lines);
+
+  public slots:
+	void setBreakpointsUpdated(const QSet<int>& lines);
 
   signals:
 	void runUntilCursorRequested(const QString &file, int line);
+    void toggleBreakpointRequested(const QString& file, int line);
+    void runUntilRequested(const QString& file, int line);
+
 
   protected:
 	void resizeEvent(QResizeEvent *event) override;
@@ -67,7 +73,7 @@ class SourceEditor : public QPlainTextEdit {
   private:
 	LineNumberArea *m_lineNumberArea;
 	int m_currentPC = -1;
-	DebugSession *m_session;
+	DebuggerSession *m_session;
 };
 
 class LineNumberArea : public QWidget {

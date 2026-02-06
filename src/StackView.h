@@ -41,7 +41,7 @@ class StackView : public QTreeView {
   public:
 	explicit StackView(QWidget *parent = nullptr);
 
-	void setSession(DebugSession *session);
+	void setSession(DebuggerSession *session);
 
 	// NEW
 	int currentFrameIndex() const;
@@ -59,5 +59,5 @@ class StackView : public QTreeView {
 
   private:
 	QStandardItemModel *m_model;
-	DebugSession *m_session = nullptr;
+	DebuggerSession *m_session = nullptr;
 };

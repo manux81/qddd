@@ -33,56 +33,53 @@
 
 #include <QTreeView>
 #include <QStandardItemModel>
-#include <QList>
 
-#include "DebugSession.h"
+class DebuggerSession;
+
+struct BreakpointInfo;
 
 class BreakpointsView : public QTreeView
 {
-    Q_OBJECT
+	Q_OBJECT
 public:
-    explicit BreakpointsView(QWidget *parent = nullptr);
+	explicit BreakpointsView(QWidget *parent = nullptr);
 
-    // richiesto dal tuo MainWindow
-    void setSession(DebugSession *session);
+	void setSession(DebuggerSession *session);
 
 signals:
-    // richiesto dal tuo MainWindow
-    void breakpointSelected(const QString &location);
+	void breakpointSelected(const QString &location);
 
 private slots:
-    void showContextMenu(const QPoint &pos);
-    void onActivated(const QModelIndex &index);
-    void onItemChanged(QStandardItem *item);
-
-    // riceve lista breakpoint dal backend
-    void onBreakpointsChanged(const QList<BreakpointInfo> &list);
+	void refresh();
+	void onActivated(const QModelIndex &index);
+	void onItemChanged(QStandardItem *item);
+	void showContextMenu(const QPoint &pos);
 
 private:
-    enum Columns {
-        ColEnabled = 0,
-        ColNumber,
-        ColLocation,   // "file:line"
-        ColFile,
-        ColLine,
-        ColCount
-    };
+	enum Column {
+		ColEnabled,
+		ColNumber,
+		ColLocation,
+		ColCondition,
+		ColHitCount,
+		ColState,
+		ColCount
+	};
 
-    enum Roles {
-        RoleBkptNumber = Qt::UserRole + 1
-    };
+	enum {
+		RoleBkptNumber = Qt::UserRole + 1,
+		RoleSortValue
+	};
 
-    void setupModel();
-    void setupView();
+	void setupModel();
+	void setupView();
+	void rebuild(const QVector<BreakpointInfo> &list);
 
-    void rebuild(const QList<BreakpointInfo> &list);
-    QIcon iconEnabled() const;
-    QIcon iconDisabled() const;
+	QIcon iconFor(const BreakpointInfo &bp) const;
 
-private:
-    DebugSession *m_session = nullptr;
-    QStandardItemModel *m_model = nullptr;
-
-    // evita loop quando aggiorniamo il model programmaticamente
-    bool m_blockItemChanged = false;
+	QStandardItemModel *m_model = nullptr;
+	DebuggerSession *m_session = nullptr;
+	bool m_blockItemChanged = false;
 };
+
+

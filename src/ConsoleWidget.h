@@ -35,14 +35,14 @@
 
 class QPlainTextEdit;
 class QLineEdit;
-class DebugSession;
+class DebuggerSession;
 
 class ConsoleWidget : public QWidget {
 	Q_OBJECT
   public:
 	explicit ConsoleWidget(QWidget *parent = nullptr);
 
-	void setSession(DebugSession *session);
+	void setSession(DebuggerSession *session);
 
   public slots:
 	void appendOutput(const QString &text);
@@ -53,5 +53,5 @@ class ConsoleWidget : public QWidget {
   private:
 	QPlainTextEdit *m_output;
 	QLineEdit *m_input;
-	DebugSession *m_session = nullptr;
+	DebuggerSession *m_session = nullptr;
 };

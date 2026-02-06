@@ -63,19 +63,18 @@ class MainWindow : public QMainWindow {
 	void stepOver();
 	void stepOut();
 	void interrupt();
-	void until();
 	void up();
 	void down();
 	void toggleBp();
 
-	void updateFromSession();
+	void onTargetStopped();
 
   private:
 	void setupUi();
 	void setupMenusAndToolbars();
 	void startDebugger(const QString &programPath);
 
-	std::unique_ptr<DebugSession> m_session;
+	std::unique_ptr<DebuggerSession> m_session;
 
 	SourceEditor *m_sourceEditor = nullptr;
 	VariablesView *m_variablesView = nullptr;

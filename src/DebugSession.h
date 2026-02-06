@@ -29,171 +29,243 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+
 #pragma once
-#include <QList>
-#include <QSet>
+
 #include <QObject>
 #include <QProcess>
-#include <QQueue>
+#include <QVector>
+#include <QHash>
+#include <QSet>
 #include <QString>
-#include <QElapsedTimer>
+#include <QQueue>
+#include <QRegularExpression>
+#include <memory>
+#include <vector>
 #include <functional>
 
-struct StackFrame {
+// ============================================================================
+// Forward declarations
+// ============================================================================
+
+struct DebugVariable;
+struct ExecutionSnapshot;
+struct VariableChange;
+
+struct BreakpointInfo
+{
+	// Identity
+	int number = -1;            // MI: number / id
+	QString type;               // breakpoint / watchpoint / hw breakpoint
+
+	// Position
+	QString file;               // file o fullname
+	int line = 0;
+	QString function;           // func
+	QString address;            // addr (0x...)
+
+	// State
+	bool enabled = true;
+	bool pending = false;       // breakpoint not resolved yet
+	bool temporary = false;     // disp="del"
+
+	// Condition / counter
+	QString condition;          // cond
+	int hitCount = 0;           // times
+
+	// Extra (future-proof)
+	QString originalLocation;   // location request by user
+};
+
+
+struct StackFrame
+{
 	QString level;
+	QString function;
+	QString file;
+	int line = 0;
+};
+
+// ============================================================================
+// Debug variable tree
+// ============================================================================
+
+struct DebugVariable
+{
+	QString name;
+	QString value;
+	QString type;
+	QString address;
+
+	bool isPointer   = false;
+	bool hasChildren = false;
+
+	DebugVariable* parent = nullptr;
+	std::vector<std::unique_ptr<DebugVariable>> children;
+
+	[[nodiscard]]
+	QString fullPath() const;
+};
+
+// ============================================================================
+// Execution snapshot (time-travel unit)
+// ============================================================================
+
+struct ExecutionSnapshot
+{
+	int stepIndex = 0;
+	qint64 timestampNs = 0;
+
 	QString file;
 	int line = 0;
 	QString function;
+
+	QHash<QString, QString> variableValues;
 };
 
-struct VarNode {
-    QString name;
-    QString value;
-    QString type;
-    QString addr;
-    QString varId;
-    bool hasChildren = false;
-    bool isPointer = false;
-    QList<VarNode*> children;
-    VarNode* parent = nullptr;
+// ============================================================================
+// Variable diff (causal-light event)
+// ============================================================================
 
-    ~VarNode() {
-        qDeleteAll(children);
-    }
-};
-
-struct BreakpointInfo {
-	int number = 0;
-	QString file;
-	int line = 0;
-	bool enabled = true;
-};
-
-struct Snapshot {
-    int step;
-    qint64 timestampNs;
-    QHash<QString, QString > values;
-};
-
-struct DiffEvent {
+struct VariableChange
+{
 	QString path;
 	QString oldValue;
 	QString newValue;
 };
 
-class DebugSession : public QObject {
+// ============================================================================
+// Debugger session controller
+// ============================================================================
+
+class DebuggerSession final : public QObject
+{
 	Q_OBJECT
 
-  public:
-	enum class Backend { LLDB_MI, GDB_MI };
-
-	explicit DebugSession(QObject *parent = nullptr);
-
-	void setBackend(Backend b);
-	Backend backend() const;
-
-	void start(const QString &programPath);
-
-	void execRun();
-	void execContinue();
-	void execStep();
-	void execNext();
-	void execFinish();
-	void execInterrupt();
-	void execUntil(const QString &loc);
-	void selectFrame(int index);
-
-	void insertBreakpoint(const QString &loc);
-	void deleteBreakpoint(int number);
-	void clearAllBreakpoints();
-	void toggleBreakpointEnabled(int n, bool en);
-	void toggleBreakpointAt(const QString &file, int line);
-	int historySize() const { return m_history.size(); }
-	const Snapshot* snapshotAt(int index) const;
-
-
-	void sendCommand(const QString &cmd);
-	QString evaluateExpression(const QString &expr);
-
-	QList<StackFrame> stackFrames() const;
-	QList<VarNode *> complexVariables() const;
-	QList<BreakpointInfo> breakpoints() const;
-
-	QString currentFile() const;
-	int currentLine() const;
-
-	void setUseComplexVarView(bool b) { m_useComplexVarView = b; }
-	quint64 stepCounter() const { return m_stepCounter; }
-	const QSet<QString>& changedPaths() const;
-
-
-
-  signals:
-	void outputReceived(const QString &text);
-	void sessionUpdated();
-	void breakpointsChanged(const QList<BreakpointInfo> &list);
-	void debuggerExited(int exitCode, QProcess::ExitStatus status);
-	void complexVariablesUpdated(QList<VarNode *> roots);
-    void diffReady(const QVector<DiffEvent>& diff, int fromStep, int toStep);
-
-  private slots:
-	void onReadyReadStdout();
-	void onProcessFinished(int exitCode, QProcess::ExitStatus status);
-
-  private:
-	struct MiCommand {
-		QString text;
-		std::function<void(const QString &)> callback;
-		bool isUser = false;
+public:
+	enum class Backend {
+		GdbMi,
+		LldbMi
 	};
 
-	void sendMiDirect(const QString &cmd);
-	void enqueueCommand(const MiCommand &c);
-	void processQueue();
+	explicit DebuggerSession(QObject* parent = nullptr);
+	~DebuggerSession() override;
 
-	void parseMiLine(const QString &line);
-	void handleStopped(const QString &line);
-	void fetchData();
-	void requestRefresh();
-	void handleStackList(const QString &line);
-	void handleVarList(const QString &line);
-	void handleFrameInfo(const QString &line);
-	void handleBreakpointList(const QString &line);
-	void handleBreakpointEvent(const QString &line);
-	void handleBreakpointDeleted(const QString &line);
+	void setBackend(Backend backend);
+	void startSession(const QString& executablePath);
+	void terminateSession();
 
-	void fetchComplexVars(VarNode* node);
-	void parseComplexVarTree(const QString &line);
-	QString translateUserCommand(const QString &cmd) const;
-	void captureSnapshot();
-	void computeDiff(const Snapshot& a, const Snapshot& b);
-	void tryFinalizeSnapshot();
-	void flattenVar(VarNode* node, const QString& path, QHash<QString, QString>& out);
+	[[nodiscard]] bool isRunning() const;
 
+	// Execution control
+	void run();
+	void continueExecution();
+	void stepInto();
+	void stepOver();
+	void stepOut();
+	void interruptExecution();
+	void runToCursor(const QString& location);
 
-	QProcess m_proc;
-	Backend m_backend = Backend::LLDB_MI;
-	QString m_programPath;
-	QByteArray m_buffer;
+	// Breakpoints
+	void insertBreakpoint(const QString& location);
+	void removeBreakpoint(int breakpointId);
+	void clearAllBreakpoints();
+	void setBreakpointEnabled(int breakpointId, bool enabled);
+	void toggleBreakpoint(const QString& location);
 
-	QQueue<MiCommand> m_queue;
-	bool m_busy = false;
-	MiCommand m_currentCmd;
+	// Stack navigation
+	void selectStackFrame(int frameIndex);
 
-	QList<StackFrame> m_stack;
-	QList<VarNode *> m_cvars;
-	QList<BreakpointInfo> m_bps;
-	QVector<Snapshot> m_history;
+	// State access
+	[[nodiscard]] const QVector<StackFrame>& stackFrames() const;
+	[[nodiscard]] const std::vector<std::unique_ptr<DebugVariable>>& variables() const;
+	[[nodiscard]] const QVector<ExecutionSnapshot>& executionHistory() const;
+	[[nodiscard]] const ExecutionSnapshot* snapshotAt(int index) const;
+	[[nodiscard]] const QSet<QString>& changedPaths() const;
+	[[nodiscard]] const QVector<BreakpointInfo>& breakpoints() const;
 
-	QString m_currentFile;
-	int m_currentLine = 0;
+	// Expression evaluation / raw MI
+	void evaluateExpression(const QString& expression);
+	void sendRawCommand(const QString& cmd);
 
-	bool m_pendingStack = false;
-	bool m_pendingVars = false;
-	bool m_pendingExec = false;
-	int m_pendingVarAddr = 0;
-	bool m_useComplexVarView = false;
-	quint64 m_stepCounter = 0U;
-	QElapsedTimer m_timer;
+signals:
+	void targetRunning();
+	void targetStarted();
+	void targetStopped();
+	void targetExited(int exitCode);
+	void stoppedAt(const QString& file, int line, const QString& function);
+
+	void stackFramesUpdated();
+	void variablesUpdated();
+	void breakpointsUpdated();
+	void breakpointLinesChanged(const QString& file, const QSet<int>& lines);
+
+	void snapshotCaptured(const ExecutionSnapshot& snapshot);
+	void variableChangesDetected(const QVector<VariableChange>& changes,
+								 int fromStep,
+								 int toStep);
+
+	void debuggerOutput(const QString& text);
+
+private:
+	Q_DISABLE_COPY_MOVE(DebuggerSession)
+
+	// =======================
+	// Command queue (tokened)
+	// =======================
+	struct PendingCommand {
+		int token = 0;
+		QString command;                         // without token prefix
+		std::function<void(const QString&)> cb;  // receives full reply blob
+	};
+
+	void enqueueCommand(const QString& command,
+						std::function<void(const QString&)> cb = nullptr);
+
+	void processCommandQueue();
+
+	void onDebuggerOutputReady();
+	void onDebuggerFinished(int exitCode, QProcess::ExitStatus status);
+
+	void dispatchDebuggerMessage(const QString& line);
+	void handleResultRecord(int token, const QString& resultLine);
+	void onTargetStoppedInternal(const QString& stopMessage);
+	void handleBreakpointDeleted(const QString& resultLine);
+	void handleBreakpointEvent(const QString& resultLine);
+
+	// state requests
+	void requestStopState();
+
+	// parsing helpers
+	void parseStackFromReply(const QString& replyBlob);
+	void parseVarsFromReply(const QString& replyBlob);
+
+	// snapshot
+	void finalizeSnapshotIfReady();
+	void captureExecutionSnapshot();
+	void computeVariableChanges(const ExecutionSnapshot& previous,
+								const ExecutionSnapshot& current);
+
+private:
+	Backend m_backend = Backend::LldbMi;
+
+	QProcess m_debuggerProcess;
+
+	bool m_commandInFlight = false;
+	int  m_nextToken = 1;
+
+	QQueue<PendingCommand> m_commandQueue;
+	PendingCommand m_inFlight;
+	QString m_inFlightReply;
+
+	QVector<StackFrame> m_stackFrames;
+	std::vector<std::unique_ptr<DebugVariable>> m_variables;
+
+	QVector<ExecutionSnapshot> m_executionHistory;
+	QVector<BreakpointInfo> m_breakpoints;
 	QSet<QString> m_changedPaths;
+
+	int m_stepCounter = 0;
+	bool m_pendingStack = false;
+	bool m_pendingVariables = false;
 };

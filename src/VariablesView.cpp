@@ -101,7 +101,7 @@ enum class VarVisualType {
 	Internal
 };
 
-VarVisualType visualType(const VarNode *n) {
+VarVisualType visualType(const DebugVariable *n) {
 	if (n->name.startsWith("d_"))
 		return VarVisualType::Internal;
 	if (n->value.startsWith("0x"))
@@ -225,7 +225,7 @@ VariablesView::VariablesView(QWidget *parent)
 	setItemDelegateForColumn(1, new ValueDelegate(this));
 }
 
-void VariablesView::setSession(DebugSession *session) {
+void VariablesView::setSession(DebuggerSession *session) {
 	if (m_session == session)
 		return;
 
@@ -236,7 +236,7 @@ void VariablesView::setSession(DebugSession *session) {
 	m_session = session;
 
 	if (session) {
-		connect(m_session, &DebugSession::sessionUpdated,
+		connect(m_session, &DebuggerSession::variablesUpdated,
 		        this, &VariablesView::refresh);
 	}
 }
@@ -270,8 +270,9 @@ void VariablesView::refresh()
 
     clearVariables();
 
-    for (VarNode* n : m_session->complexVariables())
-        addNode(nullptr, n);
+	for (const auto& n : m_session->variables())
+    	addNode(nullptr, n.get());
+
 
 
     std::function<void(QStandardItem*)> restore = [&](QStandardItem* it) {
@@ -289,51 +290,97 @@ void VariablesView::refresh()
         restore(m_model->item(i));
 }
 
-
-void VariablesView::addNode(QStandardItem *parent, VarNode *node) {
+void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
+{
 	if (!node)
 		return;
 
 	auto *nameItem  = new QStandardItem(node->name);
 	auto *valueItem = new QStandardItem(node->value);
-    //auto *typeItem  = new QStandardItem(node->type);
 
 	const VarVisualType vt = visualType(node);
 	nameItem->setIcon(iconForType(vt));
 
 	const QString path = parent
-	    ? itemPath(parent) + "." + node->name
-	    : node->name;
+		? itemPath(parent) + "." + node->name
+		: node->name;
 
-	valueItem->setData(false, ChangedRole);
+	const bool isLeafValue = node->children.empty();
 
-	const QString trimmed = node->value.trimmed();
-	const bool isLeafValue = node->children.isEmpty();
+	const bool nodeChanged =
+		isLeafValue &&
+		m_session &&
+		m_session->changedPaths().contains(path);
 
-	const bool changed =
-    	isLeafValue &&
-	    m_session &&
-	    m_session->changedPaths().contains(path);
+	valueItem->setData(nodeChanged, ChangedRole);
 
-	valueItem->setData(changed, ChangedRole);
-
-    QList<QStandardItem *> row{ nameItem, valueItem /*, typeItem*/ };
+	QList<QStandardItem*> row{ nameItem, valueItem };
 	if (parent)
 		parent->appendRow(row);
 	else
 		m_model->appendRow(row);
 
+	// ------------------------------------------------------------
+	// REAL debugger children
+	// ------------------------------------------------------------
+	if (!node->children.empty()) {
+		valueItem->setText("[ ]");
+		valueItem->setForeground(QColor(160, 160, 160));
+		for (const auto &c : node->children)
+			if (c) addNode(nameItem, c.get());
+		return;
+	}
 
-    if (!node->children.isEmpty()) {
-        for (VarNode *c : node->children) {
-            addNode(nameItem, c);
-        }
+	// ------------------------------------------------------------
+	// STRUCT PARSING with FIELD-LEVEL DIFF
+	// ------------------------------------------------------------
+	const QString cur = node->value.trimmed();
+	if (!cur.startsWith('{') || !cur.endsWith('}'))
+		return;
 
-        valueItem->setText("[ ]");
-        valueItem->setForeground(QColor(160, 160, 160));
-    }
+	valueItem->setText("[ ]");
+	valueItem->setForeground(QColor(160, 160, 160));
 
+	// ---- current fields
+	QHash<QString, QString> curFields;
+	for (const QString &p : splitTopLevel(cur.mid(1, cur.size() - 2))) {
+		QString n, v;
+		if (splitNameValue(p, n, v))
+			curFields[n] = v;
+	}
+
+	// ---- previous fields (if any)
+	QHash<QString, QString> prevFields;
+	if (m_session) {
+		const auto &hist = m_session->executionHistory();
+		if (hist.size() >= 2) {
+			const auto &prev = hist[hist.size() - 2];
+			if (prev.variableValues.contains(path)) {
+				const QString prevVal = prev.variableValues[path].trimmed();
+				if (prevVal.startsWith('{') && prevVal.endsWith('}')) {
+					for (const QString &p : splitTopLevel(prevVal.mid(1, prevVal.size() - 2))) {
+						QString n, v;
+						if (splitNameValue(p, n, v))
+							prevFields[n] = v;
+					}
+				}
+			}
+		}
+	}
+
+	// ---- create children, highlight ONLY changed field
+	for (auto it = curFields.begin(); it != curFields.end(); ++it) {
+		auto *cn = new QStandardItem(it.key());
+		auto *cv = new QStandardItem(it.value());
+
+		cn->setIcon(iconForType(VarVisualType::Scalar));
+
+		const bool fieldChanged =
+			prevFields.contains(it.key()) &&
+			prevFields[it.key()] != it.value();
+
+		cv->setData(fieldChanged, ChangedRole);
+
+		nameItem->appendRow({ cn, cv });
+	}
 }
-
-
-

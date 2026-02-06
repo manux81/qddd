@@ -47,10 +47,10 @@ StackView::StackView(QWidget *parent)
 	connect(this, &QTreeView::activated, this, &StackView::onItemActivated);
 }
 
-void StackView::setSession(DebugSession *session) {
+void StackView::setSession(DebuggerSession *session) {
 	m_session = session;
 	if (m_session) {
-		connect(m_session, &DebugSession::sessionUpdated, this,
+		connect(m_session, &DebuggerSession::stackFramesUpdated, this,
 		        &StackView::refresh);
 	}
 }

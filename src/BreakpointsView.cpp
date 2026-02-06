@@ -32,205 +32,237 @@
 #include "BreakpointsView.h"
 #include "DebugSession.h"
 
-#include <QAction>
 #include <QHeaderView>
 #include <QMenu>
+#include <QFontDatabase>
+#include <QFileInfo>
 
-BreakpointsView::BreakpointsView(QWidget *parent) : QTreeView(parent) {
+// ============================================================================
+// ctor
+// ============================================================================
+
+BreakpointsView::BreakpointsView(QWidget *parent)
+	: QTreeView(parent)
+{
 	setupModel();
 	setupView();
 
-	connect(this, &QTreeView::activated, this, &BreakpointsView::onActivated);
+	connect(this, &QTreeView::activated,
+			this, &BreakpointsView::onActivated);
 
-	connect(m_model, &QStandardItemModel::itemChanged, this,
-	        &BreakpointsView::onItemChanged);
+	connect(m_model, &QStandardItemModel::itemChanged,
+			this, &BreakpointsView::onItemChanged);
 }
 
-void BreakpointsView::setSession(DebugSession *session) {
+// ============================================================================
+// Session
+// ============================================================================
+
+void BreakpointsView::setSession(DebuggerSession *session)
+{
 	if (m_session == session)
 		return;
 
-	if (m_session) {
+	if (m_session)
 		disconnect(m_session, nullptr, this, nullptr);
-	}
 
 	m_session = session;
 
 	if (!m_session)
 		return;
 
-	// 1) aggiornamenti push dal backend
-	connect(m_session, &DebugSession::breakpointsChanged, this,
-	        &BreakpointsView::onBreakpointsChanged);
+	connect(m_session, &DebuggerSession::breakpointsUpdated,
+			this, &BreakpointsView::refresh);
 
-	// 2) primo popolamento: se la sessione ha già stato, mostralo subito
-	onBreakpointsChanged(m_session->breakpoints());
+	refresh();
 }
 
-void BreakpointsView::setupModel() {
+// ============================================================================
+// Model / View
+// ============================================================================
+
+void BreakpointsView::setupModel()
+{
 	m_model = new QStandardItemModel(this);
 	m_model->setColumnCount(ColCount);
-	m_model->setHorizontalHeaderLabels(
-	    {tr(""), tr("#"), tr("Source:Line"), tr("File"), tr("Line")});
+	m_model->setHorizontalHeaderLabels({
+		"",
+		"#",
+		tr("Name"),
+		tr("Labels"),
+		tr("Condition"),
+		tr("Hit Count"),
+		tr("State")
+	});
+
 	setModel(m_model);
 }
 
-void BreakpointsView::setupView() {
+void BreakpointsView::setupView()
+{
 	setSelectionBehavior(QAbstractItemView::SelectRows);
 	setSelectionMode(QAbstractItemView::SingleSelection);
 	setAlternatingRowColors(true);
 	setRootIsDecorated(false);
 	setSortingEnabled(true);
 
+	header()->setSectionsClickable(true);
+	header()->setSortIndicatorShown(true);
 	header()->setStretchLastSection(true);
-	header()->setSectionResizeMode(QHeaderView::Interactive);
 
-	header()->resizeSection(ColEnabled, 50);
-	header()->resizeSection(ColNumber, 44);
-	header()->resizeSection(ColLocation, 260);
-
-	// colonne tecniche: puoi nasconderle se vuoi solo la colonna "Source:Line"
-	// (qui le lasciamo visibili per debug/completezza)
-	setColumnHidden(ColLocation, true);
-	// setColumnHidden(ColLine, true);
+	setStyleSheet("QTreeView::item { height: 22px; }");
 
 	setContextMenuPolicy(Qt::CustomContextMenu);
-	connect(this, &QWidget::customContextMenuRequested, this,
-	        &BreakpointsView::showContextMenu);
+	connect(this, &QWidget::customContextMenuRequested,
+			this, &BreakpointsView::showContextMenu);
 }
 
-QIcon BreakpointsView::iconEnabled() const {
-	QIcon ico(":/icons/resources/icons/debug-breakpoint-log.svg");
-	return ico;
+// ============================================================================
+// Icons
+// ============================================================================
+
+QIcon BreakpointsView::iconFor(const BreakpointInfo &bp) const
+{
+	if (bp.pending)
+		return QIcon(":/icons/resources/icons/debug-breakpoint-log-unverified.svg");
+	if (!bp.enabled)
+		return QIcon(":/icons/resources/icons/breakpoint-disabled.svg");
+	return QIcon(":/icons/resources/icons/debug-breakpoint-log.svg");
 }
 
-QIcon BreakpointsView::iconDisabled() const {
-	QIcon ico(":/icons/resources/icons/debug-breakpoint-log-unverified.svg");
-	return ico;
+// ============================================================================
+// Refresh
+// ============================================================================
+
+void BreakpointsView::refresh()
+{
+	if (!m_session)
+		return;
+
+	rebuild(m_session->breakpoints());
 }
 
-void BreakpointsView::onBreakpointsChanged(const QList<BreakpointInfo> &list) {
-	rebuild(list);
-}
-
-void BreakpointsView::rebuild(const QList<BreakpointInfo> &list) {
+void BreakpointsView::rebuild(const QVector<BreakpointInfo> &list)
+{
 	m_blockItemChanged = true;
 	m_model->removeRows(0, m_model->rowCount());
 
 	for (const auto &bp : list) {
-		QList<QStandardItem *> row;
 
-		// Enabled
+		QList<QStandardItem*> row;
+
+		// Enabled (icon only, VS-style)
 		auto *enabledItem = new QStandardItem();
 		enabledItem->setEditable(false);
-		enabledItem->setCheckable(true);
-		enabledItem->setCheckState(bp.enabled ? Qt::Checked : Qt::Unchecked);
+		enabledItem->setIcon(iconFor(bp));
 		enabledItem->setData(bp.number, RoleBkptNumber);
-		enabledItem->setIcon(bp.enabled ? iconEnabled() : iconDisabled());
 
 		// Number
 		auto *numItem = new QStandardItem(QString::number(bp.number));
 		numItem->setEditable(false);
+		numItem->setData(bp.number, RoleSortValue);
 
-		// Source:Line (questo è quello che vuoi emettere in breakpointSelected)
-		const QString loc = QString("%1:%2").arg(bp.file).arg(bp.line);
+		// Location
+		const QString loc = QString("%1:%2").arg(QFileInfo(bp.file).fileName()).arg(bp.line);
 		auto *locItem = new QStandardItem(loc);
 		locItem->setEditable(false);
+		locItem->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
 
-		// File / Line separati (opzionali ma utili)
-		auto *fileItem = new QStandardItem(bp.file);
-		fileItem->setEditable(false);
+		// Labels: function name
+		auto *labelItem = new QStandardItem(bp.function);
+		labelItem->setEditable(false);
 
-		auto *lineItem = new QStandardItem(QString::number(bp.line));
-		lineItem->setEditable(false);
+		// Condition
+		auto *condItem = new QStandardItem(bp.condition);
+		condItem->setEditable(false);
 
-		row << enabledItem << numItem << locItem << fileItem << lineItem;
+		// Hit count
+		auto *hitItem = new QStandardItem(QString::number(bp.hitCount));
+		hitItem->setEditable(false);
+		hitItem->setData(bp.hitCount, RoleSortValue);
+
+		// Labels
+		auto *tempItem = new QStandardItem(bp.temporary ? "Temp" : "");
+		labelItem->setEditable(false);
+
+		row << enabledItem
+			<< numItem
+			<< locItem
+		    << labelItem
+			<< condItem
+			<< hitItem
+			<< tempItem;
+
 		m_model->appendRow(row);
 	}
 
 	m_blockItemChanged = false;
+
 	for (int c = 0; c < ColCount; ++c)
 		resizeColumnToContents(c);
 }
 
-void BreakpointsView::onActivated(const QModelIndex &index) {
+// ============================================================================
+// Interaction
+// ============================================================================
+
+void BreakpointsView::onActivated(const QModelIndex &index)
+{
 	if (!index.isValid())
 		return;
 
-	const int row = index.row();
-	const QString loc = m_model->item(row, ColLocation)->text();
+	const QString loc =
+		m_model->item(index.row(), ColLocation)->text();
+
 	if (!loc.isEmpty())
 		emit breakpointSelected(loc);
 }
 
-void BreakpointsView::onItemChanged(QStandardItem *item) {
-	if (m_blockItemChanged)
-		return;
-
-	if (!m_session || !item)
-		return;
-
-	if (item->column() != ColEnabled)
-		return;
-
-	const int number = item->data(RoleBkptNumber).toInt();
-	if (number <= 0)
-		return;
-
-	const bool en = (item->checkState() == Qt::Checked);
-	m_blockItemChanged = true;
-	item->setIcon(en ? iconEnabled() : iconDisabled());
-	m_blockItemChanged = false;
-	m_session->toggleBreakpointEnabled(number, en);
+void BreakpointsView::onItemChanged(QStandardItem *)
+{
+	// non usato: niente checkbox Qt
 }
 
-void BreakpointsView::showContextMenu(const QPoint &pos) {
+// ============================================================================
+// Context menu
+// ============================================================================
+
+void BreakpointsView::showContextMenu(const QPoint &pos)
+{
+	if (!m_session)
+		return;
+
 	QModelIndex idx = indexAt(pos);
-	if (!idx.isValid() || !m_session)
+	if (!idx.isValid())
 		return;
 
 	const int row = idx.row();
 	auto *enabledItem = m_model->item(row, ColEnabled);
-	const int number = enabledItem->data(RoleBkptNumber).toInt();
+
+	const int number =
+		enabledItem->data(RoleBkptNumber).toInt();
+
 	if (number <= 0)
 		return;
 
-	const bool currentlyEnabled = (enabledItem->checkState() == Qt::Checked);
-
 	QMenu menu(this);
-	QAction *actEnable = menu.addAction(tr("Enable"));
-	QAction *actDisable = menu.addAction(tr("Disable"));
-	QAction *actDelete = menu.addAction(tr("Delete"));
 
-	actEnable->setEnabled(!currentlyEnabled);
-	actDisable->setEnabled(currentlyEnabled);
+	QAction *actEnable    = menu.addAction(tr("Enable"));
+	QAction *actDisable   = menu.addAction(tr("Disable"));
+	QAction *actCondition = menu.addAction(tr("Edit Condition…"));
+	QAction *actDelete    = menu.addAction(tr("Delete"));
 
-	QAction *chosen = menu.exec(viewport()->mapToGlobal(pos));
+	QAction *chosen =
+		menu.exec(viewport()->mapToGlobal(pos));
+
 	if (!chosen)
 		return;
 
-	if (chosen == actDelete) {
-		m_session->deleteBreakpoint(number);
-		return;
-	}
-
-	if (chosen == actEnable) {
-		m_blockItemChanged = true;
-		enabledItem->setCheckState(Qt::Checked);
-		enabledItem->setIcon(iconEnabled());
-		m_blockItemChanged = false;
-
-		m_session->toggleBreakpointEnabled(number, true);
-		return;
-	}
-
-	if (chosen == actDisable) {
-		m_blockItemChanged = true;
-		enabledItem->setCheckState(Qt::Unchecked);
-		enabledItem->setIcon(iconDisabled());
-		m_blockItemChanged = false;
-
-		m_session->toggleBreakpointEnabled(number, false);
-		return;
-	}
+	if (chosen == actDelete)
+		m_session->removeBreakpoint(number);
+	else if (chosen == actEnable)
+		m_session->setBreakpointEnabled(number, true);
+	else if (chosen == actDisable)
+		m_session->setBreakpointEnabled(number, false);
+	// Edit Condition → hook futuro
 }

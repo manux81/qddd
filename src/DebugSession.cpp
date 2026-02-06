@@ -31,925 +31,963 @@
 
 #include "DebugSession.h"
 
-#include <QDebug>
 #include <QFileInfo>
-#include <QTextStream>
-#include <QRegularExpression>
+#include <QDebug>
 
-static QString normalizeAddress(QString s)
+// ======================
+// Small utilities
+// ======================
+
+static QString decodeCString(QString s)
 {
-    s = s.trimmed().toLower();
-    if (!s.isEmpty() && !s.startsWith("0x"))
-        s.prepend("0x");
+    if (s.startsWith('"') && s.endsWith('"'))
+        s = s.mid(1, s.size() - 2);
+
+    s.replace("\\n", "\n");
+    s.replace("\\t", "\t");
+    s.replace("\\\"", "\"");
+    s.replace("\\r", "\r");
+    s.replace("\\\\", "\\");
     return s;
-}
-
-// Split by comma at top-level only (ignora virgole dentro {...})
-static QStringList splitTopLevelCommas(const QString& s)
-{
-    QStringList out;
-    QString cur;
-    int depth = 0;
-
-    for (int i = 0; i < s.size(); ++i) {
-        const QChar c = s[i];
-        if (c == '{') { depth++; cur += c; }
-        else if (c == '}') { depth--; cur += c; }
-        else if (c == ',' && depth == 0) {
-            out << cur.trimmed();
-            cur.clear();
-        } else {
-            cur += c;
-        }
-    }
-    if (!cur.trimmed().isEmpty())
-        out << cur.trimmed();
-
-    return out;
 }
 
 static bool looksLikePointer(const QString& v)
 {
     const QString s = v.trimmed().toLower();
-    return s.startsWith("0x") && s.size() >= 3;
+    return s.startsWith("0x") && s.size() > 2;
 }
 
 static bool looksLikeStruct(const QString& v)
 {
-    const QString s = v.trimmed();
-    return s.startsWith("{") && s.endsWith("}");
+	const QString s = v.trimmed();
+
+	// struct / class / array / STL → { ... }
+	if (s.startsWith("{") && s.endsWith("}"))
+		return true;
+
+	// vector / map empty: {}
+	if (s == "{}")
+		return true;
+
+	return false;
 }
 
-
-static void expandInlineStructIntoChildren(VarNode* node,
-                                           const QString& value,
-                                           int depth,
-                                           int maxDepth)
+static QString miGet(const QString& blob, const QString& key)
 {
-    if (!node) return;
-    if (depth >= maxDepth) return;
+    QRegularExpression re(
+        QRegularExpression::escape(key) + R"(="((?:\\.|[^"])*)"")"
+    );
+    auto m = re.match(blob);
+    if (!m.hasMatch())
+        return {};
+    return decodeCString('"' + m.captured(1) + '"');
+}
 
-    QString v = value.trimmed();
-    if (!looksLikeStruct(v))
-        return;
+// Extract top-level { ... } blocks (without outer braces)
+static QVector<QString> miExtractBraceObjects(const QString& s)
+{
+    QVector<QString> out;
+    int depth = 0;
+    int start = -1;
+    for (int i = 0; i < s.size(); ++i) {
+        const QChar c = s[i];
+        if (c == '{') {
+            if (depth == 0) start = i;
+            ++depth;
+        } else if (c == '}') {
+            --depth;
+            if (depth == 0 && start >= 0) {
+                out.push_back(s.mid(start + 1, i - start - 1));
+                start = -1;
+            }
+        }
+    }
+    return out;
+}
 
-    // strip outer { }
-    v = v.mid(1, v.size() - 2).trimmed();
-    if (v.isEmpty())
-        return;
+// Parse optional leading token: 12^done,...
+static int parseLeadingToken(const QString& line, int* outPosAfterToken)
+{
+    int i = 0;
+    while (i < line.size() && line[i].isDigit()) ++i;
+    if (i == 0) return 0;
+    bool ok = false;
+    int tok = line.left(i).toInt(&ok);
+    if (!ok) return 0;
+    if (outPosAfterToken) *outPosAfterToken = i;
+    return tok;
+}
 
-    const QStringList entries = splitTopLevelCommas(v);
+static QStringList splitTopLevelCommas(const QString& s)
+{
+	QStringList out;
+	int depth = 0;
+	int start = 0;
 
-    for (const QString& e : entries) {
-        const int eq = e.indexOf('=');
-        if (eq <= 0)
-            continue;
+	for (int i = 0; i < s.size(); ++i) {
+		QChar c = s[i];
+		if (c == '{') depth++;
+		else if (c == '}') depth--;
+		else if (c == ',' && depth == 0) {
+			out << s.mid(start, i - start).trimmed();
+			start = i + 1;
+		}
+	}
 
-        auto* c = new VarNode;
-        c->name = e.left(eq).trimmed();
-        c->value = e.mid(eq + 1).trimmed();
+	out << s.mid(start).trimmed();
+	return out;
+}
+
+static void expandInlineStructIntoChildren(
+	DebugVariable* node,
+	const QString& value,
+	int depth,
+	int maxDepth)
+{
+	if (!node) return;
+	if (depth >= maxDepth) return;
+
+	QString v = value.trimmed();
+	if (!looksLikeStruct(v))
+		return;
+
+	// strip outer { }
+	v = v.mid(1, v.size() - 2).trimmed();
+	if (v.isEmpty())
+		return;
+
+	const QStringList entries = splitTopLevelCommas(v);
+
+	for (const QString& e : entries) {
+		const int eq = e.indexOf('=');
+		if (eq <= 0)
+			continue;
+
+		auto c = std::make_unique<DebugVariable>();
+		c->name  = e.left(eq).trimmed();
+		c->value = e.mid(eq + 1).trimmed();
 		c->parent = node;
 
-        // regole children/expandable:
-        // - pointer => "expandable" (nella tua UI lo tratti come espandibile/edge)
-        c->isPointer = looksLikePointer(c->value);
+		c->isPointer   = looksLikePointer(c->value);
 		c->hasChildren = looksLikeStruct(c->value);
 
-
-        node->children.append(c);
-
-        // ricorsione SOLO su struct annidata (limitata)
-        if (c->hasChildren) {
-            expandInlineStructIntoChildren(c, c->value, depth + 1, maxDepth);
-        }
-    }
-
-    // se abbiamo creato almeno un figlio, il nodo è espandibile
-    if (!node->children.isEmpty())
-        node->hasChildren = true;
-}
-
-static QString decodeCString(QString s) {
-	if (s.startsWith("\"") && s.endsWith("\""))
-		s = s.mid(1, s.length() - 2);
-
-	s.replace("\\n", "\n");
-	s.replace("\\t", "\t");
-	s.replace("\\\"", "\"");
-	s.replace("\\r", "\r");
-	return s;
-}
-
-static QList<VarNode *> parseMiChildren(const QString &payload) {
-	QList<VarNode *> list;
-	QStringList entries = payload.split("},{");
-	for (QString e : entries) {
-		VarNode *n = new VarNode;
-		n->parent = nullptr;
-		if (e.contains("name=\""))
-			n->name = e.section("name=\"", 1, 1).section("\"", 0, 0);
-		if (e.contains("value=\""))
-			n->value = e.section("value=\"", 1, 1).section("\"", 0, 0);
-		if (e.contains("type=\""))
-			n->type = e.section("type=\"", 1, 1).section("\"", 0, 0);
-		if (e.contains("numchild=\"")) {
-			int c = e.section("numchild=\"", 1, 1).section("\"", 0, 0).toInt();
-			n->hasChildren = (c > 0);
+		// ricorsione SOLO su struct inline
+		if (c->hasChildren) {
+			expandInlineStructIntoChildren(
+				c.get(), c->value, depth + 1, maxDepth);
 		}
-		if (e.contains("id=\""))
-			n->varId = e.section("id=\"", 1, 1).section("\"", 0, 0);
-		list.append(n);
+
+		node->children.push_back(std::move(c));
 	}
-	return list;
+
+	if (!node->children.empty())
+		node->hasChildren = true;
 }
 
-static bool attachToTree(QList<VarNode *> &roots,
-                         const QString &parentId,
-                         const QList<VarNode *> &children)
+
+// ============================================================================
+// DebugVariable
+// ============================================================================
+
+QString DebugVariable::fullPath() const
 {
-    std::function<bool(VarNode *)> rec = [&](VarNode *node) -> bool {
-        if (node->varId == parentId) {
-            for (VarNode *c : children) {
-                c->parent = node;
-                node->children.append(c);
-            }
+    if (!parent) return name;
+    return parent->fullPath() + "." + name;
+}
 
-            return true;
-        }
+// ============================================================================
+// DebuggerSession
+// ============================================================================
 
-        for (VarNode *c : node->children) {
-            if (rec(c))
-                return true;
-        }
-        return false;
-    };
+DebuggerSession::DebuggerSession(QObject* parent)
+    : QObject(parent)
+{
+    connect(&m_debuggerProcess,
+            &QProcess::readyReadStandardOutput,
+            this,
+            &DebuggerSession::onDebuggerOutputReady);
 
-    for (VarNode *r : roots) {
-        if (rec(r))
-            return true;
+    connect(&m_debuggerProcess,
+            QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this,
+            &DebuggerSession::onDebuggerFinished);
+}
+
+DebuggerSession::~DebuggerSession() = default;
+
+void DebuggerSession::setBackend(Backend backend)
+{
+    m_backend = backend;
+}
+
+void DebuggerSession::startSession(const QString& executablePath)
+{
+    QFileInfo fi(executablePath);
+    if (!fi.exists()) {
+        qWarning() << "Executable not found:" << executablePath;
+        return;
     }
 
-    return false;
+    QString debugger;
+    QStringList args;
+
+    switch (m_backend) {
+    case Backend::GdbMi:
+        debugger = "gdb";
+        args << "--interpreter=mi2";
+        break;
+    case Backend::LldbMi:
+        debugger = "/usr/local/bin/lldb-mi";
+        args << "--interpreter=mi3";
+        break;
+    }
+
+    m_debuggerProcess.start(debugger, args);
+
+    if (!m_debuggerProcess.waitForStarted()) {
+        qWarning() << "Failed to start debugger:" << debugger;
+        return;
+    }
+
+    // carica exe
+    enqueueCommand(QString("-file-exec-and-symbols \"%1\"").arg(executablePath));
+    emit targetStarted();
 }
 
-
-
-DebugSession::DebugSession(QObject *parent) : QObject(parent) {
-	m_useComplexVarView = true;
-
-	connect(&m_proc, &QProcess::readyReadStandardOutput, this,
-	        &DebugSession::onReadyReadStdout);
-
-	connect(&m_proc,
-	        QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
-	        &DebugSession::onProcessFinished);
+void DebuggerSession::terminateSession()
+{
+    if (m_debuggerProcess.state() != QProcess::NotRunning)
+        m_debuggerProcess.kill();
 }
 
-void DebugSession::setBackend(Backend b) { m_backend = b; }
+bool DebuggerSession::isRunning() const
+{
+    return m_debuggerProcess.state() != QProcess::NotRunning;
+}
 
-DebugSession::Backend DebugSession::backend() const { return m_backend; }
+// ============================================================================
+// Execution control
+// ============================================================================
 
-void DebugSession::start(const QString &programPath) {
-	m_programPath = programPath;
-
-	QFileInfo fi(programPath);
-	if (!fi.exists()) {
-		qWarning() << "Program does not exist:" << programPath;
+void DebuggerSession::run()                 { enqueueCommand("-exec-run"); }
+void DebuggerSession::continueExecution()   { enqueueCommand("-exec-continue"); }
+void DebuggerSession::stepInto()            { enqueueCommand("-exec-step"); }
+void DebuggerSession::stepOver()            { enqueueCommand("-exec-next"); }
+void DebuggerSession::stepOut()             { enqueueCommand("-exec-finish"); }
+void DebuggerSession::interruptExecution()  { enqueueCommand("-exec-interrupt"); }
+void DebuggerSession::runToCursor(const QString& location)
+{
+	if (location.isEmpty())
 		return;
-	}
 
-	QString debuggerExe;
-	QStringList args;
-
-	switch (m_backend) {
-	case Backend::LLDB_MI:
-		debuggerExe = "lldb-mi";
-		args << "--interpreter=mi3";
-		break;
-	case Backend::GDB_MI:
-		debuggerExe = "gdb";
-		args << "--interpreter=mi2";
-		break;
-	}
-
-	m_proc.start(debuggerExe, args);
-
-	if (!m_proc.waitForStarted()) {
-		qWarning() << "Debugger failed to start.";
-		return;
-	}
-
-	enqueueCommand({QString("-file-exec-and-symbols \"%1\"").arg(programPath),
-	                nullptr, true});
-}
-
-void DebugSession::execRun() { enqueueCommand({"-exec-run", nullptr, true}); }
-
-void DebugSession::execContinue() {
-	qDebug() << "[DBG] execContinue() called, m_busy=" << m_busy
-	         << ", queue size=" << m_queue.size();
-	enqueueCommand({"-exec-continue", nullptr, true});
-}
-
-void DebugSession::execStep() {
-	qDebug() << "[DBG] execStep() called, m_busy=" << m_busy
-	         << ", queue size=" << m_queue.size();
-	enqueueCommand({"-exec-step", nullptr, true});
-}
-
-void DebugSession::execNext() {
-	qDebug() << "[DBG] execNext() called, m_busy=" << m_busy
-	         << ", queue size=" << m_queue.size();
-	enqueueCommand({"-exec-next", nullptr, true});
-}
-
-void DebugSession::execFinish() {
-	enqueueCommand({"-exec-finish", nullptr, true});
-}
-
-void DebugSession::execInterrupt() {
-	enqueueCommand({"-exec-interrupt", nullptr, true});
-}
-
-void DebugSession::execUntil(const QString &loc) {
-	if (loc.isEmpty())
-		return;
-	enqueueCommand({QString("-exec-until %1").arg(loc), nullptr, true});
-}
-
-void DebugSession::selectFrame(int index) {
 	enqueueCommand(
-	    {QString("-stack-select-frame %1").arg(index), nullptr, true});
-	requestRefresh();
+		QString("-break-insert -t %1").arg(location),
+		[this](const QString& reply) {
+
+			// 1) estrai bkpt={...}
+			const int bkptPos = reply.indexOf("bkpt={");
+			if (bkptPos < 0) {
+				// fallback: continua comunque
+				enqueueCommand("-exec-continue");
+				return;
+			}
+
+			const int bracePos = reply.indexOf('{', bkptPos);
+			if (bracePos < 0) {
+				enqueueCommand("-exec-continue");
+				return;
+			}
+
+			int depth = 0;
+			int end = -1;
+			for (int i = bracePos; i < reply.size(); ++i) {
+				if (reply[i] == '{') ++depth;
+				else if (reply[i] == '}') {
+					--depth;
+					if (depth == 0) { end = i; break; }
+				}
+			}
+
+			if (end <= bracePos) {
+				enqueueCommand("-exec-continue");
+				return;
+			}
+
+			const QString bkptBlob = reply.mid(bracePos + 1, end - bracePos - 1);
+
+			// 2) id (GDB=number, LLDB=id)
+			QString idStr = miGet(bkptBlob, "number");
+			if (idStr.isEmpty())
+				idStr = miGet(bkptBlob, "id");
+
+			bool ok = false;
+			const int bpId = idStr.toInt(&ok);
+
+			// 3) continua
+			enqueueCommand("-exec-continue");
+
+			// 4) sicurezza extra: delete esplicito (opzionale)
+			if (ok && bpId > 0) {
+				removeBreakpoint(bpId);
+			}
+		}
+	);
 }
 
-void DebugSession::insertBreakpoint(const QString &loc) {
-	if (loc.isEmpty())
+
+
+// ============================================================================
+// Breakpoints
+// ============================================================================
+
+void DebuggerSession::insertBreakpoint(const QString& location)
+{
+    enqueueCommand(QString("-break-insert %1").arg(location),
+        [this](const QString&) {
+            emit breakpointsUpdated();
+        });
+}
+
+void DebuggerSession::removeBreakpoint(int breakpointId)
+{
+	bool removed = false;
+	for (int i = 0; i < m_breakpoints.size(); ) {
+		if (m_breakpoints[i].number == breakpointId) {
+			m_breakpoints.removeAt(i);
+			removed = true;
+		} else {
+			++i;
+		}
+	}
+
+
+	if (!removed)
 		return;
-	enqueueCommand({QString("-break-insert %1").arg(loc), nullptr, true});
 
-	if (m_backend == Backend::GDB_MI)
-		enqueueCommand({"-break-list", nullptr, false});
+	emit breakpointsUpdated();
+
+	enqueueCommand(QString("-break-delete %1").arg(breakpointId),
+		[](const QString&) {
+			// Nothing here!
+		});
 }
 
 
-void DebugSession::deleteBreakpoint(int number) {
-	if (number <= 0)
+void DebuggerSession::clearAllBreakpoints()
+{
+    enqueueCommand("-break-delete",
+        [this](const QString&) {
+            emit breakpointsUpdated();
+        });
+}
+
+void DebuggerSession::setBreakpointEnabled(int breakpointId, bool enabled)
+{
+    enqueueCommand(QString("-break-%1 %2")
+                       .arg(enabled ? "enable" : "disable")
+                       .arg(breakpointId),
+        [this](const QString&) {
+            emit breakpointsUpdated();
+        });
+}
+
+void DebuggerSession::toggleBreakpoint(const QString& location)
+{
+	int line = -1;
+	QString file;
+	QString func;
+
+	const auto parts = location.split(":");
+	if (parts.size() == 1) {
+		func = parts[0];
+	} else {
+		file = parts[0];
+		line = parts[1].toInt();
+	}
+
+	auto it = std::find_if(
+		m_breakpoints.begin(),
+		m_breakpoints.end(),
+		[&](const BreakpointInfo& bp) {
+			if (!func.isEmpty())
+				return bp.function == func;
+			return bp.file == file && bp.line == line;
+		}
+	);
+
+	if (it == m_breakpoints.end()) {
+		insertBreakpoint(location);
+	} else {
+		removeBreakpoint(it->number);
+	}
+}
+
+
+const QVector<BreakpointInfo>& DebuggerSession::breakpoints() const
+{
+	return m_breakpoints;
+}
+
+// ============================================================================
+// Stack nav
+// ============================================================================
+
+void DebuggerSession::selectStackFrame(int frameIndex)
+{
+    enqueueCommand(QString("-stack-select-frame %1").arg(frameIndex),
+        [this](const QString&) {
+            requestStopState();
+        });
+}
+
+// ============================================================================
+// Command queue (tokened)
+// ============================================================================
+
+void DebuggerSession::enqueueCommand(const QString& command,
+                                    std::function<void(const QString&)> cb)
+{
+    PendingCommand pc;
+    pc.token = m_nextToken++;
+    pc.command = command;
+    pc.cb = std::move(cb);
+    m_commandQueue.enqueue(std::move(pc));
+    processCommandQueue();
+}
+
+void DebuggerSession::processCommandQueue()
+{
+    if (m_commandInFlight || m_commandQueue.isEmpty())
+        return;
+
+    m_commandInFlight = true;
+    m_inFlight = m_commandQueue.dequeue();
+    m_inFlightReply.clear();
+
+    const QString wire = QString::number(m_inFlight.token) + m_inFlight.command;
+
+    qDebug().noquote() << "[MI SEND]" << wire;
+    m_debuggerProcess.write((wire + "\n").toUtf8());
+}
+
+void DebuggerSession::onDebuggerOutputReady()
+{
+    const QByteArray raw = m_debuggerProcess.readAllStandardOutput();
+    const QList<QByteArray> lines = raw.split('\n');
+
+    for (const QByteArray& l : lines) {
+        const QString line = QString::fromUtf8(l).trimmed();
+        if (!line.isEmpty())
+            dispatchDebuggerMessage(line);
+    }
+}
+
+void DebuggerSession::onDebuggerFinished(int exitCode,
+                                         QProcess::ExitStatus)
+{
+    emit targetExited(exitCode);
+}
+
+// ============================================================================
+// Dispatcher
+// ============================================================================
+void DebuggerSession::dispatchDebuggerMessage(const QString& rawLine)
+{
+	QString line = rawLine.trimmed();
+	if (line.isEmpty())
 		return;
-	enqueueCommand({QString("-break-delete %1").arg(number), nullptr, true});
-	if (m_backend == Backend::GDB_MI)
-		enqueueCommand({"-break-list", nullptr, false});
-}
 
-void DebugSession::clearAllBreakpoints() {
-	enqueueCommand({"-break-delete", nullptr, true});
-	if (m_backend == Backend::GDB_MI)
-		enqueueCommand({"-break-list", nullptr, false});
-}
+	// ------------------------------------------------------------
+	// 0) Ignore debugger prompt
+	// ------------------------------------------------------------
+	if (line == "(gdb)" || line == "(lldb)" || line == ">")
+		return;
 
-void DebugSession::toggleBreakpointEnabled(int n, bool en) {
-	enqueueCommand(
-	    {QString("-break-%1 %2").arg(en ? "enable" : "disable").arg(n), nullptr,
-	     true});
+	qDebug().noquote() << "[MI RECV]" << rawLine;
+	// ------------------------------------------------------------
+	// 1) Strip MI token (if present)
+	//    e.g. "3^running" -> tok=3, line="^running"
+	// ------------------------------------------------------------
+	int posAfterTok = 0;
+	const int tok = parseLeadingToken(line, &posAfterTok);
+	if (tok > 0 && posAfterTok < line.size())
+		line = line.mid(posAfterTok);
 
-	if (m_backend == Backend::GDB_MI)
-		enqueueCommand({"-break-list", nullptr, false});
-}
+	// ------------------------------------------------------------
+	// 2) Stream records (console / target / log)
+	// ------------------------------------------------------------
+	if (line.startsWith("~\"") || line.startsWith("@\"") || line.startsWith("&\"")) {
+		emit debuggerOutput(decodeCString(line.mid(2)));
+		return;
+	}
 
-void DebugSession::toggleBreakpointAt(const QString &file, int line) {
-	for (const auto &bp : m_bps) {
-		if (bp.file == file && bp.line == line) {
-			deleteBreakpoint(bp.number);
+	// ------------------------------------------------------------
+	// 3) Async exec state
+	// ------------------------------------------------------------
+	if (line.startsWith("*stopped")) {
+		onTargetStoppedInternal(line);
+		return;
+	}
+
+	if (line.startsWith("*running")) {
+		emit targetRunning();
+		return;
+	}
+
+	// ------------------------------------------------------------
+	// 4) Async notifications (=...)
+	// ------------------------------------------------------------
+	if (line.startsWith("=")) {
+
+		if (line.startsWith("=library-"))
+			return;
+
+		if (line.startsWith("=thread-"))
+			return;
+
+		if (line.startsWith("=breakpoint-created") ||
+			line.startsWith("=breakpoint-modified")) {
+			handleBreakpointEvent(line);
 			return;
 		}
+
+		if (line.startsWith("=breakpoint-deleted")) {
+			handleBreakpointDeleted(line);
+			return;
+		}
+
+		// fallback: debug-only
+		qDebug().noquote() << "[MI NOTIFY]" << line;
+		return;
 	}
 
-	insertBreakpoint(QString("%1:%2").arg(file).arg(line));
+
+	// ------------------------------------------------------------
+	// 5) Result record (^done, ^running, ^error, ...)
+	// ------------------------------------------------------------
+	if (line.startsWith("^")) {
+		handleResultRecord(tok, line);
+		return;
+	}
+
+	// ------------------------------------------------------------
+	// 6) Fallback raw output (warnings, misc, LLDB quirks)
+	// ------------------------------------------------------------
+	emit debuggerOutput(line);
 }
 
-const Snapshot* DebugSession::snapshotAt(int index) const
-{
-    if (index < 0 || index >= m_history.size())
-        return nullptr;
 
-    return &m_history[index];
+void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
+{
+	// Accumula solo se è la risposta del comando in flight
+	if (m_commandInFlight && token == m_inFlight.token) {
+
+		m_inFlightReply += QString::number(token) + resultLine + "\n";
+
+
+		if (resultLine.startsWith("^done") ||
+			resultLine.startsWith("^error") ||
+			resultLine.startsWith("^running")) {
+
+			// esegui callback del comando (se presente)
+			if (m_inFlight.cb)
+				m_inFlight.cb(m_inFlightReply);
+
+			// sblocca e manda prossimo comando
+			m_commandInFlight = false;
+			processCommandQueue();
+		}
+
+		return;
+	}
+
+	// Token inatteso (non dovrebbe capitare, ma logghiamo)
+	qDebug().noquote()
+		<< "[MI WARN] token mismatch:"
+		<< "got=" << token
+		<< "expected=" << (m_commandInFlight ? m_inFlight.token : -1)
+		<< "line=" << resultLine;
 }
 
-void DebugSession::captureSnapshot()
+
+// ============================================================================
+// Stop handling
+// ============================================================================
+
+void DebuggerSession::onTargetStoppedInternal(const QString& stopMsg)
 {
-    Snapshot s;
-    s.step = int(m_stepCounter);
-    s.timestampNs = m_timer.nsecsElapsed();
+    ++m_stepCounter;
 
-    for (VarNode* r : m_cvars)
-        flattenVar(r, "", s.values);
+    // frame={...} dentro *stopped,...
+    const int framePos = stopMsg.indexOf("frame={");
+    if (framePos >= 0) {
+        const int bracePos = stopMsg.indexOf('{', framePos);
+        if (bracePos >= 0) {
+            int depth = 0;
+            int end = -1;
+            for (int i = bracePos; i < stopMsg.size(); ++i) {
+                if (stopMsg[i] == '{') ++depth;
+                else if (stopMsg[i] == '}') {
+                    --depth;
+                    if (depth == 0) { end = i; break; }
+                }
+            }
+            if (end > bracePos) {
+                const QString fblob = stopMsg.mid(bracePos + 1, end - bracePos - 1);
 
-    constexpr int MAX_HISTORY = 200;
+                const QString func = miGet(fblob, "func");
+                const QString fullname = miGet(fblob, "fullname");
+                const QString file = miGet(fblob, "file");
+                const QString path = !fullname.isEmpty() ? fullname : file;
 
-    if (m_history.size() >= MAX_HISTORY)
-        m_history.pop_front();
+                bool ok = false;
+                const int lineNo = miGet(fblob, "line").toInt(&ok);
 
-    m_history.push_back(s);
+                if (!path.isEmpty() && ok && lineNo > 0)
+                    emit stoppedAt(path, lineNo, func);
+            }
+        }
+    }
 
-    if (m_history.size() >= 2) {
-        computeDiff(
-            m_history[m_history.size() - 2],
-            m_history[m_history.size() - 1]
+    requestStopState();
+    emit targetStopped();
+}
+
+// Metti questi metodi nel .cpp (e dichiarali nel .h come membri privati/protetti)
+
+static int toIntSafe(const QString& s)
+{
+	bool ok = false;
+	int v = s.toInt(&ok);
+	return ok ? v : -1;
+}
+
+static bool parseEnabled(const QString& s)
+{
+	const QString v = s.trimmed().toLower();
+	return (v == "y" || v == "yes" || v == "true" || v == "1");
+}
+
+void DebuggerSession::handleBreakpointEvent(const QString& line)
+{
+	// Example:
+	// =breakpoint-created,bkpt={number="1",type="breakpoint",disp="keep",enabled="y",addr="0x...",func="main",file="x.cpp",fullname="/.../x.cpp",line="12"}
+	// =breakpoint-modified,bkpt={...}
+
+	const int bkptPos = line.indexOf("bkpt={");
+	if (bkptPos < 0) {
+		// Alcuni backend potrebbero mandare formati diversi.
+		qDebug().noquote() << "[MI WARN] breakpoint event without bkpt={}: " << line;
+		return;
+	}
+
+	const int bracePos = line.indexOf('{', bkptPos);
+	if (bracePos < 0)
+		return;
+
+	// Trova la chiusura della graffa corrispondente (come fai nello stop handler)
+	int depth = 0;
+	int end = -1;
+	for (int i = bracePos; i < line.size(); ++i) {
+		if (line[i] == '{') ++depth;
+		else if (line[i] == '}') {
+			--depth;
+			if (depth == 0) { end = i; break; }
+		}
+	}
+	if (end <= bracePos)
+		return;
+
+	const QString bkptBlob = line.mid(bracePos + 1, end - bracePos - 1);
+
+	// In GDB MI è "number", in altri può essere "id"
+	QString idStr = miGet(bkptBlob, "number");
+	if (idStr.isEmpty())
+		idStr = miGet(bkptBlob, "id");
+
+	const int id = toIntSafe(idStr);
+	if (id <= 0) {
+		qDebug().noquote() << "[MI WARN] breakpoint without valid id/number: " << line;
+		return;
+	}
+
+	// Fields
+	const QString enabledStr = miGet(bkptBlob, "enabled");
+	const bool enabled = enabledStr.isEmpty() ? true : parseEnabled(enabledStr);
+
+	const QString addr = miGet(bkptBlob, "addr");
+	const QString func = miGet(bkptBlob, "func");
+
+	const QString fullname = miGet(bkptBlob, "fullname");
+	const QString file = miGet(bkptBlob, "file");
+	const QString path = !fullname.isEmpty() ? fullname : file;
+
+	const int lineNo = toIntSafe(miGet(bkptBlob, "line"));
+
+	const QString cond = miGet(bkptBlob, "cond");
+	// Some version: "times" or "hit-count"
+	const QString timesStr = miGet(bkptBlob, "times");
+	const int hitCount = toIntSafe(timesStr);
+
+	// 1) cerca se esiste già
+	int idx = -1;
+	for (int i = 0; i < m_breakpoints.size(); ++i) {
+		if (m_breakpoints[i].number == id) { // <-- adatta il nome campo
+			idx = i;
+			break;
+		}
+	}
+
+	BreakpointInfo info;
+	info.number = id;
+	info.enabled = enabled;
+	info.address = addr;
+	info.function = func;
+	info.file = path;
+	info.line = (lineNo > 0 ? lineNo : 0);
+	info.condition = cond;
+	info.hitCount = (hitCount >= 0 ? hitCount : 0);
+
+	if (idx >= 0) {
+		m_breakpoints[idx] = info;
+	} else {
+		m_breakpoints.push_back(info);
+	}
+
+	emit breakpointsUpdated();
+}
+
+void DebuggerSession::handleBreakpointDeleted(const QString& line)
+{
+	// Example:
+	// =breakpoint-deleted,id="1"
+	// or in some cases bkpt={number="1"...}
+
+	QString idStr = miGet(line, "id");
+	if (idStr.isEmpty()) {
+		// fallback: try to read bkpt={...} if is present
+		const int bkptPos = line.indexOf("bkpt={");
+		if (bkptPos >= 0) {
+			const int bracePos = line.indexOf('{', bkptPos);
+			if (bracePos >= 0) {
+				int depth = 0;
+				int end = -1;
+				for (int i = bracePos; i < line.size(); ++i) {
+					if (line[i] == '{') ++depth;
+					else if (line[i] == '}') {
+						--depth;
+						if (depth == 0) { end = i; break; }
+					}
+				}
+				if (end > bracePos) {
+					const QString bkptBlob = line.mid(bracePos + 1, end - bracePos - 1);
+					idStr = miGet(bkptBlob, "number");
+					if (idStr.isEmpty())
+						idStr = miGet(bkptBlob, "id");
+				}
+			}
+		}
+	}
+
+	const int id = toIntSafe(idStr);
+	if (id <= 0) {
+		qDebug().noquote() << "[MI WARN] breakpoint-deleted without valid id: " << line;
+		return;
+	}
+
+	for (int i = 0; i < m_breakpoints.size(); /*incremento dentro*/) {
+		if (m_breakpoints[i].number == id) { // <-- adatta
+			m_breakpoints.removeAt(i);
+			continue;
+		}
+		++i;
+	}
+
+	emit breakpointsUpdated();
+}
+
+
+// ============================================================================
+// State fetch
+// ============================================================================
+
+void DebuggerSession::requestStopState()
+{
+    m_pendingStack = true;
+    m_pendingVariables = true;
+
+    enqueueCommand("-stack-list-frames",
+        [this](const QString& reply) {
+            parseStackFromReply(reply);
+            m_pendingStack = false;
+            emit stackFramesUpdated();
+            finalizeSnapshotIfReady();
+        });
+
+    enqueueCommand("-stack-select-frame 0");
+    enqueueCommand("-stack-list-variables --all-values",
+        [this](const QString& reply) {
+            parseVarsFromReply(reply);
+            m_pendingVariables = false;
+            //emit variablesUpdated();
+            finalizeSnapshotIfReady();
+        });
+}
+
+void DebuggerSession::parseStackFromReply(const QString& replyBlob)
+{
+    m_stackFrames.clear();
+
+    // cerca stack=[frame={...},frame={...}]
+    int idx = replyBlob.indexOf("stack=[");
+    if (idx < 0)
+        return;
+
+    const QVector<QString> frames = miExtractBraceObjects(replyBlob.mid(idx));
+
+    for (const auto& fblob : frames) {
+        StackFrame f;
+        f.level    = miGet(fblob, "level");
+        f.function = miGet(fblob, "func");
+
+        const QString fullname = miGet(fblob, "fullname");
+        const QString file     = miGet(fblob, "file");
+        f.file = !fullname.isEmpty() ? fullname : file;
+
+        bool ok = false;
+        f.line = miGet(fblob, "line").toInt(&ok);
+        if (!ok) f.line = 0;
+
+        if (!f.function.isEmpty() || !f.file.isEmpty())
+            m_stackFrames.push_back(f);
+    }
+}
+
+void DebuggerSession::parseVarsFromReply(const QString& replyBlob)
+{
+    m_variables.clear();
+
+    int idx = replyBlob.indexOf("variables=[");
+    if (idx < 0)
+        return;
+
+    const QVector<QString> vars = miExtractBraceObjects(replyBlob.mid(idx));
+
+    for (const auto& vblob : vars) {
+        auto dv = std::make_unique<DebugVariable>();
+        dv->name    = miGet(vblob, "name");
+        dv->value   = miGet(vblob, "value");
+        dv->type    = miGet(vblob, "type");
+        dv->address = miGet(vblob, "addr");
+
+        dv->isPointer   = looksLikePointer(dv->value);
+        dv->hasChildren = looksLikeStruct(dv->value);
+        dv->parent      = nullptr;
+
+		expandInlineStructIntoChildren(
+			dv.get(),
+			dv->value,
+			0,
+			2   // profondità massima (come prima)
+		);
+
+        if (!dv->name.isEmpty())
+            m_variables.push_back(std::move(dv));
+    }
+}
+
+// ============================================================================
+// Snapshot
+// ============================================================================
+
+void DebuggerSession::finalizeSnapshotIfReady()
+{
+    if (m_pendingStack || m_pendingVariables)
+        return;
+
+    captureExecutionSnapshot();
+}
+
+void DebuggerSession::captureExecutionSnapshot()
+{
+    ExecutionSnapshot snapshot;
+    snapshot.stepIndex = m_stepCounter;
+
+    for (const auto& var : m_variables)
+        snapshot.variableValues.insert(var->fullPath(), var->value);
+
+    m_executionHistory.push_back(snapshot);
+
+    if (m_executionHistory.size() >= 2) {
+        computeVariableChanges(
+            m_executionHistory[m_executionHistory.size() - 2],
+            m_executionHistory.back()
         );
     }
+
+    emit snapshotCaptured(snapshot);
+	emit variablesUpdated();
 }
 
-
-void DebugSession::flattenVar(
-    VarNode* node,
-    const QString& path,
-    QHash<QString, QString>& out)
+void DebuggerSession::computeVariableChanges(const ExecutionSnapshot& previous,
+                                            const ExecutionSnapshot& current)
 {
-    if (!node)
-        return;
-
-    const QString full =
-        path.isEmpty()
-            ? node->name
-            : path + "." + node->name;
-
-    out.insert(full, node->value);
-
-    for (VarNode* c : node->children)
-        flattenVar(c, full, out);
-}
-
-
-void DebugSession::computeDiff(
-    const Snapshot& a,
-    const Snapshot& b)
-{
+    QVector<VariableChange> changes;
     m_changedPaths.clear();
 
-    QVector<DiffEvent> diff;
+    for (auto it = current.variableValues.begin();
+         it != current.variableValues.end(); ++it) {
 
-    // changed / added
-    for (auto it = b.values.begin(); it != b.values.end(); ++it) {
+        const QString& path = it.key();
+        const QString& newValue = it.value();
 
-        const QString& path   = it.key();
-        const QString& newVal = it.value();
-
-        if (!a.values.contains(path)) {
+        if (!previous.variableValues.contains(path)) {
+            changes.push_back({path, {}, newValue});
             m_changedPaths.insert(path);
-
-            diff.append({
-                path,
-                QString(),
-                newVal
-            });
-            continue;
         }
-
-        const QString& oldVal = a.values[path];
-
-        if (oldVal != newVal) {
+        else if (previous.variableValues[path] != newValue) {
+            changes.push_back({path, previous.variableValues[path], newValue});
             m_changedPaths.insert(path);
-
-            diff.append({
-                path,
-                oldVal,
-                newVal
-            });
         }
     }
 
-    // removed
-    for (auto it = a.values.begin(); it != a.values.end(); ++it) {
-        if (!b.values.contains(it.key())) {
-            m_changedPaths.insert(it.key());
-
-            diff.append({
-                it.key(),
-                it.value(),
-                QString()
-            });
-        }
-    }
-
-    emit diffReady(diff, a.step, b.step);
+    emit variableChangesDetected(changes, previous.stepIndex, current.stepIndex);
 }
 
-const QSet<QString>& DebugSession::changedPaths() const
+// ============================================================================
+// Expression / raw
+// ============================================================================
+
+void DebuggerSession::evaluateExpression(const QString& expression)
 {
-    return m_changedPaths;
-}
-
-
-void DebugSession::tryFinalizeSnapshot()
-{
-    if (m_pendingStack)
-        return;
-    if (m_pendingVars)
-        return;
-    if (m_pendingVarAddr > 0)
-        return;
-
-    captureSnapshot();
-    emit sessionUpdated();
-}
-
-void DebugSession::sendCommand(const QString &cmd) {
-	const QString translated = translateUserCommand(cmd);
-	enqueueCommand({translated, nullptr, true});
-}
-
-QString DebugSession::translateUserCommand(const QString &cmd) const {
-	QString trimmed = cmd.trimmed();
-	if (trimmed.isEmpty())
-		return trimmed;
-
-	if (trimmed.startsWith('-'))
-		return trimmed;
-
-	// Small logic command map -> MI (valid for LLDB-MI and GDB-MI)
-	if (trimmed == "run" || trimmed == "r")
-		return "-exec-run";
-	if (trimmed == "cont" || trimmed == "continue" || trimmed == "c")
-		return "-exec-continue";
-	if (trimmed == "next" || trimmed == "n")
-		return "-exec-next";
-	if (trimmed == "step" || trimmed == "s")
-		return "-exec-step";
-	if (trimmed == "finish")
-		return "-exec-finish";
-	if (trimmed == "quit" || trimmed == "q")
-		return "-gdb-exit";
-
-	return trimmed;
-}
-
-QList<StackFrame> DebugSession::stackFrames() const { return m_stack; }
-
-
-QList<VarNode *> DebugSession::complexVariables() const { return m_cvars; }
-
-QList<BreakpointInfo> DebugSession::breakpoints() const { return m_bps; }
-
-QString DebugSession::currentFile() const { return m_currentFile; }
-
-int DebugSession::currentLine() const { return m_currentLine; }
-
-void DebugSession::sendMiDirect(const QString &cmd) {
-	qDebug().noquote() << "[MI SEND]" << cmd;
-	m_proc.write((cmd + "\n").toUtf8());
-}
-
-void DebugSession::enqueueCommand(const MiCommand &c) {
-	m_queue.enqueue(c);
-	processQueue();
-}
-
-void DebugSession::processQueue() {
-	if (m_busy || m_queue.isEmpty())
-		return;
-
-	m_busy = true;
-	m_currentCmd = m_queue.dequeue();
-	sendMiDirect(m_currentCmd.text);
-}
-
-void DebugSession::onReadyReadStdout() {
-	QByteArray raw = m_proc.readAllStandardOutput();
-	qDebug().noquote() << "[LLDB-MI]" << raw;
-
-	m_buffer += raw;
-
-	QList<QByteArray> rawLines = m_buffer.split('\n');
-	m_buffer.clear();
-
-	for (const QByteArray &ba : rawLines) {
-		QString line = QString::fromUtf8(ba).trimmed();
-		if (!line.isEmpty())
-			parseMiLine(line);
-	}
-}
-
-void DebugSession::onProcessFinished(int exitCode,
-                                     QProcess::ExitStatus status) {
-	emit debuggerExited(exitCode, status);
-}
-
-// ============================================================================
-// Parsing MI
-// ============================================================================
-void DebugSession::parseMiLine(const QString &line) {
-	// All'inizio di parseMiLine()
-	QString l = line.trimmed();
-
-	// prompt MI (gdb) — ignora completamente
-	if (l == "(gdb)" || l == "(lldb)" || l == ">")
-		return;
-
-	// MI console-stream-output
-	if (line.startsWith("~\"")) {
-		QString text = line.mid(2);
-		if (text.endsWith("\""))
-			text.chop(1);
-		emit outputReceived(decodeCString(text));
-		return;
-	}
-
-	// Target program stdout
-	if (line.startsWith("@\"")) {
-		QString text = line.mid(2);
-		if (text.endsWith("\""))
-			text.chop(1);
-		emit outputReceived(decodeCString(text));
-		return;
-	}
-
-	// Log stream
-	if (line.startsWith("&\"")) {
-		QString text = line.mid(2);
-		if (text.endsWith("\""))
-			text.chop(1);
-		emit outputReceived(decodeCString(text));
-		return;
-	}
-
-	// NEW — generic raw debugger output (prompt, warnings, anything not MI)
-	// This FIXES the missing "(gdb)" output in UI
-	if (!line.startsWith("^") && !line.startsWith("*") &&
-	    !line.startsWith("=")) {
-		emit outputReceived(line);
-		return;
-	}
-
-	// End of MI command
-	if (line.startsWith("^done") || line.startsWith("^error")) {
-		m_busy = false;
-		if (m_currentCmd.callback)
-			m_currentCmd.callback(line);
-		processQueue();
-	}
-	// --- eventi async su breakpoint (LLDB-MI / GDB-MI) ---
-	if (line.startsWith("=breakpoint-created") ||
-	    line.startsWith("=breakpoint-modified")) {
-		handleBreakpointEvent(line);
-		return;
-	}
-
-	if (line.startsWith("=breakpoint-deleted")) {
-		handleBreakpointDeleted(line);
-		return;
-	}
-
-	// Async / specific MI responses
-	if (line.startsWith("*stopped"))
-		handleStopped(line);
-	else if (line.startsWith("^done,stack=") ||
-	         line.startsWith("^done,stack-frames="))
-		handleStackList(line);
-	else if (line.startsWith("^done,variables="))
-		handleVarList(line);
-	else if (line.startsWith("^done,frame="))
-		handleFrameInfo(line);
-	else if (line.startsWith("^done,BreakpointTable="))
-		handleBreakpointList(line);
-
-
-}
-
-// ============================================================================
-// Gestione stopped / fetchData
-// ============================================================================
-void DebugSession::handleStopped(const QString &line) {
-	m_pendingExec = false;
-
-	if (m_busy) {
-		m_busy = false;
-		if (m_currentCmd.callback)
-			m_currentCmd.callback(line);
-		processQueue();
-	}
-
-	if (line.contains("fullname=\""))
-		m_currentFile = line.section("fullname=\"", 1, 1).section("\"", 0, 0);
-	else if (line.contains("file=\""))
-		m_currentFile = line.section("file=\"", 1, 1).section("\"", 0, 0);
-
-	if (line.contains("line=\""))
-		m_currentLine =
-		    line.section("line=\"", 1, 1).section("\"", 0, 0).toInt();
-	m_stepCounter++;
-	emit sessionUpdated();
-	if (m_backend == Backend::GDB_MI) {
-		enqueueCommand({"-break-list", nullptr, false});
-	}
-	fetchData();
-}
-
-void DebugSession::fetchData() {
-	m_pendingStack = true;
-	m_pendingVars = true;
-
-	enqueueCommand({"-stack-list-frames", nullptr, false});
-	enqueueCommand({"-stack-info-frame", nullptr, false});
-	enqueueCommand({"-stack-list-variables --all-values", nullptr, false});
-}
-
-void DebugSession::requestRefresh() { fetchData(); }
-
-// ============================================================================
-// Stack / vars / frame / breakpoints
-// ============================================================================
-void DebugSession::handleStackList(const QString &line) {
-	QList<StackFrame> frames;
-	QString cpy = line;
-	cpy.remove("^done,stack=");
-	cpy.remove("^done,stack-frames=");
-
-	QStringList entries = cpy.split("},{");
-	for (QString e : entries) {
-		StackFrame f;
-		if (e.contains("level=\""))
-			f.level = e.section("level=\"", 1, 1).section("\"", 0, 0);
-		if (e.contains("file=\""))
-			f.file = e.section("file=\"", 1, 1).section("\"", 0, 0);
-		if (e.contains("line=\""))
-			f.line = e.section("line=\"", 1, 1).section("\"", 0, 0).toInt();
-		if (e.contains("func=\""))
-			f.function = e.section("func=\"", 1, 1).section("\"", 0, 0);
-		frames.append(f);
-	}
-
-	m_stack = frames;
-	m_pendingStack = false;
-
-	for (const StackFrame &f : frames) {
-		if (f.level == "0") {
-			m_currentFile = f.file;
-			m_currentLine = f.line;
-			break;
-		}
-	}
-}
-
-void DebugSession::handleVarList(const QString &line)
-{
-    QString cpy = line;
-    cpy.remove("^done,variables=");
-
-    QStringList entries = cpy.split("},{");
-
-    qDeleteAll(m_cvars);
-    m_cvars.clear();
-
-    constexpr int INLINE_MAX_DEPTH = 5;
-	m_pendingVarAddr = 0;
-
-    for (QString e : entries) {
-        auto *node = new VarNode;
-
-        if (e.contains("name=\""))
-            node->name = e.section("name=\"", 1, 1).section("\"", 0, 0);
-        if (e.contains("value=\""))
-            node->value = e.section("value=\"", 1, 1).section("\"", 0, 0);
-        if (e.contains("type=\""))
-            node->type = e.section("type=\"", 1, 1).section("\"", 0, 0);
-
-        // default: espandibile se pointer
-        node->hasChildren = looksLikePointer(node->value);
-
-        // placeholder temporaneo
-        node->varId = node->name;
-
-        // inline struct expansion
-        if (looksLikeStruct(node->value)) {
-            expandInlineStructIntoChildren(node, node->value, 0, INLINE_MAX_DEPTH);
-        }
-
-        m_cvars.append(node);
-
-
-        const QString expr = "&" + node->name;
-        m_pendingVarAddr++;
-
-        enqueueCommand({
-            QString("-data-evaluate-expression %1").arg(expr),
-			[this, node](const QString &replyLine) {
-                QRegularExpression re(R"(value=\"([^\"]+)\")");
-                QRegularExpressionMatch m = re.match(replyLine);
-                if (m.hasMatch()) {
-                    node->addr = normalizeAddress(m.captured(1));
-                }
-
-                m_pendingVarAddr--;
-
-                if (m_pendingVarAddr == 0) {
-                    emit complexVariablesUpdated(m_cvars);
-                	tryFinalizeSnapshot();
-                }
-
-            },
-            false
+    enqueueCommand(QString("-data-evaluate-expression \"%1\"").arg(expression),
+        [this](const QString& reply) {
+            emit debuggerOutput(reply);
         });
-    }
-
-    m_pendingVars = false;
-
-    if (entries.isEmpty() || m_cvars.isEmpty())
-        emit complexVariablesUpdated(m_cvars);
 }
 
-
-
-void DebugSession::handleFrameInfo(const QString &line) {
-	QString cpy = line;
-	cpy.remove("^done,frame=");
-
-	if (cpy.contains("fullname=\""))
-		m_currentFile = cpy.section("fullname=\"", 1, 1).section("\"", 0, 0);
-	else if (cpy.contains("file=\""))
-		m_currentFile = cpy.section("file=\"", 1, 1).section("\"", 0, 0);
-
-	if (cpy.contains("line=\""))
-		m_currentLine =
-		    cpy.section("line=\"", 1, 1).section("\"", 0, 0).toInt();
-}
-
-void DebugSession::handleBreakpointList(const QString &line) {
-	QList<BreakpointInfo> list;
-
-	QRegularExpression re(R"(body=\[(.*)\]\}$)");
-	QRegularExpressionMatch m = re.match(line);
-	if (!m.hasMatch()) {
-		qDebug() << "[DBG] breakpointList: NO BODY";
-		return;
-	}
-	QString body = m.captured(1);
-
-	QStringList entries = body.split("},bkpt={");
-	for (QString e : entries) {
-
-		if (e.startsWith("bkpt={"))
-			e.remove(0, 6);
-		if (e.endsWith("}"))
-			e.chop(1);
-
-		BreakpointInfo b;
-		if (e.contains("number=\""))
-			b.number = e.section("number=\"", 1, 1).section("\"", 0, 0).toInt();
-		if (e.contains("fullname=\""))
-			b.file = e.section("fullname=\"", 1, 1).section("\"", 0, 0);
-		else if (e.contains("file=\""))
-			b.file = e.section("file=\"", 1, 1).section("\"", 0, 0);
-
-		if (e.contains("line=\""))
-			b.line = e.section("line=\"", 1, 1).section("\"", 0, 0).toInt();
-
-		b.enabled = !e.contains("enabled=\"n\"");
-
-		if (b.number > 0)
-			list.append(b);
-	}
-
-	m_bps = list;
-	qDebug() << "[DBG] breakpointList =>" << m_bps.size();
-	emit breakpointsChanged(m_bps);
-}
-
-void DebugSession::handleBreakpointEvent(const QString &line) {
-	// =breakpoint-created,bkpt={number="2",type="breakpoint",disp="keep",enabled="y",...,file="prova.c",fullname="...",line="9",...}
-	if (m_backend == Backend::GDB_MI) {
-		return;
-	}
-
-	int pos = line.indexOf("bkpt=");
-	if (pos < 0)
-		return;
-
-	QString e = line.mid(pos);
-	if (e.startsWith("bkpt="))
-		e.remove(0, 5);
-	e = e.trimmed();
-	if (e.startsWith("{"))
-		e = e.mid(1);
-	if (e.endsWith("}"))
-		e.chop(1);
-
-	BreakpointInfo b;
-
-	if (e.contains("number=\""))
-		b.number = e.section("number=\"", 1, 1).section("\"", 0, 0).toInt();
-	if (e.contains("file=\""))
-		b.file = e.section("file=\"", 1, 1).section("\"", 0, 0);
-	if (e.contains("fullname=\""))
-		b.file = e.section("fullname=\"", 1, 1).section("\"", 0, 0);
-	if (e.contains("line=\""))
-		b.line = e.section("line=\"", 1, 1).section("\"", 0, 0).toInt();
-	b.enabled = !e.contains("enabled=\"n\"");
-
-	if (b.number <= 0 || b.file.isEmpty() || b.line <= 0) {
-		qDebug() << "[DBG] handleBreakpointEvent: ignoring invalid bp from event:" << e;
-		return;
-	}
-
-	bool updated = false;
-	for (int i = 0; i < m_bps.size(); ++i) {
-		if (m_bps[i].number == b.number) {
-			m_bps[i] = b;
-			updated = true;
-			break;
-		}
-	}
-	if (!updated)
-		m_bps.append(b);
-
-	qDebug() << "[DBG] handleBreakpointEvent -> breakpoints:" << m_bps.size();
-	emit breakpointsChanged(m_bps);
-}
-
-void DebugSession::handleBreakpointDeleted(const QString &line) {
-	// =breakpoint-deleted,id="2"
-	int num = -1;
-
-	if (line.contains("id=\""))
-		num = line.section("id=\"", 1, 1).section("\"", 0, 0).toInt();
-	else if (line.contains("number=\""))
-		num = line.section("number=\"", 1, 1).section("\"", 0, 0).toInt();
-
-	if (num < 0)
-		return;
-
-	for (int i = 0; i < m_bps.size();) {
-		if (m_bps[i].number == num)
-			m_bps.removeAt(i);
-		else
-			++i;
-	}
-
-	emit breakpointsChanged(m_bps);
-}
-
-void DebugSession::fetchComplexVars(VarNode* node)
+void DebuggerSession::sendRawCommand(const QString& cmd)
 {
-    if (!node || node->varId.isEmpty())
-        return;
-
-    // 1) create var object
-    enqueueCommand({
-        QString("-var-create %1 * %2")
-            .arg(node->name)
-            .arg(node->varId),
-        [this, node](const QString&) {
-
-            // 2) list children
-            enqueueCommand({
-                QString("-var-list-children --all-values %1")
-                    .arg(node->varId),
-                [this](const QString& line) {
-                    parseComplexVarTree(line);
-                },
-                false
-            });
-        },
-        false
-    });
+    enqueueCommand(cmd,
+        [this](const QString& reply) {
+            emit debuggerOutput(reply);
+        });
 }
 
+// ============================================================================
+// Accessors
+// ============================================================================
 
-void DebugSession::parseComplexVarTree(const QString &line) {
-	QString payload = line;
-	payload.remove("^done,children=");
+const QVector<StackFrame>& DebuggerSession::stackFrames() const { return m_stackFrames; }
+const std::vector<std::unique_ptr<DebugVariable>>& DebuggerSession::variables() const { return m_variables; }
+const QVector<ExecutionSnapshot>& DebuggerSession::executionHistory() const { return m_executionHistory; }
 
-	QList<VarNode *> nodes = parseMiChildren(payload);
-
-	// quando arriva la prima risposta di un var-create,
-	// nodes contiene UNA sola entry con identificatore es: obj_i
-	if (nodes.isEmpty())
-		return;
-
-	// estrai id della variabile se presente
-	QString id;
-	if (line.contains("id=\""))
-		id = line.section("id=\"", 1, 1).section("\"", 0, 0);
-
-	// caso: primo livello => nuova radice
-	if (id.isEmpty()) {
-		for (VarNode *n : nodes)
-			m_cvars.append(n);
-	} else {
-		// caso: figli = attacca ricorsivamente
-		attachToTree(m_cvars, id, nodes);
-	}
-
-
-	emit complexVariablesUpdated(m_cvars);
+const ExecutionSnapshot* DebuggerSession::snapshotAt(int index) const
+{
+    if (index < 0 || index >= m_executionHistory.size())
+        return nullptr;
+    return &m_executionHistory[index];
 }
 
+const QSet<QString>& DebuggerSession::changedPaths() const { return m_changedPaths; }
 
-QString DebugSession::evaluateExpression(const QString &expr) {
-	if (expr.isEmpty())
-		return {};
-
-	QString cmd = QString("-data-evaluate-expression \"%1\"").arg(expr);
-	enqueueCommand({cmd, nullptr, true});
-
-	return {};
-}

@@ -28,796 +28,554 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
 #include "GraphicalVariablesView.h"
-#include "DebugSession.h"
 
-#include <cmath>
 #include <QPainter>
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QGraphicsSceneMouseEvent>
-
+#include <QVBoxLayout>
+#include <QToolButton>
+#include <cmath>
 
 
 // =======================================================
-// Helpers
+// Helpers / layout constants (come versione vecchia)
 // =======================================================
-
 static constexpr int SocketRadius = 4;
 static constexpr int SocketOffset = -6;
-static constexpr int IndentStep = 14;
+static constexpr int IndentStep   = 14;
 
 
-// =======================================================
-// Internal visible-row structure
-// =======================================================
+// ------------------------------------------------------------
+// helpers
+// ------------------------------------------------------------
 
-struct VisibleRow
-{
-    VarNode* node = nullptr;
-    int indent = 0;
+struct VisibleRow {
+	DebugVariable* node;
+	int indent;
 };
 
-
-static void buildRowsRecursive(
-    VarNode* node,
-    int indent,
-    QHash<VarNode*, bool>& expanded,
-    QVector<VisibleRow>& out)
+static void buildRows(DebugVariable* n,
+					  int indent,
+					  QHash<DebugVariable*, bool>& expanded,
+					  QVector<VisibleRow>& out)
 {
-    out.push_back({ node, indent });
+	out.push_back({n, indent});
 
-    if (!node->hasChildren)
-        return;
+	if (!n->hasChildren)
+		return;
+	if (!expanded.value(n, false))
+		return;
 
-    if (!expanded.value(node, false))
-        return;
-
-    for (VarNode* c : node->children)
-        buildRowsRecursive(c, indent + 1, expanded, out);
+	for (auto& c : n->children)
+		buildRows(c.get(), indent + 1, expanded, out);
 }
 
-static void collectPointerChildren(
-    VarNode* parent,
-    QVector<VarNode*>& out)
+static void drawTriangle(QPainter* p,
+						 QPointF c,
+						 bool expanded)
 {
-    for (VarNode* c : parent->children) {
+	QPolygonF poly;
 
-        if (c->isPointer)
-            out.push_back(c);
+	if (expanded) {
+		// ▼
+		poly << QPointF(c.x() - 4, c.y() - 2)
+			 << QPointF(c.x() + 4, c.y() - 2)
+			 << QPointF(c.x(),     c.y() + 4);
+	} else {
+		// ▶
+		poly << QPointF(c.x() - 2, c.y() - 4)
+			 << QPointF(c.x() - 2, c.y() + 4)
+			 << QPointF(c.x() + 4, c.y());
+	}
 
-        if (c->hasChildren)
-            collectPointerChildren(c, out);
-    }
+	p->setBrush(Qt::white);
+	p->setPen(Qt::NoPen);
+	p->drawPolygon(poly);
 }
 
-
-static void buildPointerEdges(
-    const QHash<VarNode*, GraphicalNodeItem*>& nodeMap,
-    const QHash<quintptr, GraphicalNodeItem*>& addrMap,
-    QGraphicsScene* scene)
-{
-    for (auto it = nodeMap.begin(); it != nodeMap.end(); ++it) {
-
-        VarNode* rootNode = it.key();
-        GraphicalNodeItem* rootItem = it.value();
-
-        QVector<VarNode*> pointerFields;
-        collectPointerChildren(rootNode, pointerFields);
-
-        for (VarNode* field : pointerFields) {
-
-            bool ok = false;
-            quintptr ptr =
-                field->value.toULongLong(&ok, 16);
-
-            if (!ok || ptr == 0)
-                continue;
-
-            if (!addrMap.contains(ptr))
-                continue;
-
-            GraphicalNodeItem* dstItem = addrMap[ptr];
-
-            auto* edge =
-                new GraphicalEdgeItem(rootItem, dstItem);
-
-            scene->addItem(edge);
-
-            rootItem->addEdge(edge);
-            dstItem->addEdge(edge);
-
-            edge->updatePosition();
-        }
-    }
-}
-
-
-
-// =======================================================
+// ------------------------------------------------------------
 // GraphicalNodeItem
-// =======================================================
+// ------------------------------------------------------------
 
-GraphicalNodeItem::GraphicalNodeItem(VarNode* node)
-    : m_node(node)
+GraphicalNodeItem::GraphicalNodeItem(DebugVariable* node)
+	: m_node(node)
 {
-    setFlag(ItemIsSelectable);
-    setFlag(ItemIsMovable);
-    setFlag(ItemSendsGeometryChanges);
-
-    recalculateWidth();
+	setFlag(ItemIsMovable);
+	setFlag(ItemSendsGeometryChanges);
+	recalculateWidth();
 }
-
-VarNode* GraphicalNodeItem::node() const
-{
-    return m_node;
-}
-
 
 QRectF GraphicalNodeItem::boundingRect() const
 {
-    QVector<VisibleRow> rows;
+	QVector<VisibleRow> rows;
+	for (auto& c : m_node->children)
+		buildRows(c.get(), 0,
+				  const_cast<QHash<DebugVariable*, bool>&>(m_expanded),
+				  rows);
 
-    for (VarNode* c : m_node->children)
-        buildRowsRecursive(c, 0,
-                           const_cast<QHash<VarNode*, bool>&>(m_expanded),
-                           rows);
-
-    int rowCount = rows.isEmpty() ? 1 : rows.size();
-
-    int height =
-        HeaderHeight +
-        rowCount * RowHeight;
-
-    return QRectF(
-        -8,
-        0,
-        m_width + 16,
-        height
-    );
+	int h = HeaderHeight + qMax(1, rows.size()) * RowHeight;
+	return QRectF(-8, 0, m_width + 16, h);
 }
-
-
-
-// -------------------------------------------------------
 
 void GraphicalNodeItem::paint(QPainter* p,
-                              const QStyleOptionGraphicsItem*,
-                              QWidget*)
+							  const QStyleOptionGraphicsItem*,
+							  QWidget*)
 {
-    p->setRenderHint(QPainter::Antialiasing);
-    const QRectF r = boundingRect().adjusted(8, 0, -8, 0);
-    drawHeader(p, r);
-    drawSource(p);
+	p->setRenderHint(QPainter::Antialiasing);
+	QRectF r = boundingRect().adjusted(8, 0, -8, 0);
+	drawHeader(p, r);
+	drawSource(p);
 }
 
+void GraphicalVariablesView::drawBackground(QPainter* p,
+											const QRectF& rect)
+{
+	const int small = 20;
+	const int big   = 100;
 
-// -------------------------------------------------------
+	QPen thin(QColor(0, 0, 0, 25));
+	QPen thick(QColor(0, 0, 0, 45));
+
+	const int l = int(std::floor(rect.left()));
+	const int r = int(std::ceil(rect.right()));
+	const int t = int(std::floor(rect.top()));
+	const int b = int(std::ceil(rect.bottom()));
+
+	p->setPen(thin);
+	for (int x = l - l % small; x <= r; x += small)
+		p->drawLine(x, t, x, b);
+	for (int y = t - t % small; y <= b; y += small)
+		p->drawLine(l, y, r, y);
+
+	p->setPen(thick);
+	for (int x = l - l % big; x <= r; x += big)
+		p->drawLine(x, t, x, b);
+	for (int y = t - t % big; y <= b; y += big)
+		p->drawLine(l, y, r, y);
+}
+
 
 void GraphicalNodeItem::drawHeader(QPainter* p, const QRectF& r)
 {
-    const qreal radius = 10.0;
+	QRectF h(r.left(), r.top(), r.width(), HeaderHeight);
+	p->setBrush(QColor(80, 80, 80));
+	p->setPen(Qt::NoPen);
+	p->drawRoundedRect(h, 6, 6);
 
-    QRectF header(
-        r.left(),
-        r.top(),
-        r.width(),
-        HeaderHeight
-    );
+	p->setPen(Qt::white);
+	QString t = m_node->address.isEmpty()
+		? m_node->name
+		: QString("%1 : %2").arg(m_node->name, m_node->address);
 
-    QColor base = m_node->parent == nullptr
-        ? QColor(150, 110, 50)
-        : QColor(80, 80, 80);
-
-    QLinearGradient grad(
-        header.topLeft(),
-        header.bottomLeft());
-
-    grad.setColorAt(0.0, base.lighter(120));
-    grad.setColorAt(1.0, base.darker(120));
-
-    QPainterPath path;
-
-    path.moveTo(header.left(), header.bottom());
-    path.lineTo(header.left(), header.top() + radius);
-
-    path.quadTo(
-        header.topLeft(),
-        header.topLeft() + QPointF(radius, 0)
-    );
-
-    path.lineTo(header.right() - radius, header.top());
-
-    path.quadTo(
-        header.topRight(),
-        header.topRight() + QPointF(0, radius)
-    );
-
-    path.lineTo(header.right(), header.bottom());
-    path.closeSubpath();
-
-    p->setPen(Qt::NoPen);
-    p->setBrush(grad);
-    p->drawPath(path);
-
-    p->setPen(Qt::white);
-    p->drawText(
-        header.adjusted(12, 0, -12, 0),
-        Qt::AlignVCenter | Qt::AlignLeft,
-        m_node->addr.isEmpty()
-            ? m_node->name
-            : QString("%1 : %2").arg(m_node->name, m_node->addr)
-    );
+	p->drawText(h.adjusted(10, 0, -10, 0),
+				Qt::AlignVCenter | Qt::AlignLeft, t);
 }
-
-// -------------------------------------------------------
-
-static void drawTriangle(QPainter* p,
-                         QPointF c,
-                         bool expanded)
-{
-    QPolygonF poly;
-
-    if (expanded) {
-        // ▼
-        poly << QPointF(c.x() - 4, c.y() - 2)
-             << QPointF(c.x() + 4, c.y() - 2)
-             << QPointF(c.x(),     c.y() + 4);
-    } else {
-        // ▶
-        poly << QPointF(c.x() - 2, c.y() - 4)
-             << QPointF(c.x() - 2, c.y() + 4)
-             << QPointF(c.x() + 4, c.y());
-    }
-
-    p->setBrush(Qt::white);
-    p->setPen(Qt::NoPen);
-    p->drawPolygon(poly);
-}
-
-
-// -------------------------------------------------------
 
 void GraphicalNodeItem::drawSource(QPainter* p)
 {
-    QVector<VisibleRow> rows;
+	QVector<VisibleRow> rows;
 
-    for (VarNode* c : m_node->children)
-        buildRowsRecursive(c, 0, m_expanded, rows);
+	for (auto& c : m_node->children)
+		buildRows(c.get(), 0, m_expanded, rows);
 
-    int y = HeaderHeight;
-    if (rows.size() == 0) {
-        VarNode* n = m_node;
+	int y = HeaderHeight;
 
-        QRectF rowRect(0, HeaderHeight, m_width, RowHeight);
+	// ===== CASO 1: NESSUN FIGLIO → BODY BASE (COME PRIMA) =====
+	if (rows.isEmpty()) {
+		QRectF rowRect(0, y, m_width, RowHeight);
 
-        p->setPen(Qt::NoPen);
-        p->setBrush(QColor(45, 45, 45));
-        p->drawRect(rowRect);
+		p->setPen(Qt::NoPen);
+		p->setBrush(QColor(45, 45, 45));
+		p->drawRect(rowRect);
 
-        p->setPen(Qt::white);
+		p->setPen(Qt::white);
 
-        QString text = QString("%1").arg( n->value);
-        p->drawText(
-            rowRect.adjusted(12, 0, -12, 0),
-            Qt::AlignVCenter | Qt::AlignLeft,
-            text
-        );
+		// NOTA: nella versione vecchia mostravi SOLO il valore
+		p->drawText(
+			rowRect.adjusted(12, 0, -12, 0),
+			Qt::AlignVCenter | Qt::AlignLeft,
+			m_node->value
+		);
+		return;
+	}
 
-        return;
-    }
+	// ===== CASO 2: STRUTTURA ESPANSA / COLLASSATA =====
+	for (int i = 0; i < rows.size(); ++i) {
 
-    for (int i = 0; i < rows.size(); ++i) {
+		const VisibleRow& r = rows[i];
+		DebugVariable* n = r.node;
 
-        const VisibleRow& r = rows[i];
-        VarNode* n = r.node;
+		QRectF rowRect(0, y, m_width, RowHeight);
 
-        QRectF rowRect(0, y, m_width, RowHeight);
+		p->setPen(Qt::NoPen);
+		p->setBrush(QColor(45, 45, 45));
+		p->drawRect(rowRect);
 
-        p->setPen(Qt::NoPen);
-        p->setBrush(QColor(45, 45, 45));
-        p->drawRect(rowRect);
+		int x = LeftPadding + r.indent * IndentStep + 5;
 
-        int x = LeftPadding + r.indent * IndentStep + 5;
+		// triangolo expand (IDENTICO A PRIMA)
+		if (n->hasChildren) {
+			drawTriangle(
+				p,
+				QPointF(x - 10, y + RowHeight / 2),
+				m_expanded.value(n, false)
+			);
+		}
 
-        // triangle
-        if (n->hasChildren) {
-            drawTriangle(
-                p,
-                QPointF(x - 10, y + RowHeight / 2),
-                m_expanded.value(n, false));
-        }
+		p->setPen(Qt::white);
 
-        p->setPen(Qt::white);
+		QString text;
 
-        QString text;
+		if (!n->hasChildren) {
+			text = QString("%1 = %2")
+					   .arg(n->name, n->value);
+		} else {
+			if (m_expanded.value(n, false))
+				text = n->name;
+			else
+				text = QString("%1 = []").arg(n->name);
+		}
 
-        if (!n->hasChildren) {
-            text = QString("%1 = %2")
-                       .arg(n->name, n->value);
-        } else {
-            if (m_expanded.value(n, false))
-                text = n->name;
-            else
-                text = QString("%1 = []").arg(n->name);
-        }
+		p->drawText(x, y + 16, text);
 
-        p->drawText(x, y + 16, text);
-
-        y += RowHeight;
-    }
+		y += RowHeight;
+	}
 }
 
 
-// -------------------------------------------------------
 
 void GraphicalNodeItem::mousePressEvent(QGraphicsSceneMouseEvent* e)
 {
-    QPointF p = e->pos();
+	if (e->pos().y() < HeaderHeight)
+		return QGraphicsItem::mousePressEvent(e);
 
-    if (p.y() < HeaderHeight)
-        return QGraphicsItem::mousePressEvent(e);
+	QVector<VisibleRow> rows;
+	for (auto& c : m_node->children)
+		buildRows(c.get(), 0, m_expanded, rows);
 
-    QVector<VisibleRow> rows;
-
-    for (VarNode* c : m_node->children)
-        buildRowsRecursive(c, 0, m_expanded, rows);
-
-    int row =
-        int((p.y() - HeaderHeight) / RowHeight);
-
-    if (row < 0 || row >= rows.size())
-        return;
-
-    const VisibleRow& r = rows[row];
-
-    int x = LeftPadding + r.indent * IndentStep;
-
-    QRect triangleRect(
-        x - 14,
-        HeaderHeight + row * RowHeight,
-        12,
-        RowHeight
-    );
-
-    if (triangleRect.contains(p.toPoint()) &&
-        r.node->hasChildren)
-    {
-        m_expanded[r.node] =
-            !m_expanded.value(r.node, false);
-
-        prepareGeometryChange();
-        update();
-        return;
-    }
-
-    QGraphicsItem::mousePressEvent(e);
+	int idx = int((e->pos().y() - HeaderHeight) / RowHeight);
+	if (idx >= 0 && idx < rows.size()) {
+		DebugVariable* n = rows[idx].node;
+		if (n->hasChildren) {
+			m_expanded[n] = !m_expanded.value(n, false);
+			prepareGeometryChange();
+			update();
+		}
+	}
 }
-
-
-// -------------------------------------------------------
 
 void GraphicalNodeItem::recalculateWidth()
 {
-    QFontMetrics fm{QFont()};
-
-
-    QVector<VisibleRow> rows;
-    for (VarNode* c : m_node->children)
-        buildRowsRecursive(c, 0, m_expanded, rows);
-
-
-    QString title =
-        m_node->addr.isEmpty()
-            ? m_node->name
-            : QString("%1 : %2").arg(m_node->name, m_node->addr);
-
-    int maxWidth = fm.horizontalAdvance(title);
-
-
-    for (const VisibleRow& r : rows) {
-        VarNode* n = r.node;
-
-        QString text;
-        if (!n->hasChildren) {
-            text = QString("%1 = %2").arg(n->name, n->value);
-        } else {
-            text = m_expanded.value(n, false) ? n->name
-                                              : QString("%1 = []").arg(n->name);
-        }
-
-        const int indentPx = r.indent * IndentStep;
-
-
-        const int w =
-            LeftPadding + indentPx + fm.horizontalAdvance(text);
-
-        maxWidth = qMax(maxWidth, w);
-    }
-
-
-    maxWidth += 40;
-
-    if (maxWidth != m_width) {
-        prepareGeometryChange();
-        m_width = maxWidth;
-    }
+	QFontMetrics fm{QFont()};
+	int w = fm.horizontalAdvance(m_node->name) + 40;
+	m_width = qMax(m_width, w);
 }
-
 
 void GraphicalNodeItem::addEdge(GraphicalEdgeItem* e)
 {
-    m_edges << e;
+	m_edges << e;
 }
 
 QPointF GraphicalNodeItem::inputPort() const
 {
-    return mapToScene(QPointF(
-        -SocketOffset,
-        HeaderHeight / 2
-    ));
+	return mapToScene(QPointF(0, HeaderHeight / 2));
 }
 
-QPointF GraphicalNodeItem::outputPortFor(VarNode* child) const
+QPointF GraphicalNodeItem::outputPortFor(DebugVariable* child) const
 {
-    int index = m_node->children.indexOf(child);
+	if (!child)
+		return mapToScene(QPointF(m_width, HeaderHeight / 2));
 
-    if (index < 0)
-        return mapToScene(QPointF(
-            m_width + SocketOffset,
-            HeaderHeight / 2
-        ));
+	QVector<VisibleRow> rows;
+	for (auto& c : m_node->children)
+		buildRows(c.get(), 0,
+				  const_cast<QHash<DebugVariable*, bool>&>(m_expanded),
+				  rows);
 
-    qreal y =
-        HeaderHeight +
-        index * RowHeight +
-        RowHeight / 2;
+	for (int i = 0; i < rows.size(); ++i) {
+		if (rows[i].node == child) {
+			qreal y = HeaderHeight + i * RowHeight + RowHeight / 2;
+			return mapToScene(QPointF(m_width, y));
+		}
+	}
 
-    return mapToScene(QPointF(
-        m_width + SocketOffset,
-        y
-    ));
+	return mapToScene(QPointF(m_width, HeaderHeight / 2));
 }
 
-// =======================================================
+QVariant GraphicalNodeItem::itemChange(GraphicsItemChange c,
+									   const QVariant& v)
+{
+	if (c == ItemPositionHasChanged)
+		for (auto* e : m_edges)
+			e->updatePosition();
+	return QGraphicsItem::itemChange(c, v);
+}
+
+// ------------------------------------------------------------
 // GraphicalEdgeItem
-// =======================================================
+// ------------------------------------------------------------
 
-GraphicalEdgeItem::GraphicalEdgeItem(GraphicalNodeItem* from,
-                                     GraphicalNodeItem* to)
-    : m_from(from)
-    , m_to(to)
+GraphicalEdgeItem::GraphicalEdgeItem(GraphicalNodeItem* f,
+									 GraphicalNodeItem* t,
+									 DebugVariable* child)
+	: m_from(f)
+	, m_to(t)
+	, m_fromChild(child)
 {
-    setZValue(-1);
+	setZValue(-1);
+	QPen pen(QColor(180,180,180));
+	pen.setWidthF(2);
+	setPen(pen);
 
-    QPen pen(QColor(180, 180, 180));
-    pen.setWidthF(2.0);
-    pen.setCapStyle(Qt::RoundCap);
-    pen.setJoinStyle(Qt::RoundJoin);
-
-    setPen(pen);
-
-    for (int i = 0; i < SEGMENTS; ++i) {
-        m_pos[i] = QPointF();
-        m_vel[i] = QPointF();
-    }
-
-    QObject::connect(&m_timer, &QTimer::timeout,
-        [this]() { tick(); }
-    );
+	// ✔ CORRETTO: GraphicalEdgeItem NON è QObject
+	QObject::connect(&m_timer, &QTimer::timeout,
+			[this]() { tick(); });
 }
 
 void GraphicalEdgeItem::updatePosition()
 {
-    QPointF start = m_from->outputPortFor(nullptr);
-    QPointF end = m_to->inputPort();
-
-    m_pos[0] = start;
-    m_targetEnd = end;
-
-    if (m_pos[SEGMENTS -1].isNull()) {
-        for (int i = 0; i < SEGMENTS; ++i) {
-            m_pos[i] = start;
-        }
-    }
-
-    if (!m_timer.isActive()) {
-        m_timer.start(5);
-    }
+	m_pos[0] = m_from->outputPortFor(m_fromChild);
+	m_targetEnd = m_to->inputPort();
+	if (!m_timer.isActive())
+		m_timer.start(16);
 }
 
- void GraphicalEdgeItem::tick()
- {
-    constexpr qreal k = 0.5;
-    constexpr qreal damping = 0.5;
+void GraphicalEdgeItem::tick()
+{
+	m_pos[SEGMENTS - 1] = m_targetEnd;
+	QPainterPath p;
+	p.moveTo(m_pos[0]);
+	p.lineTo(m_pos[SEGMENTS - 1]);
+	setPath(p);
+	m_timer.stop();
+}
 
-
-    m_pos[0] = m_from->outputPortFor(nullptr);
-
-    for (int i = 1; i < SEGMENTS - 1; ++i) {
-        QPointF f =
-            (m_pos[i-1] - m_pos[i]) * k +
-            (m_pos[i+1] - m_pos[i]) * k;
-
-        m_vel[i] += f;
-        m_vel[i] *= damping;
-    }
-
-
-    QPointF endForce = (m_targetEnd - m_pos[SEGMENTS-1]) * k;
-    m_vel[SEGMENTS-1] += endForce;
-    m_vel[SEGMENTS-1] *= damping;
-
-
-    for (int i = 1; i < SEGMENTS; ++i)
-        m_pos[i] += m_vel[i];
-
-
-    QPainterPath p;
-    p.moveTo(m_pos[0]);
-    for (int i = 1; i < SEGMENTS; ++i)
-        p.lineTo(m_pos[i]);
-
-    setPath(p);
-
-    bool moving = false;
-    for (int i = 0; i < SEGMENTS; ++i)
-        if (m_vel[i].manhattanLength() > 0.1)
-            moving = true;
-
-    if (!moving)
-        m_timer.stop();
- }
-
-
-
-
-// =======================================================
+// ------------------------------------------------------------
 // GraphicalVariablesView
-// =======================================================
+// ------------------------------------------------------------
 
 GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
-    : QGraphicsView(parent)
+	: QGraphicsView(parent)
 {
-    m_scene = new QGraphicsScene(this);
-    setScene(m_scene);
+	m_scene = new QGraphicsScene(this);
+	setScene(m_scene);
+	m_scene->setSceneRect(-5000, -5000, 10000, 10000);
 
-    m_scene->setSceneRect(-5000, -5000, 10000, 10000);
+	setRenderHint(QPainter::Antialiasing);
+	setDragMode(ScrollHandDrag);
+	setTransformationAnchor(AnchorViewCenter);
+	setResizeAnchor(AnchorViewCenter);
+	setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+	setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+	setStyleSheet(R"(
+	QScrollBar:vertical {
+		background: transparent;
+		width: 8px;
+		margin: 4px 2px 4px 2px;
+	}
 
-    setRenderHint(QPainter::Antialiasing);
-    setDragMode(ScrollHandDrag);
-    setTransformationAnchor(AnchorViewCenter);
-    setResizeAnchor(AnchorViewCenter);
-    setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+	QScrollBar::handle:vertical {
+		background: rgba(200, 200, 200, 120);
+		border-radius: 4px;
+		min-height: 30px;
+	}
 
+	QScrollBar::handle:vertical:hover {
+		background: rgba(220, 220, 220, 180);
+	}
 
-    setStyleSheet(R"(
-    QScrollBar:vertical {
-        background: transparent;
-        width: 8px;
-        margin: 4px 2px 4px 2px;
-    }
+	QScrollBar::add-line:vertical,
+	QScrollBar::sub-line:vertical {
+		height: 0px;
+	}
 
-    QScrollBar::handle:vertical {
-        background: rgba(200, 200, 200, 120);
-        border-radius: 4px;
-        min-height: 30px;
-    }
+	QScrollBar::add-page:vertical,
+	QScrollBar::sub-page:vertical {
+		background: transparent;
+	}
 
-    QScrollBar::handle:vertical:hover {
-        background: rgba(220, 220, 220, 180);
-    }
+	/* ---- horizontal ---- */
 
-    QScrollBar::add-line:vertical,
-    QScrollBar::sub-line:vertical {
-        height: 0px;
-    }
+	QScrollBar:horizontal {
+		background: transparent;
+		height: 8px;
+		margin: 2px 4px 2px 4px;
+	}
 
-    QScrollBar::add-page:vertical,
-    QScrollBar::sub-page:vertical {
-        background: transparent;
-    }
+	QScrollBar::handle:horizontal {
+		background: rgba(200, 200, 200, 120);
+		border-radius: 4px;
+		min-width: 30px;
+	}
 
-    /* ---- horizontal ---- */
+	QScrollBar::handle:horizontal:hover {
+		background: rgba(220, 220, 220, 180);
+	}
 
-    QScrollBar:horizontal {
-        background: transparent;
-        height: 8px;
-        margin: 2px 4px 2px 4px;
-    }
+	QScrollBar::add-line:horizontal,
+	QScrollBar::sub-line:horizontal {
+		width: 0px;
+	}
 
-    QScrollBar::handle:horizontal {
-        background: rgba(200, 200, 200, 120);
-        border-radius: 4px;
-        min-width: 30px;
-    }
+	QScrollBar::add-page:horizontal,
+	QScrollBar::sub-page:horizontal {
+		background: transparent;
+	}
+	)");
+	auto *overlay = new QWidget(this);
+	overlay->setStyleSheet(R"(
+		QWidget {
+			background: rgba(30, 30, 30, 220);
+			border: 1px solid #555;
+			border-radius: 6px;
+		}
 
-    QScrollBar::handle:horizontal:hover {
-        background: rgba(220, 220, 220, 180);
-    }
+		QToolButton {
+			color: white;
+			background: transparent;
+			border: none;
+			font-size: 16px;
+		}
 
-    QScrollBar::add-line:horizontal,
-    QScrollBar::sub-line:horizontal {
-        width: 0px;
-    }
+		QToolButton:hover {
+			background: #3a3a3a;
+			border-radius: 4px;
+		}
 
-    QScrollBar::add-page:horizontal,
-    QScrollBar::sub-page:horizontal {
-        background: transparent;
-    }
-    )");
+		QToolButton:pressed {
+			background: #5a5a5a;
+		}
+	)");
 
-    //overlay zoom
-    auto *overlay = new QWidget(this);
-    overlay->setStyleSheet(R"(
-        QWidget {
-            background: rgba(30, 30, 30, 220);
-            border: 1px solid #555;
-            border-radius: 6px;
-        }
+	auto *vl = new QVBoxLayout(overlay);
+	vl->setContentsMargins(6, 6, 6, 6);
+	vl->setSpacing(4);
 
-        QToolButton {
-            color: white;
-            background: transparent;
-            border: none;
-            font-size: 16px;
-        }
+	auto mk = [&](const QString &t) {
+		auto *b = new QToolButton(overlay);
+		b->setText(t);
+		b->setAutoRaise(true);
+		b->setFixedSize(28, 28);
+		vl->addWidget(b);
+		return b;
+	};
 
-        QToolButton:hover {
-            background: #3a3a3a;
-            border-radius: 4px;
-        }
+	connect(mk("+"), &QToolButton::clicked, this, &GraphicalVariablesView::zoomIn);
+	connect(mk("-"), &QToolButton::clicked, this, &GraphicalVariablesView::zoomOut);
+	connect(mk("⤢"), &QToolButton::clicked, this, &GraphicalVariablesView::fitGraph);
+	connect(mk("⟳"), &QToolButton::clicked, this, &GraphicalVariablesView::resetZoom);
 
-        QToolButton:pressed {
-            background: #5a5a5a;
-        }
-    )");
+	overlay->move(10, 10);
+	overlay->show();
 
-    auto *vl = new QVBoxLayout(overlay);
-    vl->setContentsMargins(6, 6, 6, 6);
-    vl->setSpacing(4);
-
-    auto mk = [&](const QString &t) {
-        auto *b = new QToolButton(overlay);
-        b->setText(t);
-        b->setAutoRaise(true);
-        b->setFixedSize(28, 28);
-        vl->addWidget(b);
-        return b;
-    };
-
-    connect(mk("+"), &QToolButton::clicked, this,
-            &GraphicalVariablesView::zoomIn);
-
-    connect(mk("-"), &QToolButton::clicked, this,
-            &GraphicalVariablesView::zoomOut);
-
-    connect(mk("⤢"), &QToolButton::clicked, this,
-            &GraphicalVariablesView::fitGraph);
-
-    connect(mk("⟳"), &QToolButton::clicked, this,
-            &GraphicalVariablesView::resetZoom);
-
-    overlay->move(10, 10);
-    overlay->show();
 }
 
 GraphicalVariablesView::~GraphicalVariablesView() = default;
 
-void GraphicalVariablesView::zoomIn() { scale(1.2, 1.2); }
-void GraphicalVariablesView::zoomOut() { scale(1 / 1.2, 1 / 1.2); }
-void GraphicalVariablesView::fitGraph() {
-    	fitInView(scene()->itemsBoundingRect().adjusted(-40, -40, 40, 40),
-	          Qt::KeepAspectRatio);
-}
-void GraphicalVariablesView::resetZoom() { resetTransform(); }
-
-
-void GraphicalVariablesView::setSession(DebugSession* session)
+void GraphicalVariablesView::setSession(DebuggerSession* s)
 {
-    m_session = session;
-    refresh();
+	m_session = s;
+	refresh();
 }
 
 void GraphicalVariablesView::refresh()
 {
-    if (!m_session)
-        return;
+	if (!m_session) return;
 
-    m_scene->clear();
+	m_scene->clear();
 
-    QHash<VarNode*, GraphicalNodeItem*> nodeMap;
-    QHash<quintptr, GraphicalNodeItem*> addrMap;
+	QHash<DebugVariable*, GraphicalNodeItem*> nodeMap;
+	QHash<quintptr, GraphicalNodeItem*> addrMap;
 
-    const QList<VarNode*> roots = m_session->complexVariables();
+	int y = 0;
+	for (auto& v : m_session->variables()) {
+		auto* item = new GraphicalNodeItem(v.get());
+		m_scene->addItem(item);
+		item->setPos(0, y);
+		nodeMap[v.get()] = item;
 
-    int y = 0;
+		bool ok = false;
+		quintptr addr = v->address.toULongLong(&ok, 16);
+		if (ok)
+			addrMap[addr] = item;
 
-    for (VarNode* root : roots) {
+		y += 150;
+	}
 
-        auto* item = new GraphicalNodeItem(root);
-        m_scene->addItem(item);
-        item->setPos(0, y);
+	for (auto it = nodeMap.begin(); it != nodeMap.end(); ++it) {
+		DebugVariable* root = it.key();
+		for (auto& c : root->children) {
+			if (!c->isPointer) continue;
 
-        nodeMap[root] = item;
-
-        if (root->addr != 0) {
-            bool ok = false;
-            addrMap[root->addr.toULongLong(&ok, 16)] = item;
-        }
-
-        y += 140;
-    }
-
-    buildPointerEdges(nodeMap, addrMap, m_scene);
+			bool ok = false;
+			quintptr addr = c->value.toULongLong(&ok, 16);
+			if (ok && addrMap.contains(addr)) {
+				auto* e = new GraphicalEdgeItem(
+					it.value(), addrMap[addr], c.get());
+				m_scene->addItem(e);
+				it.value()->addEdge(e);
+				addrMap[addr]->addEdge(e);
+				e->updatePosition();
+			}
+		}
+	}
 }
 
+// ------------------------------------------------------------
+// Zoom / View controls
+// ------------------------------------------------------------
 
+void GraphicalVariablesView::zoomIn()
+{
+	scale(1.2, 1.2);
+}
 
+void GraphicalVariablesView::zoomOut()
+{
+	scale(1.0 / 1.2, 1.0 / 1.2);
+}
 
+void GraphicalVariablesView::resetZoom()
+{
+	resetTransform();
+}
 
+void GraphicalVariablesView::fitGraph()
+{
+	if (!scene())
+		return;
+
+	fitInView(
+		scene()->itemsBoundingRect().adjusted(-40, -40, 40, 40),
+		Qt::KeepAspectRatio
+	);
+}
 
 void GraphicalVariablesView::wheelEvent(QWheelEvent* event)
 {
-    const double factor = 1.15;
+	const double factor = 1.15;
 
-    if (event->angleDelta().y() > 0)
-        scale(factor, factor);
-    else
-        scale(1.0 / factor, 1.0 / factor);
+	if (event->angleDelta().y() > 0)
+		scale(factor, factor);
+	else
+		scale(1.0 / factor, 1.0 / factor);
+
+	event->accept();
 }
 
 void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent* event)
 {
-    auto* item =
-        dynamic_cast<GraphicalNodeItem*>(itemAt(event->pos()));
+	auto* item =
+		dynamic_cast<GraphicalNodeItem*>(itemAt(event->pos()));
 
-    if (item) {
-        item->recalculateWidth();
-        refresh();
-    }
+	if (item) {
+		item->recalculateWidth();
+		refresh();
+	}
 
-    QGraphicsView::mouseDoubleClickEvent(event);
+	QGraphicsView::mouseDoubleClickEvent(event);
 }
 
-void GraphicalVariablesView::drawBackground(QPainter* p,
-                                            const QRectF& rect)
-{
-    const int small = 20;
-    const int big   = 100;
-
-    QPen thin(QColor(0, 0, 0, 25));
-    QPen thick(QColor(0, 0, 0, 45));
-
-    const int l = int(std::floor(rect.left()));
-    const int r = int(std::ceil(rect.right()));
-    const int t = int(std::floor(rect.top()));
-    const int b = int(std::ceil(rect.bottom()));
-
-    p->setPen(thin);
-    for (int x = l - l % small; x <= r; x += small)
-        p->drawLine(x, t, x, b);
-    for (int y = t - t % small; y <= b; y += small)
-        p->drawLine(l, y, r, y);
-
-    p->setPen(thick);
-    for (int x = l - l % big; x <= r; x += big)
-        p->drawLine(x, t, x, b);
-    for (int y = t - t % big; y <= b; y += big)
-        p->drawLine(l, y, r, y);
-}
-
-QVariant GraphicalNodeItem::itemChange(
-    GraphicsItemChange change,
-    const QVariant& value)
-{
-    if (change == ItemPositionHasChanged) {
-        for (GraphicalEdgeItem* e : m_edges)
-            e->updatePosition();
-    }
-
-    return QGraphicsItem::itemChange(change, value);
-}
 

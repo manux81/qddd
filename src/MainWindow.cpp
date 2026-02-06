@@ -41,7 +41,7 @@
 #include <QToolBar>
 
 MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
-    : QMainWindow(parent), m_session(std::make_unique<DebugSession>(this)),
+    : QMainWindow(parent), m_session(std::make_unique<DebuggerSession>(this)),
       m_currentProgram(initialProgram) {
 	setupUi();
 	setupMenusAndToolbars();
@@ -52,11 +52,17 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 	m_sourceEditor->setSession(m_session.get());
 	m_graphicalView->setSession(m_session.get());
 
-	connect(m_session.get(), &DebugSession::sessionUpdated, this,
-	        &MainWindow::updateFromSession);
+	connect(m_session.get(), &DebuggerSession::targetStopped, this,
+	        &MainWindow::onTargetStopped);
 
-	connect(m_stackView, &StackView::frameActivated, m_sourceEditor,
-	        &SourceEditor::showLocation);
+	connect(m_session.get(), &DebuggerSession::breakpointLinesChanged, this,
+	        [this](const QString &file, const QSet<int> &lines) {
+		        Q_UNUSED(file);
+		        m_sourceEditor->setBreakpointLines(lines);
+	        });
+
+	connect(m_session.get(), &DebuggerSession::snapshotCaptured, this,
+	        [this](const ExecutionSnapshot &) { m_graphicalView->refresh(); });
 
 	if (!m_currentProgram.isEmpty()) {
 		startDebugger(m_currentProgram);
@@ -179,32 +185,31 @@ void MainWindow::setupMenusAndToolbars() {
 	QAction *toggleBpAct = programMenu->addAction(tr("Toggle Breakpoint"));
 
 	connect(interruptAct, &QAction::triggered, this,
-	        [this] { m_session->execInterrupt(); });
+	        [this] { m_session->interruptExecution(); });
 
 	connect(untilAct, &QAction::triggered, this, [this] {
 		QString file;
 		int line;
-		m_sourceEditor->currentLocation(file,
-		                                line); // funzione che devi aggiungere
-		m_session->execUntil(QString("%1:%2").arg(file).arg(line));
+		m_sourceEditor->currentLocation(file, line);
+		m_session->runToCursor(QString("%1:%2").arg(file).arg(line));
 	});
 
 	connect(upAct, &QAction::triggered, this, [this] {
 		int idx =
-		    m_stackView->currentFrameIndex(); // funzione che devi aggiungere
-		m_session->selectFrame(idx + 1);
+		    m_stackView->currentFrameIndex();
+		m_stackView->selectFrame(idx + 1);
 	});
 
 	connect(downAct, &QAction::triggered, this, [this] {
 		int idx = m_stackView->currentFrameIndex();
-		m_session->selectFrame(idx - 1);
+		m_stackView->selectFrame(idx - 1);
 	});
 
 	connect(toggleBpAct, &QAction::triggered, this, [this] {
 		QString file;
 		int line;
 		m_sourceEditor->currentLocation(file, line);
-		m_session->insertBreakpoint(QString("%1:%2").arg(file).arg(line));
+		m_session->toggleBreakpoint(QString("%1:%2").arg(file).arg(line));
 	});
 
 	runAct->setIcon(QIcon(":/icons/resources/icons/run.svg"));
@@ -213,6 +218,7 @@ void MainWindow::setupMenusAndToolbars() {
 	stepOverAct->setIcon(QIcon(":/icons/resources/icons/step-over.svg"));
 	stepOutAct->setIcon(QIcon(":/icons/resources/icons/step-out.svg"));
 	interruptAct->setIcon(QIcon(":/icons/resources/icons/stop.svg"));
+	toggleBpAct->setIcon(QIcon(":/icons/resources/icons/toggle.svg"));
 
 	connect(runAct, &QAction::triggered, this, &MainWindow::runProgram);
 	connect(contAct, &QAction::triggered, this, &MainWindow::continueProgram);
@@ -220,7 +226,7 @@ void MainWindow::setupMenusAndToolbars() {
 	connect(stepOverAct, &QAction::triggered, this, &MainWindow::stepOver);
 	connect(stepOutAct, &QAction::triggered, this, &MainWindow::stepOut);
 	connect(interruptAct, &QAction::triggered, this, &MainWindow::interrupt);
-	connect(untilAct, &QAction::triggered, this, &MainWindow::until);
+	//connect(untilAct, &QAction::triggered, this, &MainWindow::until);
 	connect(upAct, &QAction::triggered, this, &MainWindow::up);
 	connect(downAct, &QAction::triggered, this, &MainWindow::down);
 	connect(toggleBpAct, &QAction::triggered, this, &MainWindow::toggleBp);
@@ -290,7 +296,7 @@ void MainWindow::setupMenusAndToolbars() {
 void MainWindow::startDebugger(const QString &programPath) {
 	m_currentProgram = programPath;
 	m_breakOnMainInserted = false;
-	m_session->start(programPath);
+	m_session->startSession(programPath);
 }
 
 void MainWindow::openProgram() {
@@ -307,31 +313,23 @@ void MainWindow::runProgram() {
 		return;
 
 	if (!m_breakOnMainInserted) {
-		m_session->sendCommand(QStringLiteral("-break-insert main"));
+		m_session->insertBreakpoint("main");
 		m_breakOnMainInserted = true;
 	}
 
-	m_session->execRun();
+	m_session->run();
 }
 
-void MainWindow::continueProgram() { m_session->execContinue(); }
+void MainWindow::continueProgram() { m_session->continueExecution(); }
 
-void MainWindow::stepInto() { m_session->execStep(); }
+void MainWindow::stepInto() { m_session->stepInto(); }
 
-void MainWindow::stepOver() { m_session->execNext(); }
+void MainWindow::stepOver() { m_session->stepOver(); }
 
-void MainWindow::stepOut() { m_session->execFinish(); }
+void MainWindow::stepOut() { m_session->stepOut(); }
 
-void MainWindow::interrupt() { m_session->execInterrupt(); };
+void MainWindow::interrupt() { m_session->interruptExecution(); };
 
-void MainWindow::until() {
-	int line;
-	QString file;
-
-	m_sourceEditor->currentLocation(file, line);
-	if (!file.isEmpty() && line > 0)
-		m_session->execUntil(QString("%1:%2").arg(file).arg(line));
-};
 
 void MainWindow::up() {};
 
@@ -339,12 +337,6 @@ void MainWindow::down() {};
 
 void MainWindow::toggleBp() {};
 
-void MainWindow::updateFromSession() {
-	const QString file = m_session->currentFile();
-	const int line = m_session->currentLine();
-	if (!file.isEmpty() && line > 0) {
-		m_sourceEditor->showLocation(file, line);
-		m_sourceEditor->setCurrentPC(line);
-	}
-	m_graphicalView->refresh();
+void MainWindow::onTargetStopped()
+{
 }
