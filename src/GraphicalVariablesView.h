@@ -97,6 +97,7 @@ private:
 	QHash<DebugVariable*, bool> m_expanded;
 
 	int m_width = 260;
+	int m_page = 0;
 
 	static constexpr int HeaderHeight = 26;
 	static constexpr int RowHeight    = 22;

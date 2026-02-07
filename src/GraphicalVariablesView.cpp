@@ -46,7 +46,9 @@
 static constexpr int SocketRadius = 4;
 static constexpr int SocketOffset = -6;
 static constexpr int IndentStep   = 14;
-static constexpr int FooterHeight = 0;
+static constexpr int FooterHeight = 24;
+static constexpr int RowsPerPage = 8;
+
 
 
 namespace Style {
@@ -123,12 +125,19 @@ GraphicalNodeItem::GraphicalNodeItem(DebugVariable* node)
 QRectF GraphicalNodeItem::boundingRect() const
 {
 	QVector<VisibleRow> rows;
+
 	for (auto& c : m_node->children)
 		buildRows(c.get(), 0,
 				  const_cast<QHash<DebugVariable*, bool>&>(m_expanded),
 				  rows);
+	int totalRows = qMax(1, rows.size());
+	int visibleRows = qMin(totalRows, RowsPerPage);
+	int pageCount =
+	    qMax(1, (rows.size() + RowsPerPage - 1) / RowsPerPage);
+	int h = HeaderHeight
+		  + visibleRows * RowHeight
+	      + (pageCount > 1 ? FooterHeight : 0);
 
-	int h = HeaderHeight + qMax(1, rows.size()) * RowHeight + FooterHeight;
 	return QRectF(-8, 0, m_width + 16, h);
 }
 
@@ -223,13 +232,17 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 {
 	QVector<VisibleRow> rows;
 
-
-
 	for (auto& c : m_node->children)
 		buildRows(c.get(), 0, m_expanded, rows);
 
-	int y = HeaderHeight;
+	int pageCount =
+		qMax(1, (rows.size() + RowsPerPage - 1) / RowsPerPage);
 
+	m_page = qBound(0, m_page, pageCount - 1);
+
+	int start = m_page * RowsPerPage;
+	int end   = qMin(start + RowsPerPage, rows.size());
+	int y = HeaderHeight;
 
 	if (rows.isEmpty()) {
 		QRectF rowRect(0, y, m_width, RowHeight);
@@ -248,8 +261,7 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 		return;
 	}
 
-	for (int i = 0; i < rows.size(); ++i) {
-
+	for (int i = start; i < end; ++i) {
 		const VisibleRow& r = rows[i];
 		DebugVariable* n = r.node;
 
@@ -296,41 +308,77 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 	}
 
 	// ---- footer ----
+	if (pageCount <= 1)
+		return;
+
 	QRectF footerRect(
 		0,
-		y,
+		HeaderHeight + (end - start) * RowHeight,
 		m_width,
 		FooterHeight
 	);
 
+	// background
+	p->setPen(Qt::NoPen);
+	p->setBrush(Style::NodeBg);
+	p->drawRect(footerRect);
+
+	// separator
 	p->setPen(QColor(255, 255, 255, 25));
 	p->drawLine(
 		footerRect.topLeft() + QPointF(8, 0),
 		footerRect.topRight() - QPointF(8, 0)
 	);
 
-	p->setPen(Qt::NoPen);
-	p->setBrush(Style::NodeBg);
-	p->drawRect(footerRect);
+	// text
+	p->setPen(Qt::white);
+
+	QString pageText =
+		QString("◀  %1 / %2  ▶")
+			.arg(m_page + 1)
+			.arg(pageCount);
+
+	p->drawText(
+		footerRect,
+		Qt::AlignCenter,
+		pageText
+	);
+
 
 }
 
-
-
-void GraphicalNodeItem::mousePressEvent(QGraphicsSceneMouseEvent* e)
-{
+void GraphicalNodeItem::mousePressEvent(QGraphicsSceneMouseEvent *e) {
 	if (e->pos().y() < HeaderHeight)
 		return QGraphicsItem::mousePressEvent(e);
 
 	QVector<VisibleRow> rows;
-	for (auto& c : m_node->children)
+	for (auto &c : m_node->children)
 		buildRows(c.get(), 0, m_expanded, rows);
 
-	int idx = int((e->pos().y() - HeaderHeight) / RowHeight);
+	int pageCount = qMax(1, (rows.size() + RowsPerPage - 1) / RowsPerPage);
+
+	qreal y = e->pos().y();
+	if (pageCount > 1) {
+		qreal footerTop = HeaderHeight + qMin(rows.size(), RowsPerPage) * RowHeight;
+
+		if (y >= footerTop) {
+			if (e->pos().x() < m_width / 2)
+				m_page = qMax(0, m_page - 1);
+			else
+				m_page = qMin(pageCount - 1, m_page + 1);
+
+			update();
+			return;
+		}
+	}
+	int localIdx = int((e->pos().y() - HeaderHeight) / RowHeight);
+	int idx = m_page * RowsPerPage + localIdx;
+
 	if (idx >= 0 && idx < rows.size()) {
-		DebugVariable* n = rows[idx].node;
+		DebugVariable *n = rows[idx].node;
 		if (n->hasChildren) {
 			m_expanded[n] = !m_expanded.value(n, false);
+			m_page = 0; // reset pagina
 			prepareGeometryChange();
 			update();
 		}
