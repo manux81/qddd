@@ -73,7 +73,7 @@ class SourceEditor : public QPlainTextEdit {
   private:
 	LineNumberArea *m_lineNumberArea;
 	int m_currentPC = -1;
-	DebuggerSession *m_session;
+	DebuggerSession *m_session = nullptr;
 };
 
 class LineNumberArea : public QWidget {
