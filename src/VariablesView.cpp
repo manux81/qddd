@@ -180,8 +180,7 @@ QString itemPath(QStandardItem *item) {
 
 class ValueDelegate : public QStyledItemDelegate {
   public:
-	explicit ValueDelegate(QObject *parent = nullptr)
-	    : QStyledItemDelegate(parent) {}
+	explicit ValueDelegate(QObject *parent = nullptr);
 
 	void paint(QPainter *p, const QStyleOptionViewItem &opt,
 	           const QModelIndex &idx) const override {
@@ -201,6 +200,8 @@ class ValueDelegate : public QStyledItemDelegate {
 		}
 	}
 };
+
+ValueDelegate::ValueDelegate(QObject *parent) : QStyledItemDelegate(parent) {}
 
 /* ============================================================
  *  VARIABLES VIEW
