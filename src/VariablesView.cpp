@@ -349,11 +349,16 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 
 	// ---- current fields
 	QHash<QString, QString> curFields;
-	for (const QString &p : splitTopLevel(cur.mid(1, cur.size() - 2))) {
-		QString n, v;
-		if (splitNameValue(p, n, v))
-			curFields[n] = v;
+
+	const QString inner = cur.mid(1, cur.size() - 2);
+	const auto parts = splitTopLevel(inner);
+
+	for (const QString &p : parts) {
+	    QString n, v;
+	    if (splitNameValue(p, n, v))
+	        curFields[n] = v;
 	}
+
 
 	// ---- previous fields (if any)
 	QHash<QString, QString> prevFields;
