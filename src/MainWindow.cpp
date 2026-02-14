@@ -103,8 +103,8 @@ void MainWindow::setupUi() {
 
 	connect(m_stackView, &StackView::frameActivated, this,
 	        [&](QString file, int line) {
-		        m_sourceEditor->setCurrentPC(line);
-		        m_sourceEditor->showLocation(file, line);
+		        this->m_sourceEditor->setCurrentPC(line);
+		        this->m_sourceEditor->showLocation(file, line);
 	        });
 
 	m_breakDock = new QDockWidget(tr("Breakpoints"), this);
@@ -122,8 +122,8 @@ void MainWindow::setupUi() {
 	        [&](QString loc) {
 		        auto parts = loc.split(':');
 		        if (parts.size() == 2) {
-			        m_sourceEditor->showLocation(parts[0], parts[1].toInt());
-			        m_sourceEditor->setCurrentPC(parts[1].toInt());
+			        this->m_sourceEditor->showLocation(parts[0], parts[1].toInt());
+			        this->m_sourceEditor->setCurrentPC(parts[1].toInt());
 		        }
 	        });
 }
