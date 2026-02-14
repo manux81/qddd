@@ -189,15 +189,15 @@ class ValueDelegate : public QStyledItemDelegate {
 
 		o.font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
 
-		QStyledItemDelegate::paint(p, o, idx);
-
 		const bool changed = idx.data(ChangedRole).toBool();
 		if (changed) {
 			p->save();
-            QColor bg(0, 60, 20, 120);
+			QColor bg(0, 60, 20);
 			p->fillRect(o.rect, bg);
 			p->restore();
 		}
+
+		QStyledItemDelegate::paint(p, o, idx);
 	}
 };
 
@@ -218,6 +218,11 @@ VariablesView::VariablesView(QWidget *parent)
 	header()->setHighlightSections(false);
 
 	setAlternatingRowColors(true);
+	QPalette pal = palette();
+	pal.setColor(QPalette::Base, QColor(30, 30, 30));          // riga pari
+	pal.setColor(QPalette::AlternateBase, QColor(36, 36, 36)); // riga dispari
+	setPalette(pal);
+
 	setUniformRowHeights(true);
 	setRootIsDecorated(true);
 	setIndentation(14);
