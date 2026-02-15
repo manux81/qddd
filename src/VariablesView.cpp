@@ -180,8 +180,7 @@ QString itemPath(QStandardItem *item) {
 
 class ValueDelegate : public QStyledItemDelegate {
   public:
-	explicit ValueDelegate(QObject *parent = nullptr)
-	    : QStyledItemDelegate(parent) {}
+	explicit ValueDelegate(QObject *parent = nullptr);
 
 	void paint(QPainter *p, const QStyleOptionViewItem &opt,
 	           const QModelIndex &idx) const override {
@@ -190,17 +189,19 @@ class ValueDelegate : public QStyledItemDelegate {
 
 		o.font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
 
-		QStyledItemDelegate::paint(p, o, idx);
-
 		const bool changed = idx.data(ChangedRole).toBool();
 		if (changed) {
 			p->save();
-            QColor bg(0, 60, 20, 120);
+			QColor bg(0, 60, 20);
 			p->fillRect(o.rect, bg);
 			p->restore();
 		}
+
+		QStyledItemDelegate::paint(p, o, idx);
 	}
 };
+
+ValueDelegate::ValueDelegate(QObject *parent) : QStyledItemDelegate(parent) {}
 
 /* ============================================================
  *  VARIABLES VIEW
@@ -217,6 +218,11 @@ VariablesView::VariablesView(QWidget *parent)
 	header()->setHighlightSections(false);
 
 	setAlternatingRowColors(true);
+	QPalette pal = palette();
+	pal.setColor(QPalette::Base, QColor(30, 30, 30));          // riga pari
+	pal.setColor(QPalette::AlternateBase, QColor(36, 36, 36)); // riga dispari
+	setPalette(pal);
+
 	setUniformRowHeights(true);
 	setRootIsDecorated(true);
 	setIndentation(14);
@@ -344,11 +350,16 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 
 	// ---- current fields
 	QHash<QString, QString> curFields;
-	for (const QString &p : splitTopLevel(cur.mid(1, cur.size() - 2))) {
-		QString n, v;
-		if (splitNameValue(p, n, v))
-			curFields[n] = v;
+
+	const QString inner = cur.mid(1, cur.size() - 2);
+	const auto parts = splitTopLevel(inner);
+
+	for (const QString &p : parts) {
+	    QString n, v;
+	    if (splitNameValue(p, n, v))
+	        curFields[n] = v;
 	}
+
 
 	// ---- previous fields (if any)
 	QHash<QString, QString> prevFields;
