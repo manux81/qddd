@@ -52,30 +52,46 @@ struct DebugVariable;
 struct ExecutionSnapshot;
 struct VariableChange;
 
+struct BreakpointAction
+{
+	enum class Type {
+		LogMessage,
+		DebuggerCommand
+	};
+
+	Type type;
+	QString payload;
+};
+
 struct BreakpointInfo
 {
 	// Identity
-	int number = -1;            // MI: number / id
-	QString type;               // breakpoint / watchpoint / hw breakpoint
+	int number = -1;
+	QString type;
 
 	// Position
-	QString file;               // file o fullname
+	QString file;
 	int line = 0;
-	QString function;           // func
-	QString address;            // addr (0x...)
+	QString function;
+	QString address;
 
 	// State
 	bool enabled = true;
-	bool pending = false;       // breakpoint not resolved yet
-	bool temporary = false;     // disp="del"
+	bool pending = false;
+	bool temporary = false;
 
 	// Condition / counter
-	QString condition;          // cond
-	int hitCount = 0;           // times
+	QString condition;
+	int hitCount = 0;
+	bool autoContinue = false;
 
-	// Extra (future-proof)
-	QString originalLocation;   // location request by user
+	// UI / metadata
+	QString name;
+	QVector<BreakpointAction> actions;
+
+	QString originalLocation;
 };
+
 
 
 struct StackFrame
@@ -187,6 +203,7 @@ public:
 	// Expression evaluation / raw MI
 	void evaluateExpression(const QString& expression);
 	void sendRawCommand(const QString& cmd);
+	void setVariable(const QString& fullPath, const QString& newValue);
 
 signals:
 	void targetRunning();

@@ -270,7 +270,6 @@ void SourceEditor::mousePressEvent(QMouseEvent *event)
     }
 }
 
-
 void SourceEditor::currentLocation(QString &file, int &line) const {
 	file = this->property("currentFile")
 	           .toString();

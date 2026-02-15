@@ -300,6 +300,7 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 
 	const VarVisualType vt = visualType(node);
 	nameItem->setIcon(iconForType(vt));
+	nameItem->setEditable(false);
 
 	const QString path = parent
 		? itemPath(parent) + "." + node->name

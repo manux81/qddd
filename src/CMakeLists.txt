@@ -20,6 +20,8 @@ add_executable(qddd
     ConsoleWidget.h
     BreakpointsView.cpp
     BreakpointsView.h
+    BreakpointEditorDialog.cpp
+    BreakpointEditorDialog.h
     QDDDSplash.cpp
     QDDDSplash.h
 

@@ -994,6 +994,36 @@ void DebuggerSession::sendRawCommand(const QString& cmd)
         });
 }
 
+void DebuggerSession::setVariable(const QString& fullPath,
+								 const QString& newValue)
+{
+	if (fullPath.isEmpty())
+		return;
+
+	if (!isRunning())
+		return;
+
+	const QString expr =
+		QString("%1 = %2").arg(fullPath, newValue);
+
+	enqueueCommand(
+		QString("-data-evaluate-expression \"%1\"").arg(expr),
+		[this, fullPath, newValue](const QString& reply) {
+
+			if (reply.contains("^error")) {
+				qWarning().noquote()
+					<< "[SET VAR FAILED]"
+					<< fullPath << "=" << newValue
+					<< "\n" << reply;
+				return;
+			}
+
+			requestStopState();
+		}
+	);
+}
+
+
 // ============================================================================
 // Accessors
 // ============================================================================

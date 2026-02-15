@@ -126,6 +126,8 @@ void MainWindow::setupUi() {
 			        m_sourceEditor->setCurrentPC(parts[1].toInt());
 		        }
 	        });
+	connect(m_sourceEditor, &SourceEditor::toggleBreakpointRequested,
+			this, &MainWindow::toggleBp);
 }
 
 void MainWindow::setupMenusAndToolbars() {
@@ -186,8 +188,18 @@ void MainWindow::setupMenusAndToolbars() {
 	QAction *downAct = programMenu->addAction(tr("Down"));
 	QAction *toggleBpAct = programMenu->addAction(tr("Toggle Breakpoint"));
 
+
+	runAct->setIcon(QIcon(":/icons/resources/icons/run.svg"));
+	contAct->setIcon(QIcon(":/icons/resources/icons/continue.svg"));
+	stepInAct->setIcon(QIcon(":/icons/resources/icons/step-into.svg"));
+	stepOverAct->setIcon(QIcon(":/icons/resources/icons/step-over.svg"));
+	stepOutAct->setIcon(QIcon(":/icons/resources/icons/step-out.svg"));
+	interruptAct->setIcon(QIcon(":/icons/resources/icons/stop.svg"));
+	toggleBpAct->setIcon(QIcon(":/icons/resources/icons/toggle.svg"));
+	untilAct->setIcon(QIcon(":/icons/resources/icons/run-cursor.svg"));
+
 	connect(interruptAct, &QAction::triggered, this,
-	        [this] { m_session->interruptExecution(); });
+			[this] { m_session->interruptExecution(); });
 
 	connect(untilAct, &QAction::triggered, this, [this] {
 		QString file;
@@ -198,7 +210,7 @@ void MainWindow::setupMenusAndToolbars() {
 
 	connect(upAct, &QAction::triggered, this, [this] {
 		int idx =
-		    m_stackView->currentFrameIndex();
+			m_stackView->currentFrameIndex();
 		m_stackView->selectFrame(idx + 1);
 	});
 
@@ -206,29 +218,11 @@ void MainWindow::setupMenusAndToolbars() {
 		int idx = m_stackView->currentFrameIndex();
 		m_stackView->selectFrame(idx - 1);
 	});
-
-	connect(toggleBpAct, &QAction::triggered, this, [this] {
-		QString file;
-		int line;
-		m_sourceEditor->currentLocation(file, line);
-		m_session->toggleBreakpoint(QString("%1:%2").arg(file).arg(line));
-	});
-
-	runAct->setIcon(QIcon(":/icons/resources/icons/run.svg"));
-	contAct->setIcon(QIcon(":/icons/resources/icons/continue.svg"));
-	stepInAct->setIcon(QIcon(":/icons/resources/icons/step-into.svg"));
-	stepOverAct->setIcon(QIcon(":/icons/resources/icons/step-over.svg"));
-	stepOutAct->setIcon(QIcon(":/icons/resources/icons/step-out.svg"));
-	interruptAct->setIcon(QIcon(":/icons/resources/icons/stop.svg"));
-	toggleBpAct->setIcon(QIcon(":/icons/resources/icons/toggle.svg"));
-
 	connect(runAct, &QAction::triggered, this, &MainWindow::runProgram);
 	connect(contAct, &QAction::triggered, this, &MainWindow::continueProgram);
 	connect(stepInAct, &QAction::triggered, this, &MainWindow::stepInto);
 	connect(stepOverAct, &QAction::triggered, this, &MainWindow::stepOver);
 	connect(stepOutAct, &QAction::triggered, this, &MainWindow::stepOut);
-	connect(interruptAct, &QAction::triggered, this, &MainWindow::interrupt);
-	//connect(untilAct, &QAction::triggered, this, &MainWindow::until);
 	connect(upAct, &QAction::triggered, this, &MainWindow::up);
 	connect(downAct, &QAction::triggered, this, &MainWindow::down);
 	connect(toggleBpAct, &QAction::triggered, this, &MainWindow::toggleBp);
@@ -337,7 +331,17 @@ void MainWindow::up() {};
 
 void MainWindow::down() {};
 
-void MainWindow::toggleBp() {};
+void MainWindow::toggleBp() {
+	QString file;
+	int line;
+	m_sourceEditor->currentLocation(file, line);
+
+	if (file.isEmpty() || line <= 0)
+		return;
+
+	m_session->toggleBreakpoint(QString("%1:%2").arg(file).arg(line));
+}
+
 
 void MainWindow::onTargetStopped()
 {

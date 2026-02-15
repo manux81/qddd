@@ -99,8 +99,8 @@ private:
 	int m_width = 260;
 	int m_page = 0;
 
-	static constexpr int HeaderHeight = 26;
-	static constexpr int RowHeight    = 22;
+	static constexpr int HeaderHeight = 30;
+	static constexpr int RowHeight    = 26;
 	static constexpr int LeftPadding  = 10;
 };
 

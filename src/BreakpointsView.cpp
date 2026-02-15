@@ -31,35 +31,32 @@
 
 #include "BreakpointsView.h"
 #include "DebugSession.h"
+#include "BreakpointEditorDialog.h"
 
+#include <QFileInfo>
+#include <QFontDatabase>
 #include <QHeaderView>
 #include <QMenu>
-#include <QFontDatabase>
-#include <QFileInfo>
 
 // ============================================================================
 // ctor
 // ============================================================================
 
-BreakpointsView::BreakpointsView(QWidget *parent)
-	: QTreeView(parent)
-{
+BreakpointsView::BreakpointsView(QWidget *parent) : QTreeView(parent) {
 	setupModel();
 	setupView();
 
-	connect(this, &QTreeView::activated,
-			this, &BreakpointsView::onActivated);
+	connect(this, &QTreeView::activated, this, &BreakpointsView::onActivated);
 
-	connect(m_model, &QStandardItemModel::itemChanged,
-			this, &BreakpointsView::onItemChanged);
+	connect(m_model, &QStandardItemModel::itemChanged, this,
+	        &BreakpointsView::onItemChanged);
 }
 
 // ============================================================================
 // Session
 // ============================================================================
 
-void BreakpointsView::setSession(DebuggerSession *session)
-{
+void BreakpointsView::setSession(DebuggerSession *session) {
 	if (m_session == session)
 		return;
 
@@ -71,8 +68,8 @@ void BreakpointsView::setSession(DebuggerSession *session)
 	if (!m_session)
 		return;
 
-	connect(m_session, &DebuggerSession::breakpointsUpdated,
-			this, &BreakpointsView::refresh);
+	connect(m_session, &DebuggerSession::breakpointsUpdated, this,
+	        &BreakpointsView::refresh);
 
 	refresh();
 }
@@ -81,25 +78,17 @@ void BreakpointsView::setSession(DebuggerSession *session)
 // Model / View
 // ============================================================================
 
-void BreakpointsView::setupModel()
-{
+void BreakpointsView::setupModel() {
 	m_model = new QStandardItemModel(this);
 	m_model->setColumnCount(ColCount);
-	m_model->setHorizontalHeaderLabels({
-		"",
-		"#",
-		tr("Name"),
-		tr("Labels"),
-		tr("Condition"),
-		tr("Hit Count"),
-		tr("State")
-	});
+	m_model->setHorizontalHeaderLabels({"", "#", tr("Name"), tr("Labels"),
+	                                    tr("Condition"), tr("Hit Count"),
+	                                    tr("State")});
 
 	setModel(m_model);
 }
 
-void BreakpointsView::setupView()
-{
+void BreakpointsView::setupView() {
 	setSelectionBehavior(QAbstractItemView::SelectRows);
 	setSelectionMode(QAbstractItemView::SingleSelection);
 	setAlternatingRowColors(true);
@@ -113,18 +102,18 @@ void BreakpointsView::setupView()
 	setStyleSheet("QTreeView::item { height: 22px; }");
 
 	setContextMenuPolicy(Qt::CustomContextMenu);
-	connect(this, &QWidget::customContextMenuRequested,
-			this, &BreakpointsView::showContextMenu);
+	connect(this, &QWidget::customContextMenuRequested, this,
+	        &BreakpointsView::showContextMenu);
 }
 
 // ============================================================================
 // Icons
 // ============================================================================
 
-QIcon BreakpointsView::iconFor(const BreakpointInfo &bp) const
-{
+QIcon BreakpointsView::iconFor(const BreakpointInfo &bp) const {
 	if (bp.pending)
-		return QIcon(":/icons/resources/icons/debug-breakpoint-log-unverified.svg");
+		return QIcon(
+		    ":/icons/resources/icons/debug-breakpoint-log-unverified.svg");
 	if (!bp.enabled)
 		return QIcon(":/icons/resources/icons/breakpoint-disabled.svg");
 	return QIcon(":/icons/resources/icons/debug-breakpoint-log.svg");
@@ -134,22 +123,20 @@ QIcon BreakpointsView::iconFor(const BreakpointInfo &bp) const
 // Refresh
 // ============================================================================
 
-void BreakpointsView::refresh()
-{
+void BreakpointsView::refresh() {
 	if (!m_session)
 		return;
 
 	rebuild(m_session->breakpoints());
 }
 
-void BreakpointsView::rebuild(const QVector<BreakpointInfo> &list)
-{
+void BreakpointsView::rebuild(const QVector<BreakpointInfo> &list) {
 	m_blockItemChanged = true;
 	m_model->removeRows(0, m_model->rowCount());
 
 	for (const auto &bp : list) {
 
-		QList<QStandardItem*> row;
+		QList<QStandardItem *> row;
 
 		// Enabled (icon only, VS-style)
 		auto *enabledItem = new QStandardItem();
@@ -163,7 +150,8 @@ void BreakpointsView::rebuild(const QVector<BreakpointInfo> &list)
 		numItem->setData(bp.number, RoleSortValue);
 
 		// Location
-		const QString loc = QString("%1:%2").arg(QFileInfo(bp.file).fileName()).arg(bp.line);
+		const QString loc =
+		    QString("%1:%2").arg(QFileInfo(bp.file).fileName()).arg(bp.line);
 		auto *locItem = new QStandardItem(loc);
 		locItem->setEditable(false);
 		locItem->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
@@ -185,13 +173,8 @@ void BreakpointsView::rebuild(const QVector<BreakpointInfo> &list)
 		auto *tempItem = new QStandardItem(bp.temporary ? "Temp" : "");
 		labelItem->setEditable(false);
 
-		row << enabledItem
-			<< numItem
-			<< locItem
-		    << labelItem
-			<< condItem
-			<< hitItem
-			<< tempItem;
+		row << enabledItem << numItem << locItem << labelItem << condItem
+		    << hitItem << tempItem;
 
 		m_model->appendRow(row);
 	}
@@ -206,20 +189,17 @@ void BreakpointsView::rebuild(const QVector<BreakpointInfo> &list)
 // Interaction
 // ============================================================================
 
-void BreakpointsView::onActivated(const QModelIndex &index)
-{
+void BreakpointsView::onActivated(const QModelIndex &index) {
 	if (!index.isValid())
 		return;
 
-	const QString loc =
-		m_model->item(index.row(), ColLocation)->text();
+	const QString loc = m_model->item(index.row(), ColLocation)->text();
 
 	if (!loc.isEmpty())
 		emit breakpointSelected(loc);
 }
 
-void BreakpointsView::onItemChanged(QStandardItem *)
-{
+void BreakpointsView::onItemChanged(QStandardItem *) {
 	// non usato: niente checkbox Qt
 }
 
@@ -227,8 +207,7 @@ void BreakpointsView::onItemChanged(QStandardItem *)
 // Context menu
 // ============================================================================
 
-void BreakpointsView::showContextMenu(const QPoint &pos)
-{
+void BreakpointsView::showContextMenu(const QPoint &pos) {
 	if (!m_session)
 		return;
 
@@ -239,21 +218,44 @@ void BreakpointsView::showContextMenu(const QPoint &pos)
 	const int row = idx.row();
 	auto *enabledItem = m_model->item(row, ColEnabled);
 
-	const int number =
-		enabledItem->data(RoleBkptNumber).toInt();
+	const int number = enabledItem->data(RoleBkptNumber).toInt();
 
 	if (number <= 0)
 		return;
 
 	QMenu menu(this);
+	menu.setWindowFlags(menu.windowFlags() | Qt::FramelessWindowHint);
+	menu.setAttribute(Qt::WA_TranslucentBackground);
+	menu.setMinimumWidth(220);
 
-	QAction *actEnable    = menu.addAction(tr("Enable"));
-	QAction *actDisable   = menu.addAction(tr("Disable"));
-	QAction *actCondition = menu.addAction(tr("Edit Condition…"));
-	QAction *actDelete    = menu.addAction(tr("Delete"));
+	QAction *actEnable = menu.addAction(tr("Enable Breakpoint"));
+	QAction *actDisable = menu.addAction(tr("Disable Breakpoint"));
+	QAction *actCondition = menu.addAction(tr("Edit Breakpoint…"));
+	QAction *actDelete = menu.addAction(tr("Delete Breakpoint"));
+	menu.setStyleSheet(R"(
+  QWidget {
+			background: rgba(30, 30, 30, 220);
+			border: 1px solid #555;
+			border-radius: 6px;
+		}
 
-	QAction *chosen =
-		menu.exec(viewport()->mapToGlobal(pos));
+		QToolButton {
+			color: white;
+			background: transparent;
+			border: none;
+			font-size: 16px;
+		}
+
+		QToolButton:hover {
+			background: #3a3a3a;
+			border-radius: 4px;
+		}
+
+		QToolButton:pressed {
+			background: #5a5a5a;
+		}
+	)");
+	QAction *chosen = menu.exec(viewport()->mapToGlobal(pos));
 
 	if (!chosen)
 		return;
@@ -264,5 +266,9 @@ void BreakpointsView::showContextMenu(const QPoint &pos)
 		m_session->setBreakpointEnabled(number, true);
 	else if (chosen == actDisable)
 		m_session->setBreakpointEnabled(number, false);
-	// Edit Condition → hook futuro
+	else if (chosen == actCondition) {
+		auto* dlg = new BreakpointEditorDialog(m_session, 0, this);
+		dlg->move(QCursor::pos());
+		dlg->show();
+	}
 }

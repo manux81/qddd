@@ -28,61 +28,58 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+#pragma once
 
-#include "ConsoleWidget.h"
-#include "DebugSession.h"
+#include <QDialog>
+#include <QVector>
 
-#include <QLineEdit>
-#include <QPlainTextEdit>
-#include <QScrollBar>
-#include <QTextOption>
-#include <QVBoxLayout>
+class QLineEdit;
+class QSpinBox;
+class QCheckBox;
+class QComboBox;
+class QListWidget;
+class QPushButton;
 
-ConsoleWidget::ConsoleWidget(QWidget *parent)
-    : QWidget(parent), m_output(new QPlainTextEdit(this)),
-      m_input(new QLineEdit(this)) {
-	auto *layout = new QVBoxLayout(this);
-	m_output->setReadOnly(true);
-	m_output->setWordWrapMode(QTextOption::NoWrap);
-	m_input->setPlaceholderText(tr("GDB / MI Command…"));
+class DebuggerSession;
+struct BreakpointAction;
 
-	layout->addWidget(m_output);
-	layout->addWidget(m_input);
-	setLayout(layout);
+class BreakpointEditorDialog final : public QDialog
+{
+	Q_OBJECT
 
-	connect(m_input, &QLineEdit::returnPressed, this,
-	        &ConsoleWidget::onCommandEntered);
-}
+public:
+	explicit BreakpointEditorDialog(DebuggerSession* session,
+									int breakpointId,
+									QWidget* parent = nullptr);
 
-void ConsoleWidget::setSession(DebuggerSession *session) {
-	if (m_session) {
-		disconnect(m_session, nullptr, this, nullptr);
-		m_session = nullptr;
-	}
+private:
+	void buildUi();
+	void loadFromBreakpoint();
+	void connectSignals();
 
-	if (session) {
-		connect(session, &DebuggerSession::debuggerOutput, this,
-		        &ConsoleWidget::appendOutput);
-		m_session = session;
-	}
-}
+	void applyCondition();
+	void applyIgnoreCount();
+	void applyEnabled();
+	void applyAutoContinue();
+	void applyActions();
 
-void ConsoleWidget::appendOutput(const QString &text) {
-	if (text.isEmpty())
-		return;
-	m_output->appendPlainText(text);
-	QScrollBar *bar = m_output->verticalScrollBar();
-	bar->setValue(bar->maximum());
-}
+	void addAction();
+	void removeSelectedAction();
 
-void ConsoleWidget::onCommandEntered() {
-	const QString cmd = m_input->text();
-	if (cmd.isEmpty())
-		return;
+private:
+	DebuggerSession* m_session = nullptr;
+	int m_breakpointId = -1;
 
-	if (m_session) {
-		m_output->appendPlainText(QStringLiteral("> ") + cmd);
-		m_session->sendRawCommand(cmd);
-	}
-	m_input->clear();
-}
+	QCheckBox*   m_enableCheck = nullptr;
+	QLineEdit*  m_nameEdit = nullptr;
+	QLineEdit*  m_conditionEdit = nullptr;
+	QSpinBox*   m_ignoreSpin = nullptr;
+
+	QComboBox*  m_actionTypeCombo = nullptr;
+	QLineEdit* m_actionPayloadEdit = nullptr;
+	QListWidget* m_actionList = nullptr;
+
+	QCheckBox*  m_autoContinueCheck = nullptr;
+};
+
+
