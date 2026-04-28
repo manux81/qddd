@@ -30,10 +30,12 @@
  */
 
 #include "SourceEditor.h"
+#include <QFileInfo>
 #include <QFile>
 #include <QPainter>
 #include <QScrollBar>
 #include <QTextBlock>
+#include <algorithm>
 
 LineNumberArea::LineNumberArea(SourceEditor *editor)
     : QWidget(editor), m_editor(editor) {}
@@ -136,6 +138,14 @@ void SourceEditor::setSession(DebuggerSession* session)
 				showLocation(file, line);
 				setCurrentPC(line);
 			});
+
+	connect(m_session, &DebuggerSession::breakpointsUpdated,
+			this,
+			[this] {
+				if (m_lineNumberArea)
+					m_lineNumberArea->update();
+				viewport()->update();
+			});
 }
 
 
@@ -188,19 +198,26 @@ void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 	const int iconX = 2;
 	const int iconSize = fontMetrics().height() - 2;
 	const QString curFile = property("currentFile").toString();
+	const QString curFileAbs = curFile.isEmpty() ? QString{} : QFileInfo(curFile).absoluteFilePath();
 
 	while (block.isValid() && top <= event->rect().bottom()) {
 		if (block.isVisible() && bottom >= event->rect().top()) {
 
 			int lineIndex = blockNumber + 1;
 
-			const bool hasBp = std::any_of(
-				m_session->breakpoints().cbegin(),
-				m_session->breakpoints().cend(),
-				[lineIndex](const BreakpointInfo& bp) {
-					return bp.line == lineIndex;
-				}
-			);
+			const bool hasBp = m_session && !curFileAbs.isEmpty()
+				? std::any_of(
+					m_session->breakpoints().cbegin(),
+					m_session->breakpoints().cend(),
+					[&](const BreakpointInfo& bp) {
+						if (bp.line != lineIndex)
+							return false;
+						if (bp.file.isEmpty())
+							return false;
+						return QFileInfo(bp.file).absoluteFilePath() == curFileAbs;
+					}
+				)
+				: false;
 
 			if (hasBp) {
 				painter.setBrush(QColor("#cc2222"));
@@ -280,4 +297,3 @@ void SourceEditor::setBreakpointsUpdated(const QSet<int>& lines)
 {
     viewport()->update();
 }
-
