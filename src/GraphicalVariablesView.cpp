@@ -235,6 +235,8 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 	for (auto& c : m_node->children)
 		buildRows(c.get(), 0, m_expanded, rows);
 
+	const int totalRows = qMax(1, rows.size());
+	const int visibleRows = qMin(totalRows, RowsPerPage);
 	int pageCount =
 		qMax(1, (rows.size() + RowsPerPage - 1) / RowsPerPage);
 
@@ -307,13 +309,33 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 		y += RowHeight;
 	}
 
+	// If this page has fewer rows than a full page, paint the remaining row
+	// background so the footer stays at the same vertical position as the
+	// hit-test area in mousePressEvent().
+	for (int j = (end - start); j < visibleRows; ++j) {
+		QRectF rowRect(0, y, m_width, RowHeight);
+
+		const QColor bg = ((start + j) % 2 == 0)
+			? Style::RowBg
+			: Style::RowAltBg;
+
+		p->setBrush(bg);
+		p->setPen(Qt::NoPen);
+		p->drawRect(rowRect);
+
+		p->setPen(QColor(255, 255, 255, 20));
+		p->drawLine(rowRect.bottomLeft(), rowRect.bottomRight());
+
+		y += RowHeight;
+	}
+
 	// ---- footer ----
 	if (pageCount <= 1)
 		return;
 
 	QRectF footerRect(
 		0,
-		HeaderHeight + (end - start) * RowHeight,
+		HeaderHeight + visibleRows * RowHeight,
 		m_width,
 		FooterHeight
 	);
@@ -698,5 +720,4 @@ void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent* event)
 
 	QGraphicsView::mouseDoubleClickEvent(event);
 }
-
 
