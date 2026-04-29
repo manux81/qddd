@@ -283,6 +283,16 @@ void DebuggerSession::stepInto()            { enqueueCommand("-exec-step"); }
 void DebuggerSession::stepOver()            { enqueueCommand("-exec-next"); }
 void DebuggerSession::stepOut()             { enqueueCommand("-exec-finish"); }
 void DebuggerSession::interruptExecution()  { enqueueCommand("-exec-interrupt"); }
+void DebuggerSession::reverseContinueExecution() { enqueueCommand("-exec-reverse-continue"); }
+void DebuggerSession::reverseStepInto()          { enqueueCommand("-exec-reverse-step"); }
+void DebuggerSession::reverseStepOver()          { enqueueCommand("-exec-reverse-next"); }
+
+bool DebuggerSession::supportsReverseExecution() const
+{
+	// Conservative: GDB MI supports reverse-* when process recording is enabled.
+	// LLDB MI support varies; keep disabled by default.
+	return m_backend == Backend::GdbMi;
+}
 void DebuggerSession::runToCursor(const QString& location)
 {
 	if (location.isEmpty())

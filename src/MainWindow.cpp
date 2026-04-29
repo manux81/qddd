@@ -39,6 +39,12 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QToolBar>
+#include <QLabel>
+#include <QToolButton>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QGridLayout>
+#include <QFrame>
 
 MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
     : QMainWindow(parent), m_session(std::make_unique<DebuggerSession>(this)),
@@ -252,40 +258,135 @@ void MainWindow::setupMenusAndToolbars() {
 	dbgBar->setFloatable(true);
 	dbgBar->setAllowedAreas(Qt::AllToolBarAreas);
 	dbgBar->setIconSize(QSize(18, 18));
-	dbgBar->setFixedHeight(32);
+	dbgBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
 	dbgBar->setStyleSheet(R"(
-    QToolBar {
-        background: #252526;
-        border-bottom: 1px solid #3c3c3c;
-        padding: 6px 10px;
-        spacing: 8px;
-    }
-    QToolButton {
-        background: transparent;
-        border: none;
-        padding: 6px;
-        margin: 0 2px;
-        color: #0099dd;
-    }
-    QToolButton:hover {
-        background: #333333;
-    }
-    QToolButton:pressed {
-        background: #1e1e1e;
-    }
+		QToolBar {
+			background: #1f1f1f;
+			border-bottom: 1px solid #3c3c3c;
+			padding: 0px;
+			spacing: 0px;
+		}
 	)");
 
-	dbgBar->addAction(runAct);
-	dbgBar->addAction(contAct);
-	dbgBar->addAction(stepInAct);
-	dbgBar->addAction(stepOverAct);
-	dbgBar->addAction(stepOutAct);
-	dbgBar->addAction(interruptAct);
-	dbgBar->addAction(untilAct);
-	dbgBar->addAction(upAct);
-	dbgBar->addAction(downAct);
-	dbgBar->addAction(toggleBpAct);
+	auto* ribbon = new QWidget(dbgBar);
+	ribbon->setObjectName("ribbon");
+	ribbon->setStyleSheet(R"(
+		#ribbon {
+			background: #1f1f1f;
+		}
+		QToolButton {
+			background: transparent;
+			border: none;
+			padding: 6px 8px;
+			margin: 0px;
+			color: #e6e6e6;
+			font-size: 12px;
+		}
+		QToolButton:hover {
+			background: #2a2a2a;
+		}
+		QToolButton:pressed {
+			background: #151515;
+		}
+		QLabel#groupTitle {
+			color: rgba(255,255,255,120);
+			font-size: 11px;
+			padding: 2px 0 0 0;
+		}
+		QFrame#groupFrame {
+			background: transparent;
+			padding: 6px 10px 4px 10px;
+		}
+		QFrame#groupSep {
+			background: rgba(255,255,255,20);
+			min-width: 1px;
+			max-width: 1px;
+			margin: 8px 6px;
+		}
+	)");
 
+	auto* ribbonLayout = new QHBoxLayout(ribbon);
+	ribbonLayout->setContentsMargins(8, 4, 8, 4);
+	ribbonLayout->setSpacing(0);
+
+	auto addGroup = [&](const QString& title, const QList<QAction*>& actions) {
+		auto* frame = new QFrame(ribbon);
+		frame->setObjectName("groupFrame");
+
+		auto* v = new QVBoxLayout(frame);
+		v->setContentsMargins(0, 0, 0, 0);
+		v->setSpacing(2);
+
+		auto* row = new QHBoxLayout();
+		row->setContentsMargins(0, 0, 0, 0);
+		row->setSpacing(8);
+
+		for (QAction* a : actions) {
+			auto* b = new QToolButton(frame);
+			b->setDefaultAction(a);
+			b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+			b->setIconSize(QSize(18, 18));
+			b->setAutoRaise(true);
+			b->setMinimumHeight(30);
+			row->addWidget(b);
+		}
+
+		v->addLayout(row);
+
+		auto* l = new QLabel(title, frame);
+		l->setObjectName("groupTitle");
+		l->setAlignment(Qt::AlignHCenter);
+		v->addWidget(l);
+
+		ribbonLayout->addWidget(frame);
+
+		auto* sep = new QFrame(ribbon);
+		sep->setObjectName("groupSep");
+		sep->setFrameShape(QFrame::VLine);
+		ribbonLayout->addWidget(sep);
+	};
+
+	// Reverse flow control (best-effort)
+	auto* stepBackAct = new QAction(tr("Step Back"), this);
+	auto* nextBackAct = new QAction(tr("Next Back"), this);
+	auto* contBackAct = new QAction(tr("Go Back"), this);
+	stepBackAct->setIcon(QIcon(":/icons/resources/icons/step-back.svg"));
+	nextBackAct->setIcon(QIcon(":/icons/resources/icons/next-back.svg"));
+	contBackAct->setIcon(QIcon(":/icons/resources/icons/continue-back.svg"));
+	stepBackAct->setEnabled(false);
+	nextBackAct->setEnabled(false);
+	contBackAct->setEnabled(false);
+	connect(stepBackAct, &QAction::triggered, this, [this] { m_session->reverseStepInto(); });
+	connect(nextBackAct, &QAction::triggered, this, [this] { m_session->reverseStepOver(); });
+	connect(contBackAct, &QAction::triggered, this, [this] { m_session->reverseContinueExecution(); });
+
+	addGroup(tr("Flow Control"),
+	         {runAct, contAct, stepInAct, stepOverAct, stepOutAct, interruptAct});
+	addGroup(tr("Reverse Flow Control"),
+	         {stepBackAct, nextBackAct, contBackAct});
+	addGroup(tr("Navigation"),
+	         {untilAct, upAct, downAct, toggleBpAct});
+
+	ribbonLayout->addStretch(1);
+
+	auto updateReverseActions = [this, stepBackAct, nextBackAct, contBackAct] {
+		const bool ok = m_session && m_session->supportsReverseExecution();
+		stepBackAct->setEnabled(ok);
+		nextBackAct->setEnabled(ok);
+		contBackAct->setEnabled(ok);
+		const QString tip = ok
+			? tr("Reverse execution")
+			: tr("Reverse execution is not available with the current debugger backend.");
+		stepBackAct->setToolTip(tip);
+		nextBackAct->setToolTip(tip);
+		contBackAct->setToolTip(tip);
+	};
+	updateReverseActions();
+	connect(m_session.get(), &DebuggerSession::targetStarted, this, updateReverseActions);
+	connect(m_session.get(), &DebuggerSession::targetStopped, this, updateReverseActions);
+
+	dbgBar->addWidget(ribbon);
+	dbgBar->setMinimumHeight(64);
 	addToolBar(Qt::TopToolBarArea, dbgBar);
 }
 

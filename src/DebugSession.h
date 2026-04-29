@@ -181,6 +181,10 @@ public:
 	void stepOut();
 	void interruptExecution();
 	void runToCursor(const QString& location);
+	void reverseContinueExecution();
+	void reverseStepInto();
+	void reverseStepOver();
+	[[nodiscard]] bool supportsReverseExecution() const;
 
 	// Breakpoints
 	void insertBreakpoint(const QString& location);
