@@ -37,6 +37,7 @@
 #include <QGraphicsItem>
 #include <QGraphicsPathItem>
 #include <QTimer>
+#include <vector>
 
 class GraphicalNodeItem;
 
@@ -81,6 +82,7 @@ public:
 
 	void recalculateWidth();
 	void addEdge(GraphicalEdgeItem* e);
+	DebugVariable* variableAt(const QPointF& localPos) const;
 
 protected:
 	void mousePressEvent(QGraphicsSceneMouseEvent*) override;
@@ -127,7 +129,16 @@ protected:
 	void drawBackground(QPainter*, const QRectF&) override;
 
 private:
+	void openPointerNode(DebugVariable* ptrVar, GraphicalNodeItem* fromItem);
+	void ensurePointerNodeOpen(const QString& pointerExpr,
+							   DebugVariable* ptrVar,
+							   GraphicalNodeItem* fromItem);
+
 	QGraphicsScene*  m_scene   = nullptr;
 	DebuggerSession* m_session = nullptr;
-};
 
+	std::vector<std::unique_ptr<DebugVariable>> m_dynamicRoots;
+	QHash<QString, DebugVariable*> m_dynamicRootByKey;
+	QHash<DebugVariable*, GraphicalNodeItem*> m_dynamicItems;
+	QSet<QString> m_openPointerExprs;
+};

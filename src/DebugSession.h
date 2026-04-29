@@ -204,6 +204,9 @@ public:
 	void evaluateExpression(const QString& expression);
 	void sendRawCommand(const QString& cmd);
 	void setVariable(const QString& fullPath, const QString& newValue);
+	void dereferencePointer(const QString& pointerExpr,
+							std::function<void(const QString& value,
+											   const QString& type)> cb);
 
 signals:
 	void targetRunning();
@@ -285,5 +288,6 @@ private:
 	int m_stepCounter = 0;
 	bool m_pendingStack = false;
 	bool m_pendingVariables = false;
+	int m_pendingPointerExpansions = 0;
 	int m_pendingAddressRequests = 0;
 };

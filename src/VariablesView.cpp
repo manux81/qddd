@@ -331,8 +331,11 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 	// REAL debugger children
 	// ------------------------------------------------------------
 	if (!node->children.empty()) {
-		valueItem->setText("[ ]");
-		valueItem->setForeground(QColor(160, 160, 160));
+		// Keep pointer address visible while still allowing expansion.
+		if (!node->isPointer) {
+			valueItem->setText("[ ]");
+			valueItem->setForeground(QColor(160, 160, 160));
+		}
 		for (const auto &c : node->children)
 			if (c) addNode(nameItem, c.get());
 		return;

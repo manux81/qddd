@@ -38,6 +38,7 @@
 #include <QToolButton>
 #include <QStyle>
 #include <cmath>
+#include <memory>
 
 
 // =======================================================
@@ -71,6 +72,71 @@ struct VisibleRow {
 	int indent;
 };
 
+static bool isInlineStruct(const QString& s)
+{
+	const QString v = s.trimmed();
+	return v.startsWith('{') && v.endsWith('}');
+}
+
+static QStringList splitTopLevelCommasLocal(const QString& s)
+{
+	QStringList out;
+	int depth = 0;
+	int start = 0;
+	for (int i = 0; i < s.size(); ++i) {
+		const QChar c = s[i];
+		if (c == '{') depth++;
+		else if (c == '}') depth--;
+		else if (c == ',' && depth == 0) {
+			out << s.mid(start, i - start).trimmed();
+			start = i + 1;
+		}
+	}
+	out << s.mid(start).trimmed();
+	return out;
+}
+
+static void expandInlineStructIntoChildrenLocal(
+	DebugVariable* node,
+	const QString& value,
+	int depth,
+	int maxDepth)
+{
+	if (!node) return;
+	if (depth >= maxDepth) return;
+
+	QString v = value.trimmed();
+	if (!isInlineStruct(v))
+		return;
+
+	v = v.mid(1, v.size() - 2).trimmed();
+	if (v.isEmpty())
+		return;
+
+	const QStringList entries = splitTopLevelCommasLocal(v);
+	for (const QString& e : entries) {
+		const int eq = e.indexOf('=');
+		if (eq <= 0)
+			continue;
+
+		auto c = std::make_unique<DebugVariable>();
+		c->name = e.left(eq).trimmed();
+		c->value = e.mid(eq + 1).trimmed();
+		c->parent = node;
+
+		c->isPointer = c->value.trimmed().toLower().startsWith("0x");
+		c->hasChildren = isInlineStruct(c->value);
+
+		if (c->hasChildren)
+			expandInlineStructIntoChildrenLocal(c.get(), c->value, depth + 1, maxDepth);
+
+		node->children.push_back(std::move(c));
+	}
+
+	if (!node->children.empty())
+		node->hasChildren = true;
+}
+
 static void buildRows(DebugVariable* n,
 					  int indent,
 					  QHash<DebugVariable*, bool>& expanded,
@@ -85,6 +151,14 @@ static void buildRows(DebugVariable* n,
 
 	for (auto& c : n->children)
 		buildRows(c.get(), indent + 1, expanded, out);
+}
+
+static DebugVariable* rootOf(DebugVariable* v)
+{
+	if (!v) return nullptr;
+	while (v->parent)
+		v = v->parent;
+	return v;
 }
 
 static void drawTriangle(QPainter* p,
@@ -120,6 +194,40 @@ GraphicalNodeItem::GraphicalNodeItem(DebugVariable* node)
 	setFlag(ItemIsMovable);
 	setFlag(ItemSendsGeometryChanges);
 	recalculateWidth();
+}
+
+DebugVariable* GraphicalNodeItem::variableAt(const QPointF& localPos) const
+{
+	if (!m_node)
+		return nullptr;
+
+	if (localPos.y() < HeaderHeight)
+		return nullptr;
+
+	QVector<VisibleRow> rows;
+	for (auto& c : m_node->children)
+		buildRows(c.get(), 0,
+				  const_cast<QHash<DebugVariable*, bool>&>(m_expanded),
+				  rows);
+
+	if (rows.isEmpty()) {
+		// Single value row (used for leaf values / pointers)
+		if (localPos.y() >= HeaderHeight && localPos.y() < HeaderHeight + RowHeight)
+			return m_node;
+		return nullptr;
+	}
+
+	const int pageCount = qMax(1, (rows.size() + RowsPerPage - 1) / RowsPerPage);
+	const int page = qBound(0, m_page, pageCount - 1);
+	const int start = page * RowsPerPage;
+	const int end = qMin(start + RowsPerPage, rows.size());
+
+	const int localIdx = int((localPos.y() - HeaderHeight) / RowHeight);
+	const int idx = start + localIdx;
+	if (idx < start || idx >= end)
+		return nullptr;
+
+	return rows[idx].node;
 }
 
 QRectF GraphicalNodeItem::boundingRect() const
@@ -626,9 +734,11 @@ void GraphicalVariablesView::refresh()
 	if (!m_session) return;
 
 	m_scene->clear();
+	m_dynamicItems.clear();
 
 	QHash<DebugVariable*, GraphicalNodeItem*> nodeMap;
 	QHash<quintptr, GraphicalNodeItem*> addrMap;
+	QHash<QString, DebugVariable*> varByPath;
 
 	int y = 0;
 	for (auto& v : m_session->variables()) {
@@ -636,6 +746,7 @@ void GraphicalVariablesView::refresh()
 		m_scene->addItem(item);
 		item->setPos(0, y);
 		nodeMap[v.get()] = item;
+		varByPath[v->fullPath()] = v.get();
 
 		bool ok = false;
 		        if (!v->address.isEmpty()) {
@@ -645,6 +756,23 @@ void GraphicalVariablesView::refresh()
 		        }
 
 		y += 150;
+	}
+
+	// Re-open pointer cards after a refresh (e.g. when stepping).
+	for (const QString& expr : std::as_const(m_openPointerExprs)) {
+		if (!varByPath.contains(expr))
+			continue;
+		DebugVariable* ptrVar = varByPath.value(expr);
+		if (!ptrVar || !ptrVar->isPointer)
+			continue;
+
+		GraphicalNodeItem* fromItem = nodeMap.value(rootOf(ptrVar), nullptr);
+		if (!fromItem)
+			fromItem = nodeMap.value(ptrVar, nullptr);
+		if (!fromItem)
+			continue;
+
+		ensurePointerNodeOpen(expr, ptrVar, fromItem);
 	}
 
 	for (auto it = nodeMap.begin(); it != nodeMap.end(); ++it) {
@@ -714,6 +842,16 @@ void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent* event)
 		dynamic_cast<GraphicalNodeItem*>(itemAt(event->pos()));
 
 	if (item) {
+		const QPointF scenePos = mapToScene(event->pos());
+		const QPointF localPos = item->mapFromScene(scenePos);
+		if (DebugVariable* v = item->variableAt(localPos)) {
+			if (v->isPointer) {
+				openPointerNode(v, item);
+				event->accept();
+				return;
+			}
+		}
+
 		item->recalculateWidth();
 		refresh();
 	}
@@ -721,3 +859,82 @@ void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent* event)
 	QGraphicsView::mouseDoubleClickEvent(event);
 }
 
+void GraphicalVariablesView::openPointerNode(DebugVariable* ptrVar, GraphicalNodeItem* fromItem)
+{
+	if (!m_session || !ptrVar || !fromItem)
+		return;
+
+	const QString expr = ptrVar->fullPath();
+	if (expr.isEmpty())
+		return;
+
+	m_openPointerExprs.insert(expr);
+	ensurePointerNodeOpen(expr, ptrVar, fromItem);
+}
+
+void GraphicalVariablesView::ensurePointerNodeOpen(
+	const QString& pointerExpr,
+	DebugVariable* ptrVar,
+	GraphicalNodeItem* fromItem)
+{
+	if (!m_session || pointerExpr.isEmpty() || !ptrVar || !fromItem)
+		return;
+
+	const QString key = QString("%1@%2").arg(pointerExpr, ptrVar->value.trimmed());
+	if (m_dynamicRootByKey.contains(key)) {
+		DebugVariable* rootRaw = m_dynamicRootByKey.value(key);
+		if (!rootRaw)
+			return;
+
+		auto* existing = m_dynamicItems.value(rootRaw, nullptr);
+		if (!existing) {
+			existing = new GraphicalNodeItem(rootRaw);
+			m_scene->addItem(existing);
+			m_dynamicItems[rootRaw] = existing;
+
+			auto* e = new GraphicalEdgeItem(fromItem, existing, ptrVar);
+			m_scene->addItem(e);
+			fromItem->addEdge(e);
+			existing->addEdge(e);
+			e->updatePosition();
+		}
+
+		existing->setPos(fromItem->pos() + QPointF(340, 0));
+		centerOn(existing);
+		return;
+	}
+
+	m_session->dereferencePointer(pointerExpr,
+		[this, key, ptrVar, fromItem](const QString& value, const QString& type) {
+			if (value.isEmpty())
+				return;
+
+			auto root = std::make_unique<DebugVariable>();
+			root->name = QString("*%1").arg(ptrVar->name);
+			root->value = value.trimmed();
+			root->type = type;
+			root->parent = nullptr;
+			root->isPointer = false;
+			root->hasChildren = isInlineStruct(root->value);
+
+			if (root->hasChildren)
+				expandInlineStructIntoChildrenLocal(root.get(), root->value, 0, 3);
+
+			DebugVariable* rootRaw = root.get();
+			m_dynamicRoots.push_back(std::move(root));
+			m_dynamicRootByKey.insert(key, rootRaw);
+
+			auto* item = new GraphicalNodeItem(rootRaw);
+			m_scene->addItem(item);
+			item->setPos(fromItem->pos() + QPointF(340, 0));
+			m_dynamicItems[rootRaw] = item;
+
+			auto* e = new GraphicalEdgeItem(fromItem, item, ptrVar);
+			m_scene->addItem(e);
+			fromItem->addEdge(e);
+			item->addEdge(e);
+			e->updatePosition();
+
+			centerOn(item);
+		});
+}

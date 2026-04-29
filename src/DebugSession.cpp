@@ -874,6 +874,7 @@ void DebuggerSession::parseStackFromReply(const QString& replyBlob)
 void DebuggerSession::parseVarsFromReply(const QString& replyBlob)
 {
     m_variables.clear();
+	m_pendingPointerExpansions = 0;
 
     int idx = replyBlob.indexOf("variables=[");
     if (idx < 0)
@@ -901,6 +902,30 @@ void DebuggerSession::parseVarsFromReply(const QString& replyBlob)
 		if (!dv->name.isEmpty()) {
 			DebugVariable* raw = dv.get();
 			m_variables.push_back(std::move(dv));
+
+			// If this is a pointer, try to dereference it and parse inline struct
+			// fields (when available) so the UI can expand it.
+			const bool looksNullPtr =
+				raw->value.trimmed().toLower().startsWith("0x0") ||
+				raw->value.trimmed().toLower() == "0x00000000";
+
+			if (raw->isPointer && !looksNullPtr && raw->type.contains('*')) {
+				++m_pendingPointerExpansions;
+				enqueueCommand(
+					QString("-data-evaluate-expression \"*%1\"").arg(raw->fullPath()),
+					[this, raw](const QString& reply) {
+						const QString deref = miGet(reply, "value").trimmed();
+						if (!deref.isEmpty() && looksLikeStruct(deref)) {
+							raw->children.clear();
+							expandInlineStructIntoChildren(raw, deref, 0, 2);
+						}
+
+						if (--m_pendingPointerExpansions == 0 && m_pendingAddressRequests == 0)
+							emit variablesUpdated();
+					}
+				);
+			}
+
 			++m_pendingAddressRequests;
 			enqueueCommand(QString("-data-evaluate-expression \"&%1\"")
 			                   .arg(raw->fullPath()),
@@ -909,7 +934,8 @@ void DebuggerSession::parseVarsFromReply(const QString& replyBlob)
 				               if (!addr.isEmpty())
 					               raw->address = addr;
 								if (--m_pendingAddressRequests == 0) {
-									emit variablesUpdated();
+									if (m_pendingPointerExpansions == 0)
+										emit variablesUpdated();
 								}
 			               });
 		}
@@ -1023,6 +1049,29 @@ void DebuggerSession::setVariable(const QString& fullPath,
 	);
 }
 
+void DebuggerSession::dereferencePointer(
+	const QString& pointerExpr,
+	std::function<void(const QString& value, const QString& type)> cb)
+{
+	if (pointerExpr.isEmpty() || !cb)
+		return;
+
+	if (!isRunning())
+		return;
+
+	enqueueCommand(
+		QString("-data-evaluate-expression \"*%1\"").arg(pointerExpr),
+		[this, cb = std::move(cb)](const QString& reply) mutable {
+			if (reply.contains("^error")) {
+				cb({}, {});
+				return;
+			}
+
+			cb(miGet(reply, "value"), miGet(reply, "type"));
+		}
+	);
+}
+
 
 // ============================================================================
 // Accessors
@@ -1040,4 +1089,3 @@ const ExecutionSnapshot* DebuggerSession::snapshotAt(int index) const
 }
 
 const QSet<QString>& DebuggerSession::changedPaths() const { return m_changedPaths; }
-
