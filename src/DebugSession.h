@@ -168,6 +168,8 @@ public:
 	~DebuggerSession() override;
 
 	void setBackend(Backend backend);
+	void setGdbExecutable(const QString& path);
+	void setLldbMiExecutable(const QString& path);
 	void startSession(const QString& executablePath);
 	void terminateSession();
 
@@ -275,6 +277,9 @@ private:
 
 private:
 	Backend m_backend = Backend::LldbMi;
+
+	QString m_gdbExecutable = "gdb";
+	QString m_lldbMiExecutable = "/usr/local/bin/lldb-mi";
 
 	QProcess m_debuggerProcess;
 

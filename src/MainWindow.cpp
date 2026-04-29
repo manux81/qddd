@@ -46,6 +46,9 @@
 #include <QGridLayout>
 #include <QFrame>
 #include <QTabWidget>
+#include <QSettings>
+
+#include "SettingsDialog.h"
 
 MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
     : QMainWindow(parent), m_session(std::make_unique<DebuggerSession>(this)),
@@ -53,10 +56,11 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 	setupUi();
 	setupMenusAndToolbars();
 
+	applySettingsToSession();
+
 	m_consoleWidget->setSession(m_session.get());
 	m_stackView->setSession(m_session.get());
 	m_variablesView->setSession(m_session.get());
-	m_sourceEditor->setSession(m_session.get());
 	m_graphicalView->setSession(m_session.get());
 
 	connect(m_session.get(), &DebuggerSession::targetStopped, this,
@@ -234,6 +238,9 @@ void MainWindow::setupMenusAndToolbars() {
 	QMenu *fileMenu = menuBar()->addMenu(tr("&File"));
 	QAction *openAct = fileMenu->addAction(tr("Open Program..."));
 	connect(openAct, &QAction::triggered, this, &MainWindow::openProgram);
+	QAction *settingsAct = fileMenu->addAction(tr("Settings..."));
+	settingsAct->setShortcut(QKeySequence::Preferences);
+	connect(settingsAct, &QAction::triggered, this, &MainWindow::openSettings);
 	fileMenu->addSeparator();
 	fileMenu->addAction(tr("Quit"), this, &QWidget::close);
 
@@ -497,6 +504,29 @@ void MainWindow::openProgram() {
 	if (!file.isEmpty()) {
 		startDebugger(file);
 	}
+}
+
+void MainWindow::openSettings()
+{
+	SettingsDialog dlg(this);
+	if (dlg.exec() != QDialog::Accepted)
+		return;
+
+	dlg.save();
+	applySettingsToSession();
+}
+
+void MainWindow::applySettingsToSession()
+{
+	QSettings s;
+	const QString backend = s.value("debugger/backend", "gdb-mi").toString();
+	if (backend == "lldb-mi")
+		m_session->setBackend(DebuggerSession::Backend::LldbMi);
+	else
+		m_session->setBackend(DebuggerSession::Backend::GdbMi);
+
+	m_session->setGdbExecutable(s.value("debugger/gdbPath", "gdb").toString());
+	m_session->setLldbMiExecutable(s.value("debugger/lldbMiPath", "/usr/local/bin/lldb-mi").toString());
 }
 
 void MainWindow::runProgram() {

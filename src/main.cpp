@@ -40,6 +40,8 @@ int main(int argc, char *argv[]) {
 	QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps); //HiDPI pixmaps
 #endif
 	QApplication app(argc, argv);
+	QCoreApplication::setOrganizationName("qddd");
+	QCoreApplication::setApplicationName("qddd");
 	app.setWindowIcon(QIcon(":icons/resources/icons/appicon.png"));
 	Q_INIT_RESOURCE(resources);
 

@@ -60,6 +60,7 @@ class MainWindow : public QMainWindow {
 
   private slots:
 	void openProgram();
+	void openSettings();
 	void runProgram();
 	void continueProgram();
 	void stepInto();
@@ -77,6 +78,7 @@ class MainWindow : public QMainWindow {
 	void setupUi();
 	void setupMenusAndToolbars();
 	void startDebugger(const QString &programPath);
+	void applySettingsToSession();
 	SourceEditor* currentSourceEditor() const;
 	SourceEditor* ensureSourceTabForFile(const QString& file);
 	void showSourceLocation(const QString& file, int line);

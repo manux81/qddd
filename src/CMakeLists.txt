@@ -24,6 +24,8 @@ add_executable(qddd
     BreakpointEditorDialog.h
     QDDDSplash.cpp
     QDDDSplash.h
+    SettingsDialog.cpp
+    SettingsDialog.h
 
     resources.qrc
 )

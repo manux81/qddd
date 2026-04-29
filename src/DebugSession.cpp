@@ -228,6 +228,18 @@ void DebuggerSession::setBackend(Backend backend)
     m_backend = backend;
 }
 
+void DebuggerSession::setGdbExecutable(const QString& path)
+{
+	if (!path.trimmed().isEmpty())
+		m_gdbExecutable = path.trimmed();
+}
+
+void DebuggerSession::setLldbMiExecutable(const QString& path)
+{
+	if (!path.trimmed().isEmpty())
+		m_lldbMiExecutable = path.trimmed();
+}
+
 void DebuggerSession::startSession(const QString& executablePath)
 {
     QFileInfo fi(executablePath);
@@ -241,11 +253,11 @@ void DebuggerSession::startSession(const QString& executablePath)
 
     switch (m_backend) {
     case Backend::GdbMi:
-        debugger = "gdb";
+        debugger = m_gdbExecutable;
         args << "--interpreter=mi2";
         break;
     case Backend::LldbMi:
-        debugger = "/usr/local/bin/lldb-mi";
+        debugger = m_lldbMiExecutable;
         args << "--interpreter=mi3";
         break;
     }
