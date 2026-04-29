@@ -35,7 +35,33 @@
 #include <QPainter>
 #include <QScrollBar>
 #include <QTextBlock>
+#include <QMouseEvent>
+#include <QGuiApplication>
+#include <QLabel>
+#include <QScreen>
+#include <QVBoxLayout>
+#include <QGraphicsDropShadowEffect>
+#include <QPlainTextEdit>
+#include <QFontMetrics>
 #include <algorithm>
+
+static QString prettyValueForHint(const QString& value);
+
+static int clampInt(int v, int lo, int hi)
+{
+	return qMax(lo, qMin(hi, v));
+}
+
+static int maxLineWidthPx(const QString& text, const QFont& font, int maxLinesToScan)
+{
+	const QFontMetrics fm(font);
+	const QStringList lines = text.split('\n');
+	const int n = qMin(maxLinesToScan, lines.size());
+	int best = 0;
+	for (int i = 0; i < n; ++i)
+		best = qMax(best, fm.horizontalAdvance(lines[i]));
+	return best;
+}
 
 LineNumberArea::LineNumberArea(SourceEditor *editor)
     : QWidget(editor), m_editor(editor) {}
@@ -69,7 +95,374 @@ SourceEditor::SourceEditor(QWidget *parent)
 	              " selection-background-color: #264f78;"
 	              "}");
 
+	setMouseTracking(true);
+	m_hoverTimer.setSingleShot(true);
+	m_hoverTimer.setInterval(350);
+	connect(&m_hoverTimer, &QTimer::timeout, this, [this] {
+		if (!m_session || m_pendingHoverExpr.isEmpty())
+			return;
+
+		const QString expr = m_pendingHoverExpr;
+		m_session->evaluateExpressionValue(expr,
+			[this, expr](const QString& value, const QString& type) {
+				if (expr != m_pendingHoverExpr)
+					return;
+
+				if (value.isEmpty()) {
+					if (m_hoverHint)
+						m_hoverHint->hide();
+					m_shownHoverExpr.clear();
+					return;
+				}
+
+				m_shownHoverExpr = expr;
+
+				// Lazy-create a modern styled hover hint widget.
+				if (!m_hoverHint) {
+					auto* hint = new QFrame(nullptr, Qt::ToolTip | Qt::FramelessWindowHint);
+					hint->setAttribute(Qt::WA_ShowWithoutActivating);
+					hint->setAttribute(Qt::WA_TransparentForMouseEvents);
+					hint->setObjectName("hoverHint");
+
+						auto* title = new QLabel(hint);
+						title->setObjectName("hoverHintTitle");
+						title->setTextFormat(Qt::PlainText);
+						title->setWordWrap(false);
+
+						auto* meta = new QLabel(hint);
+						meta->setObjectName("hoverHintMeta");
+						meta->setTextFormat(Qt::PlainText);
+						meta->setWordWrap(true);
+
+					auto* sep = new QFrame(hint);
+					sep->setObjectName("hoverHintSep");
+					sep->setFrameShape(QFrame::HLine);
+					sep->setFrameShadow(QFrame::Plain);
+
+						auto* body = new QPlainTextEdit(hint);
+						body->setObjectName("hoverHintBody");
+						body->setReadOnly(true);
+						body->setFrameStyle(QFrame::NoFrame);
+						body->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+						body->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+						body->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+						body->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+						body->setMaximumBlockCount(0);
+						body->setContentsMargins(0, 0, 0, 0);
+						body->setCursorWidth(0);
+						body->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+
+					auto* layout = new QVBoxLayout(hint);
+					layout->setContentsMargins(12, 10, 12, 10);
+					layout->setSpacing(6);
+					layout->addWidget(title);
+					layout->addWidget(meta);
+					layout->addWidget(sep);
+					layout->addWidget(body);
+
+					hint->setStyleSheet(R"(
+						#hoverHint {
+							background: #000000;
+							border: 1px solid rgba(255, 255, 255, 90);
+							border-radius: 10px;
+						}
+						#hoverHintTitle {
+							color: #ffffff;
+							background: transparent;
+							font-family: Menlo, Monaco, Consolas, "SF Mono", "Courier New", monospace;
+							font-size: 14px;
+							font-weight: 700;
+						}
+						#hoverHintMeta {
+							color: rgba(255,255,255,210);
+							background: transparent;
+							font-family: Menlo, Monaco, Consolas, "SF Mono", "Courier New", monospace;
+							font-size: 12px;
+						}
+						#hoverHintSep {
+							color: rgba(255,255,255,55);
+							background: rgba(255,255,255,55);
+							min-height: 1px;
+							max-height: 1px;
+							border: none;
+						}
+						#hoverHintBody {
+							background: transparent;
+							border-radius: 0px;
+							padding: 0px;
+							color: #f6f6f6;
+							font-family: Menlo, Monaco, Consolas, "SF Mono", "Courier New", monospace;
+							font-size: 13px;
+							selection-background-color: rgba(38,79,120,200);
+						}
+						#hoverHintBody QWidget {
+							background: transparent;
+							color: #f6f6f6;
+						}
+						#hoverHintBody QScrollBar:vertical {
+							background: transparent;
+							width: 8px;
+							margin: 2px;
+						}
+						#hoverHintBody QScrollBar::handle:vertical {
+							background: rgba(200, 200, 200, 100);
+							border-radius: 4px;
+							min-height: 20px;
+						}
+						#hoverHintBody QScrollBar::add-line:vertical,
+						#hoverHintBody QScrollBar::sub-line:vertical {
+							height: 0px;
+						}
+						#hoverHintBody QScrollBar::add-page:vertical,
+						#hoverHintBody QScrollBar::sub-page:vertical {
+							background: transparent;
+						}
+					)");
+
+					auto* shadow = new QGraphicsDropShadowEffect(hint);
+					shadow->setBlurRadius(18);
+					shadow->setOffset(0, 6);
+					shadow->setColor(QColor(0, 0, 0, 160));
+					hint->setGraphicsEffect(shadow);
+
+					m_hoverHint = hint;
+				}
+
+				auto* title = m_hoverHint->findChild<QLabel*>("hoverHintTitle");
+				auto* meta = m_hoverHint->findChild<QLabel*>("hoverHintMeta");
+				auto* body = m_hoverHint->findChild<QPlainTextEdit*>("hoverHintBody");
+
+				if (title)
+					title->setText(expr);
+
+					if (meta) {
+						const QString shownType = type.trimmed();
+						meta->setVisible(!shownType.isEmpty());
+						meta->setText(shownType);
+					}
+
+					if (body) {
+						body->setPlainText(prettyValueForHint(value));
+						body->document()->setTextWidth(-1);
+						body->moveCursor(QTextCursor::Start);
+					}
+
+					// Position near cursor, clamp to screen.
+					const QPoint global = mapToGlobal(m_lastMousePos) + QPoint(14, 18);
+
+					const int paddingX = 12 * 2;
+					const int extraX = 10;
+
+					const QString titleText = title ? title->text() : QString{};
+					const QString metaText  = meta && meta->isVisible() ? meta->text() : QString{};
+					const QString bodyText  = body ? body->toPlainText() : QString{};
+
+					const int titleW = title ? QFontMetrics(title->font()).horizontalAdvance(titleText) : 0;
+					const int metaW  = meta && meta->isVisible() ? QFontMetrics(meta->font()).horizontalAdvance(metaText) : 0;
+					const int bodyW  = body ? maxLineWidthPx(bodyText, body->font(), 10) : 0;
+
+					const int targetW = clampInt(
+						qMax(qMax(titleW, metaW), bodyW) + paddingX + extraX,
+						240,
+						760
+					);
+
+					m_hoverHint->setFixedWidth(targetW);
+
+					// Optimize height to content.
+					if (body) {
+						const int bodyInnerW = qMax(160, targetW - paddingX);
+						body->setFixedWidth(bodyInnerW);
+						body->document()->setTextWidth(bodyInnerW);
+						body->document()->adjustSize();
+						// Use font metrics + block count to avoid underestimating height
+						// before the widget is actually shown.
+						const int lineH = QFontMetrics(body->font()).height();
+						const int blocks = qMax(1, body->document()->blockCount());
+						const int docH = qMax(
+							int(std::ceil(body->document()->size().height())),
+							blocks * lineH
+						);
+						int maxBodyH = 260;
+						if (QScreen* s = QGuiApplication::screenAt(global)) {
+							const QRect avail = s->availableGeometry();
+							// Leave room for title/meta/margins and keep the hint within the screen.
+							maxBodyH = qMax(120, avail.height() - 180);
+						}
+						const int bodyH = clampInt(docH + 6, 22, maxBodyH);
+						body->setFixedHeight(bodyH);
+					}
+
+					// Keep title single-line and height stable.
+					if (title) {
+						const QFontMetrics tfm(title->font());
+						const int maxTitlePx = qMax(120, targetW - paddingX);
+						title->setText(tfm.elidedText(expr, Qt::ElideRight, maxTitlePx));
+					}
+
+					m_hoverHint->adjustSize();
+
+				QScreen* screen = QGuiApplication::screenAt(global);
+				if (!screen)
+					screen = QGuiApplication::primaryScreen();
+				const QRect avail = screen ? screen->availableGeometry() : QRect{};
+
+				QPoint pos = global;
+				if (!avail.isNull()) {
+					if (pos.x() + m_hoverHint->width() > avail.right())
+						pos.setX(avail.right() - m_hoverHint->width());
+					if (pos.y() + m_hoverHint->height() > avail.bottom())
+						pos.setY(avail.bottom() - m_hoverHint->height());
+					pos.setX(qMax(avail.left(), pos.x()));
+					pos.setY(qMax(avail.top(), pos.y()));
+				}
+
+				m_hoverHint->move(pos);
+				m_hoverHint->show();
+			});
+	});
+
 	highlightCurrentLine();
+}
+
+static QString extractHoverExpression(const QString& lineText, int col)
+{
+	if (lineText.isEmpty() || col < 0 || col >= lineText.size())
+		return {};
+
+	auto isIdentChar = [](QChar c) {
+		return c.isLetterOrNumber() || c == '_';
+	};
+
+	auto isSpace = [](QChar c) { return c.isSpace(); };
+
+	// Move to nearest non-space
+	int i = col;
+	while (i > 0 && isSpace(lineText[i])) --i;
+	while (i < lineText.size() && isSpace(lineText[i])) ++i;
+	if (i < 0 || i >= lineText.size())
+		return {};
+
+	int left = i;
+	int right = i;
+
+	// Expand around an identifier
+	if (isIdentChar(lineText[i])) {
+		while (left > 0 && isIdentChar(lineText[left - 1]))
+			--left;
+		while (right + 1 < lineText.size() && isIdentChar(lineText[right + 1]))
+			++right;
+	} else if (lineText[i] == ']' && i > 0) {
+		// Cursor on closing bracket: include bracket expression
+		int depth = 0;
+		int j = i;
+		for (; j >= 0; --j) {
+			if (lineText[j] == ']') depth++;
+			else if (lineText[j] == '[') {
+				--depth;
+				if (depth == 0) break;
+			}
+		}
+		if (j >= 0) {
+			left = j;
+			right = i;
+		}
+	} else {
+		return {};
+	}
+
+	// Consume postfixes: .field, ->field, [index]
+	auto consumeIdent = [&](int& pos) -> bool {
+		int start = pos;
+		while (pos < lineText.size() && isIdentChar(lineText[pos]))
+			++pos;
+		return pos > start;
+	};
+
+	int pos = right + 1;
+	while (pos < lineText.size()) {
+		if (lineText.mid(pos, 2) == "->") {
+			pos += 2;
+			if (!consumeIdent(pos))
+				break;
+			right = pos - 1;
+			continue;
+		}
+		if (lineText[pos] == '.') {
+			++pos;
+			if (!consumeIdent(pos))
+				break;
+			right = pos - 1;
+			continue;
+		}
+		if (lineText[pos] == '[') {
+			int depth = 0;
+			int j = pos;
+			for (; j < lineText.size(); ++j) {
+				if (lineText[j] == '[') depth++;
+				else if (lineText[j] == ']') {
+					--depth;
+					if (depth == 0) break;
+				}
+			}
+			if (j >= lineText.size() || lineText[j] != ']')
+				break;
+			right = j;
+			pos = j + 1;
+			continue;
+		}
+		break;
+	}
+
+	// Consume leading unary * and & (common for pointers)
+	while (left > 0 && (lineText[left - 1] == '*' || lineText[left - 1] == '&'))
+		--left;
+
+	QString expr = lineText.mid(left, right - left + 1).trimmed();
+	if (expr.isEmpty())
+		return {};
+
+	// Heuristic: avoid keywords / numbers only
+	bool okNum = false;
+	expr.toLongLong(&okNum, 0);
+	if (okNum)
+		return {};
+
+	return expr;
+}
+
+static QString prettyValueForHint(const QString& value)
+{
+	QString v = value.trimmed();
+	if (v.isEmpty())
+		return v;
+
+	// Compact common struct-like output.
+	if (v.startsWith('{') && v.endsWith('}')) {
+		QString inner = v.mid(1, v.size() - 2).trimmed();
+		if (!inner.isEmpty()) {
+			// Break on top-level commas to make it readable in the hint.
+			QStringList parts;
+			int depth = 0;
+			int start = 0;
+			for (int i = 0; i < inner.size(); ++i) {
+				const QChar c = inner[i];
+				if (c == '{' || c == '[') depth++;
+				else if (c == '}' || c == ']') depth--;
+				else if (c == ',' && depth == 0) {
+					parts << inner.mid(start, i - start).trimmed();
+					start = i + 1;
+				}
+			}
+			parts << inner.mid(start).trimmed();
+
+			for (QString& p : parts)
+				p = "  " + p;
+			v = "{\n" + parts.join(",\n") + "\n}";
+		}
+	}
+
+	return v;
 }
 
 void SourceEditor::setBreakpointLines(const QSet<int>& lines)
@@ -287,6 +680,56 @@ void SourceEditor::mousePressEvent(QMouseEvent *event)
     }
 }
 
+void SourceEditor::mouseMoveEvent(QMouseEvent *event)
+{
+	QPlainTextEdit::mouseMoveEvent(event);
+
+	m_lastMousePos = event->pos();
+
+	if (!m_session) {
+		m_pendingHoverExpr.clear();
+		if (m_hoverHint)
+			m_hoverHint->hide();
+		return;
+	}
+
+	// Only show value hints when the target is stopped (avoid spamming while running)
+	// We don't have an explicit "target running" flag, but tooltips are most useful
+	// after a stop event anyway.
+
+	QTextCursor c = cursorForPosition(event->pos());
+	const QString lineText = c.block().text();
+	const int col = c.position() - c.block().position();
+
+	const QString expr = extractHoverExpression(lineText, col);
+	if (expr.isEmpty()) {
+		m_pendingHoverExpr.clear();
+		if (!m_shownHoverExpr.isEmpty()) {
+			if (m_hoverHint)
+				m_hoverHint->hide();
+			m_shownHoverExpr.clear();
+		}
+		m_hoverTimer.stop();
+		return;
+	}
+
+	if (expr == m_pendingHoverExpr)
+		return;
+
+	m_pendingHoverExpr = expr;
+	m_hoverTimer.start();
+}
+
+void SourceEditor::leaveEvent(QEvent *event)
+{
+	QPlainTextEdit::leaveEvent(event);
+	m_hoverTimer.stop();
+	m_pendingHoverExpr.clear();
+	m_shownHoverExpr.clear();
+	if (m_hoverHint)
+		m_hoverHint->hide();
+}
+
 void SourceEditor::currentLocation(QString &file, int &line) const {
 	file = this->property("currentFile")
 	           .toString();
@@ -295,5 +738,8 @@ void SourceEditor::currentLocation(QString &file, int &line) const {
 
 void SourceEditor::setBreakpointsUpdated(const QSet<int>& lines)
 {
-    viewport()->update();
+	Q_UNUSED(lines);
+	if (m_hoverHint)
+		m_hoverHint->hide();
+	viewport()->update();
 }

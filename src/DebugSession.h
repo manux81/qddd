@@ -207,6 +207,9 @@ public:
 	void dereferencePointer(const QString& pointerExpr,
 							std::function<void(const QString& value,
 											   const QString& type)> cb);
+	void evaluateExpressionValue(const QString& expr,
+								 std::function<void(const QString& value,
+													const QString& type)> cb);
 
 signals:
 	void targetRunning();

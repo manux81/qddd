@@ -33,7 +33,9 @@
 
 #include <QPlainTextEdit>
 #include <QSet>
+#include <QTimer>
 #include <QWidget>
+#include <QPointer>
 
 #include "DebugSession.h"
 
@@ -64,6 +66,8 @@ class SourceEditor : public QPlainTextEdit {
   protected:
 	void resizeEvent(QResizeEvent *event) override;
 	void mousePressEvent(QMouseEvent *event) override;
+	void mouseMoveEvent(QMouseEvent *event) override;
+	void leaveEvent(QEvent *event) override;
 
   private slots:
 	void updateLineNumberAreaWidth(int newBlockCount);
@@ -74,6 +78,12 @@ class SourceEditor : public QPlainTextEdit {
 	LineNumberArea *m_lineNumberArea;
 	int m_currentPC = -1;
 	DebuggerSession *m_session = nullptr;
+
+	QTimer m_hoverTimer;
+	QPoint m_lastMousePos;
+	QString m_pendingHoverExpr;
+	QString m_shownHoverExpr;
+	QPointer<QWidget> m_hoverHint;
 };
 
 class LineNumberArea : public QWidget {

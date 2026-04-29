@@ -1072,6 +1072,29 @@ void DebuggerSession::dereferencePointer(
 	);
 }
 
+void DebuggerSession::evaluateExpressionValue(
+	const QString& expr,
+	std::function<void(const QString& value, const QString& type)> cb)
+{
+	if (expr.isEmpty() || !cb)
+		return;
+
+	if (!isRunning())
+		return;
+
+	enqueueCommand(
+		QString("-data-evaluate-expression \"%1\"").arg(expr),
+		[this, cb = std::move(cb)](const QString& reply) mutable {
+			if (reply.contains("^error")) {
+				cb({}, {});
+				return;
+			}
+
+			cb(miGet(reply, "value"), miGet(reply, "type"));
+		}
+	);
+}
+
 
 // ============================================================================
 // Accessors
