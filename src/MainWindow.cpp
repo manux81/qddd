@@ -45,6 +45,7 @@
 #include <QVBoxLayout>
 #include <QGridLayout>
 #include <QFrame>
+#include <QTabWidget>
 
 MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
     : QMainWindow(parent), m_session(std::make_unique<DebuggerSession>(this)),
@@ -63,14 +64,22 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 
 	connect(m_session.get(), &DebuggerSession::breakpointLinesChanged, this,
 	        [this](const QString &file, const QSet<int> &lines) {
-		        Q_UNUSED(file);
-		        m_sourceEditor->setBreakpointLines(lines);
+		        SourceEditor* editor = file.isEmpty()
+			        ? currentSourceEditor()
+			        : ensureSourceTabForFile(file);
+		        if (editor)
+			        editor->setBreakpointLines(lines);
 	        });
 
 	connect(m_session.get(), &DebuggerSession::snapshotCaptured, this,
 	        [this](const ExecutionSnapshot &) { m_graphicalView->refresh(); });
 	connect(m_session.get(), &DebuggerSession::variablesUpdated, m_graphicalView,
 				  &GraphicalVariablesView::refresh);
+
+	connect(m_session.get(), &DebuggerSession::stoppedAt, this,
+	        [this](const QString& file, int line, const QString&) {
+		        showSourceLocation(file, line);
+	        });
 
 	if (!m_currentProgram.isEmpty()) {
 		startDebugger(m_currentProgram);
@@ -81,8 +90,23 @@ void MainWindow::setupUi() {
 	setDockOptions(QMainWindow::AllowTabbedDocks |
 	               QMainWindow::AllowNestedDocks);
 
-	m_sourceEditor = new SourceEditor(this);
-	setCentralWidget(m_sourceEditor);
+	m_sourceTabs = new QTabWidget(this);
+	m_sourceTabs->setDocumentMode(true);
+	m_sourceTabs->setMovable(true);
+	m_sourceTabs->setTabsClosable(false);
+	setCentralWidget(m_sourceTabs);
+
+	auto* initialEditor = new SourceEditor(m_sourceTabs);
+	m_sourceEditor = initialEditor;
+	wireSourceEditor(initialEditor);
+	m_sourceTabs->addTab(initialEditor, tr("Source"));
+
+	connect(m_sourceTabs, &QTabWidget::currentChanged, this, [this](int idx) {
+		auto* w = m_sourceTabs ? m_sourceTabs->widget(idx) : nullptr;
+		auto* ed = qobject_cast<SourceEditor*>(w);
+		if (ed)
+			m_sourceEditor = ed;
+	});
 
 	m_varsDock = new QDockWidget(tr("Variables"), this);
 	m_variablesView = new VariablesView(m_varsDock);
@@ -109,8 +133,7 @@ void MainWindow::setupUi() {
 
 	connect(m_stackView, &StackView::frameActivated, this,
 	        [&](QString file, int line) {
-		        this->m_sourceEditor->setCurrentPC(line);
-		        this->m_sourceEditor->showLocation(file, line);
+		        showSourceLocation(file, line);
 	        });
 
 	m_breakDock = new QDockWidget(tr("Breakpoints"), this);
@@ -128,12 +151,83 @@ void MainWindow::setupUi() {
 	        [&](QString loc) {
 		        auto parts = loc.split(':');
 		        if (parts.size() == 2) {
-			        this->m_sourceEditor->showLocation(parts[0], parts[1].toInt());
-			        this->m_sourceEditor->setCurrentPC(parts[1].toInt());
+			        showSourceLocation(parts[0], parts[1].toInt());
 		        }
 	        });
-	connect(m_sourceEditor, &SourceEditor::toggleBreakpointRequested,
-			this, &MainWindow::toggleBp);
+}
+
+SourceEditor* MainWindow::currentSourceEditor() const
+{
+	return m_sourceEditor;
+}
+
+void MainWindow::wireSourceEditor(SourceEditor* editor)
+{
+	if (!editor)
+		return;
+	editor->setSession(m_session.get());
+	connect(editor, &SourceEditor::toggleBreakpointRequested,
+	        this, &MainWindow::toggleBpAt);
+	connect(editor, &SourceEditor::runUntilRequested,
+	        this, [this](const QString& file, int line) {
+		        m_session->runToCursor(QString("%1:%2").arg(file).arg(line));
+	        });
+}
+
+SourceEditor* MainWindow::ensureSourceTabForFile(const QString& file)
+{
+	if (!m_sourceTabs)
+		return currentSourceEditor();
+
+	const QFileInfo fi(file);
+	const QString canonical = fi.exists() ? fi.canonicalFilePath() : QString();
+	const QString key = canonical.isEmpty() ? file : canonical;
+
+	auto it = m_sourceEditorByFile.constFind(key);
+	if (it != m_sourceEditorByFile.constEnd()) {
+		if (it.value())
+			return it.value();
+		m_sourceEditorByFile.remove(key);
+	}
+
+	// Reuse the initial tab if it doesn't have an associated file yet.
+	if (auto* existing = currentSourceEditor()) {
+		const QString existingFile = existing->property("currentFile").toString();
+		if (existingFile.isEmpty()) {
+			m_sourceEditorByFile.insert(key, existing);
+			return existing;
+		}
+	}
+
+	auto* editor = new SourceEditor(m_sourceTabs);
+	wireSourceEditor(editor);
+
+	const QString title = fi.fileName().isEmpty() ? tr("Source") : fi.fileName();
+	const int idx = m_sourceTabs->addTab(editor, title);
+	m_sourceTabs->setTabToolTip(idx, fi.absoluteFilePath());
+	m_sourceEditorByFile.insert(key, editor);
+	return editor;
+}
+
+void MainWindow::showSourceLocation(const QString& file, int line)
+{
+	SourceEditor* editor = ensureSourceTabForFile(file);
+	if (!editor)
+		return;
+
+	if (m_sourceTabs) {
+		const int idx = m_sourceTabs->indexOf(editor);
+		if (idx >= 0)
+			m_sourceTabs->setCurrentIndex(idx);
+
+		const QFileInfo fi(file);
+		const QString title = fi.fileName().isEmpty() ? tr("Source") : fi.fileName();
+		m_sourceTabs->setTabText(m_sourceTabs->currentIndex(), title);
+		m_sourceTabs->setTabToolTip(m_sourceTabs->currentIndex(), fi.absoluteFilePath());
+	}
+
+	editor->showLocation(file, line);
+	editor->setCurrentPC(line);
 }
 
 void MainWindow::setupMenusAndToolbars() {
@@ -435,11 +529,19 @@ void MainWindow::down() {};
 void MainWindow::toggleBp() {
 	QString file;
 	int line;
-	m_sourceEditor->currentLocation(file, line);
+	if (auto* ed = currentSourceEditor())
+		ed->currentLocation(file, line);
 
 	if (file.isEmpty() || line <= 0)
 		return;
 
+	toggleBpAt(file, line);
+}
+
+void MainWindow::toggleBpAt(const QString& file, int line)
+{
+	if (file.isEmpty() || line <= 0)
+		return;
 	m_session->toggleBreakpoint(QString("%1:%2").arg(file).arg(line));
 }
 

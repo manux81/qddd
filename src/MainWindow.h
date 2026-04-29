@@ -32,6 +32,8 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QHash>
+#include <QPointer>
 #include <memory>
 
 #include "BreakpointsView.h"
@@ -47,6 +49,7 @@
 class QDockWidget;
 class QAction;
 class QToolBar;
+class QTabWidget;
 
 class MainWindow : public QMainWindow {
 	Q_OBJECT
@@ -66,6 +69,7 @@ class MainWindow : public QMainWindow {
 	void up();
 	void down();
 	void toggleBp();
+	void toggleBpAt(const QString& file, int line);
 
 	void onTargetStopped();
 
@@ -73,10 +77,16 @@ class MainWindow : public QMainWindow {
 	void setupUi();
 	void setupMenusAndToolbars();
 	void startDebugger(const QString &programPath);
+	SourceEditor* currentSourceEditor() const;
+	SourceEditor* ensureSourceTabForFile(const QString& file);
+	void showSourceLocation(const QString& file, int line);
+	void wireSourceEditor(SourceEditor* editor);
 
 	std::unique_ptr<DebuggerSession> m_session;
 
+	QTabWidget *m_sourceTabs = nullptr;
 	SourceEditor *m_sourceEditor = nullptr;
+	QHash<QString, QPointer<SourceEditor>> m_sourceEditorByFile;
 	VariablesView *m_variablesView = nullptr;
 	StackView *m_stackView = nullptr;
     GraphicalVariablesView *m_graphicalView = nullptr;

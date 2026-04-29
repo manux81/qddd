@@ -525,13 +525,6 @@ void SourceEditor::setSession(DebuggerSession* session)
 	if (!m_session)
 		return;
 
-	connect(m_session, &DebuggerSession::stoppedAt,
-			this,
-			[this](const QString& file, int line, const QString&) {
-				showLocation(file, line);
-				setCurrentPC(line);
-			});
-
 	connect(m_session, &DebuggerSession::breakpointsUpdated,
 			this,
 			[this] {
