@@ -53,6 +53,12 @@ constexpr const char* kKeyLldbMiPath   = "debugger/lldbMiPath";
 constexpr const char* kKeyTargetType   = "target/type";
 constexpr const char* kKeyRemoteHost   = "target/remoteHost";
 constexpr const char* kKeyRemotePort   = "target/remotePort";
+constexpr const char* kKeyOpenAIKey    = "ai/openaiApiKey";
+constexpr const char* kKeyOpenAIModel  = "ai/openaiModel";
+constexpr const char* kKeyOpenAIBaseUrl= "ai/openaiBaseUrl";
+constexpr const char* kKeyAIProvider   = "ai/provider";
+constexpr const char* kKeyOllamaModel  = "ai/ollamaModel";
+constexpr const char* kKeyOllamaBaseUrl= "ai/ollamaBaseUrl";
 
 QString withBrowse(QLineEdit* edit, const QString& caption, QWidget* parent,
                    const QString& filter = QString())
@@ -153,6 +159,62 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 	tabs->addTab(debuggerPage, tr("Debugger"));
 	tabs->addTab(targetPage, tr("Target"));
 
+	// --- AI tab ---
+	auto* aiPage = new QWidget(tabs);
+	auto* aiLayout = new QVBoxLayout(aiPage);
+
+	auto* aiBox = new QGroupBox(tr("LLM Provider"), aiPage);
+	auto* aiForm = new QFormLayout(aiBox);
+
+	m_aiProviderCombo = new QComboBox(aiBox);
+	m_aiProviderCombo->addItem(tr("Ollama (local)"), "ollama");
+	m_aiProviderCombo->addItem(tr("OpenAI (cloud)"), "openai");
+	aiForm->addRow(tr("Provider:"), m_aiProviderCombo);
+
+	m_openaiApiKeyEdit = new QLineEdit(aiBox);
+	m_openaiApiKeyEdit->setEchoMode(QLineEdit::Password);
+	aiForm->addRow(tr("API key:"), m_openaiApiKeyEdit);
+
+	m_openaiModelEdit = new QLineEdit(aiBox);
+	m_openaiModelEdit->setPlaceholderText("gpt-4.1-mini");
+	aiForm->addRow(tr("Model:"), m_openaiModelEdit);
+
+	m_openaiBaseUrlEdit = new QLineEdit(aiBox);
+	m_openaiBaseUrlEdit->setPlaceholderText("https://api.openai.com/v1");
+	aiForm->addRow(tr("Base URL:"), m_openaiBaseUrlEdit);
+
+	m_ollamaModelEdit = new QLineEdit(aiBox);
+	m_ollamaModelEdit->setPlaceholderText("llama3.1");
+	aiForm->addRow(tr("Ollama model:"), m_ollamaModelEdit);
+
+	m_ollamaBaseUrlEdit = new QLineEdit(aiBox);
+	m_ollamaBaseUrlEdit->setPlaceholderText("http://localhost:11434");
+	aiForm->addRow(tr("Ollama URL:"), m_ollamaBaseUrlEdit);
+
+	auto* aiHint = new QLabel(
+		tr("The Debug Assistant sends a compact snapshot of your debug session to the model to propose explanations and actions."),
+		aiPage);
+	aiHint->setWordWrap(true);
+	aiHint->setStyleSheet("color: rgba(255,255,255,140);");
+
+	auto updateAIVisibility = [this] {
+		const QString provider = m_aiProviderCombo->currentData().toString();
+		const bool isOpenAI = (provider == "openai");
+		m_openaiApiKeyEdit->setEnabled(isOpenAI);
+		m_openaiModelEdit->setEnabled(isOpenAI);
+		m_openaiBaseUrlEdit->setEnabled(isOpenAI);
+		m_ollamaModelEdit->setEnabled(!isOpenAI);
+		m_ollamaBaseUrlEdit->setEnabled(!isOpenAI);
+	};
+	connect(m_aiProviderCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+	        this, [updateAIVisibility](int) { updateAIVisibility(); });
+
+	aiLayout->addWidget(aiBox);
+	aiLayout->addWidget(aiHint);
+	aiLayout->addStretch(1);
+
+	tabs->addTab(aiPage, tr("AI"));
+
 	auto* buttons = new QDialogButtonBox(
 		QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
 		Qt::Horizontal,
@@ -183,6 +245,26 @@ void SettingsDialog::load()
 	m_targetTypeCombo->setCurrentIndex(tgtIdx >= 0 ? tgtIdx : 0);
 	m_remoteHostEdit->setText(s.value(kKeyRemoteHost, "127.0.0.1").toString());
 	m_remotePortSpin->setValue(s.value(kKeyRemotePort, 3333).toInt());
+
+	m_openaiApiKeyEdit->setText(s.value(kKeyOpenAIKey).toString());
+	m_openaiModelEdit->setText(s.value(kKeyOpenAIModel, "gpt-4.1-mini").toString());
+	m_openaiBaseUrlEdit->setText(s.value(kKeyOpenAIBaseUrl, "https://api.openai.com/v1").toString());
+
+	const QString provider = s.value(kKeyAIProvider, "ollama").toString();
+	const int providerIdx = m_aiProviderCombo->findData(provider);
+	m_aiProviderCombo->setCurrentIndex(providerIdx >= 0 ? providerIdx : 0);
+	m_ollamaModelEdit->setText(s.value(kKeyOllamaModel, "llama3.1").toString());
+	m_ollamaBaseUrlEdit->setText(s.value(kKeyOllamaBaseUrl, "http://localhost:11434").toString());
+
+	{
+		const QString curProvider = m_aiProviderCombo->currentData().toString();
+		const bool isOpenAI = (curProvider == "openai");
+		m_openaiApiKeyEdit->setEnabled(isOpenAI);
+		m_openaiModelEdit->setEnabled(isOpenAI);
+		m_openaiBaseUrlEdit->setEnabled(isOpenAI);
+		m_ollamaModelEdit->setEnabled(!isOpenAI);
+		m_ollamaBaseUrlEdit->setEnabled(!isOpenAI);
+	}
 }
 
 void SettingsDialog::save() const
@@ -195,6 +277,14 @@ void SettingsDialog::save() const
 	s.setValue(kKeyTargetType, m_targetTypeCombo->currentData().toString());
 	s.setValue(kKeyRemoteHost, m_remoteHostEdit->text().trimmed());
 	s.setValue(kKeyRemotePort, m_remotePortSpin->value());
+
+	s.setValue(kKeyOpenAIKey, m_openaiApiKeyEdit->text().trimmed());
+	s.setValue(kKeyOpenAIModel, m_openaiModelEdit->text().trimmed());
+	s.setValue(kKeyOpenAIBaseUrl, m_openaiBaseUrlEdit->text().trimmed());
+
+	s.setValue(kKeyAIProvider, m_aiProviderCombo->currentData().toString());
+	s.setValue(kKeyOllamaModel, m_ollamaModelEdit->text().trimmed());
+	s.setValue(kKeyOllamaBaseUrl, m_ollamaBaseUrlEdit->text().trimmed());
 }
 
 void SettingsDialog::browseGdb()
@@ -210,4 +300,3 @@ void SettingsDialog::browseLldbMi()
 	if (!path.isEmpty())
 		m_lldbMiPathEdit->setText(path);
 }
-

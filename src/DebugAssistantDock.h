@@ -31,41 +31,61 @@
 
 #pragma once
 
-#include <QDialog>
+#include <QWidget>
 
-class QComboBox;
+class DebuggerSession;
+class QPushButton;
 class QLineEdit;
-class QSpinBox;
+class QTextBrowser;
+class QLabel;
+class QNetworkAccessManager;
+class QNetworkReply;
+class QTreeWidget;
+class QToolButton;
 
-class SettingsDialog final : public QDialog
+class DebugAssistantDock final : public QWidget
 {
 	Q_OBJECT
 
 public:
-	explicit SettingsDialog(QWidget* parent = nullptr);
-	~SettingsDialog() override = default;
+	explicit DebugAssistantDock(DebuggerSession* session, QWidget* parent = nullptr);
+	~DebugAssistantDock() override = default;
 
-	void load();
-	void save() const;
+	void setLastStopLocation(const QString& file, int line, const QString& function);
 
 private slots:
-	void browseGdb();
-	void browseLldbMi();
+	void suggest();
+	void sendUserMessage();
+	void applySelectedActions();
+	void onReplyFinished(QNetworkReply* reply);
 
 private:
-	QComboBox* m_backendCombo = nullptr;
-	QLineEdit* m_gdbPathEdit = nullptr;
-	QLineEdit* m_lldbMiPathEdit = nullptr;
+	QByteArray buildRequestBody(const QString& userText) const;
+	QString extractResponseText(const QByteArray& json) const;
+	void populateActionsFromJsonText(const QString& text);
+	void appendUser(const QString& text);
+	void appendAssistantText(const QString& text);
+	void appendInfo(const QString& text);
+	void appendError(const QString& text);
+	void setBusy(bool busy);
+	void updateApplyEnabled();
 
-	QComboBox* m_targetTypeCombo = nullptr;
-	QLineEdit* m_remoteHostEdit = nullptr;
-	QSpinBox* m_remotePortSpin = nullptr;
+	DebuggerSession* m_session = nullptr;
+	QString m_lastFile;
+	QString m_lastFunction;
+	int m_lastLine = 0;
 
-	QLineEdit* m_openaiApiKeyEdit = nullptr;
-	QLineEdit* m_openaiModelEdit = nullptr;
-	QLineEdit* m_openaiBaseUrlEdit = nullptr;
+	QLabel* m_contextLabel = nullptr;
+	QLabel* m_providerLabel = nullptr;
+	QToolButton* m_clearBtn = nullptr;
 
-	QComboBox* m_aiProviderCombo = nullptr;
-	QLineEdit* m_ollamaModelEdit = nullptr;
-	QLineEdit* m_ollamaBaseUrlEdit = nullptr;
+	QTextBrowser* m_log = nullptr;
+	QLineEdit* m_input = nullptr;
+	QPushButton* m_sendBtn = nullptr;
+	QPushButton* m_suggestBtn = nullptr;
+
+	QTreeWidget* m_actions = nullptr;
+	QPushButton* m_applyBtn = nullptr;
+
+	QNetworkAccessManager* m_net = nullptr;
 };

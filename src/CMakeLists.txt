@@ -26,6 +26,8 @@ add_executable(qddd
     QDDDSplash.h
     SettingsDialog.cpp
     SettingsDialog.h
+    DebugAssistantDock.cpp
+    DebugAssistantDock.h
 
     resources.qrc
 )
@@ -35,4 +37,5 @@ target_link_libraries(qddd
         Qt5::Core
         Qt5::Gui
         Qt5::Widgets
+        Qt5::Network
 )

@@ -49,6 +49,7 @@
 #include <QSettings>
 
 #include "SettingsDialog.h"
+#include "DebugAssistantDock.h"
 
 MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
     : QMainWindow(parent), m_session(std::make_unique<DebuggerSession>(this)),
@@ -81,8 +82,10 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 				  &GraphicalVariablesView::refresh);
 
 	connect(m_session.get(), &DebuggerSession::stoppedAt, this,
-	        [this](const QString& file, int line, const QString&) {
+	        [this](const QString& file, int line, const QString& function) {
 		        showSourceLocation(file, line);
+		        if (m_aiAssistant)
+			        m_aiAssistant->setLastStopLocation(file, line, function);
 	        });
 
 	if (!m_currentProgram.isEmpty()) {
@@ -149,6 +152,13 @@ void MainWindow::setupUi() {
 	tabifyDockWidget(m_varsDock, m_breakDock);
 
 	m_breakView->setSession(m_session.get());
+
+	// AI Debug Assistant
+	m_aiDock = new QDockWidget(tr("Debug Assistant"), this);
+	m_aiAssistant = new DebugAssistantDock(m_session.get(), m_aiDock);
+	m_aiDock->setWidget(m_aiAssistant);
+	addDockWidget(Qt::RightDockWidgetArea, m_aiDock);
+	tabifyDockWidget(m_breakDock, m_aiDock);
 
 	// Select a breakpoint → jump to editor
 	connect(m_breakView, &BreakpointsView::breakpointSelected, this,

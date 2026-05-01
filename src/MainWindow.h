@@ -50,6 +50,7 @@ class QDockWidget;
 class QAction;
 class QToolBar;
 class QTabWidget;
+class DebugAssistantDock;
 
 class MainWindow : public QMainWindow {
 	Q_OBJECT
@@ -100,6 +101,8 @@ class MainWindow : public QMainWindow {
 	QDockWidget *m_dataDock = nullptr;
 	QDockWidget *m_consoleDock = nullptr;
 	QDockWidget *m_breakDock = nullptr;
+	QDockWidget *m_aiDock = nullptr;
+	DebugAssistantDock *m_aiAssistant = nullptr;
 
 	QString m_currentProgram;
 	bool m_breakOnMainInserted = false;
