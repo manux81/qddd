@@ -37,6 +37,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -47,9 +48,11 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QSplitter>
 #include <QTextBrowser>
+#include <QTextStream>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -57,6 +60,149 @@
 #include <QVBoxLayout>
 
 namespace {
+
+QString jsonValueToString(const QJsonValue& v)
+{
+	if (v.isString())
+		return v.toString();
+	if (v.isDouble())
+		return QString::number(v.toDouble(), 'g', 16);
+	if (v.isBool())
+		return v.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+	if (v.isNull() || v.isUndefined())
+		return QString();
+	// Object/array: preserve information in a compact JSON representation.
+	if (v.isObject())
+		return QString::fromUtf8(QJsonDocument(v.toObject()).toJson(QJsonDocument::Compact));
+	if (v.isArray())
+		return QString::fromUtf8(QJsonDocument(v.toArray()).toJson(QJsonDocument::Compact));
+	return QString();
+}
+
+QJsonObject parseArgsValue(const QJsonValue& argsV)
+{
+	QJsonObject kv;
+
+	// Expected: [{key,value}, ...]
+	if (argsV.isArray()) {
+		const QJsonArray arr = argsV.toArray();
+		for (const auto& itemV : arr) {
+			if (!itemV.isObject())
+				continue;
+			const QJsonObject item = itemV.toObject();
+
+			// Schema form: {key,value}
+			const QString k = item.value("key").toString();
+			if (!k.isEmpty()) {
+				kv.insert(k, jsonValueToString(item.value("value")));
+				continue;
+			}
+
+			// Tolerate: [{file:"...", line:123}, ...]
+			for (auto it = item.begin(); it != item.end(); ++it) {
+				if (!it.key().isEmpty())
+					kv.insert(it.key(), jsonValueToString(it.value()));
+			}
+		}
+		return kv;
+	}
+
+	// Tolerate: {file:"...", line:123} or {location:"..."}
+	if (argsV.isObject()) {
+		const QJsonObject obj = argsV.toObject();
+		for (auto it = obj.begin(); it != obj.end(); ++it) {
+			if (!it.key().isEmpty())
+				kv.insert(it.key(), jsonValueToString(it.value()));
+		}
+		return kv;
+	}
+
+	return kv;
+}
+
+QString readSourceExcerpt(const QString& filePath, int centerLine, int radiusLines)
+{
+	if (filePath.isEmpty() || centerLine <= 0 || radiusLines <= 0)
+		return QString();
+
+	QFile f(filePath);
+	if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+		return QString();
+
+	QTextStream in(&f);
+	in.setCodec("UTF-8");
+
+	const int startLine = qMax(1, centerLine - radiusLines);
+	const int endLine = centerLine + radiusLines;
+
+	QString out;
+	int lineNo = 0;
+	while (!in.atEnd()) {
+		const QString line = in.readLine();
+		++lineNo;
+		if (lineNo < startLine)
+			continue;
+		if (lineNo > endLine)
+			break;
+		out += QString::number(lineNo) + ": " + line + "\n";
+	}
+	return out.trimmed();
+}
+
+QJsonArray extractFunctionNamesFromSource(const QString& source, int limit)
+{
+	QJsonArray arr;
+	if (source.isEmpty() || limit <= 0)
+		return arr;
+
+	// Heuristic for C/C++/ObjC-style definitions: "retType name(args) {"
+	// Excludes declarations ending with ';' by requiring '{' on the same line.
+	const QRegularExpression re(
+		R"(^\s*(?:[\w:\<\>\~\*\&\s]+)\s+([A-Za-z_]\w*)\s*\([^;\)]*\)\s*(?:const\s*)?\{)",
+		QRegularExpression::MultilineOption);
+
+	auto it = re.globalMatch(source);
+	while (it.hasNext() && arr.size() < limit) {
+		const auto m = it.next();
+		const QString name = m.captured(1);
+		if (!name.isEmpty())
+			arr.push_back(name);
+	}
+	return arr;
+}
+
+bool parseLineNumber(const QString& s, int* out)
+{
+	if (!out)
+		return false;
+	const QString trimmed = s.trimmed();
+	bool ok = false;
+	const int n = trimmed.toInt(&ok);
+	if (ok && n > 0) {
+		*out = n;
+		return true;
+	}
+	return false;
+}
+
+QString normalizeLocation(const QJsonObject& args)
+{
+	const QString loc = args.value("location").toString().trimmed();
+	if (!loc.isEmpty())
+		return loc;
+
+	const QString file = args.value("file").toString().trimmed();
+	int line = 0;
+	if (!file.isEmpty() && parseLineNumber(args.value("line").toString(), &line))
+		return QString("%1:%2").arg(file).arg(line);
+
+	// Accept common alternate keys.
+	const QString file2 = args.value("path").toString().trimmed();
+	if (!file2.isEmpty() && parseLineNumber(args.value("line").toString(), &line))
+		return QString("%1:%2").arg(file2).arg(line);
+
+	return QString();
+}
 
 QJsonArray topFrames(const QVector<StackFrame>& frames, int limit)
 {
@@ -331,6 +477,16 @@ QByteArray DebugAssistantDock::buildRequestBody(const QString& userText) const
 		{"function", m_lastFunction},
 	};
 
+	// Include a small source excerpt around the current stop line, so the model can
+	// resolve vague user requests like "breakpoint on the function that creates the request".
+	if (!m_lastFile.isEmpty() && m_lastLine > 0) {
+		const QString excerpt = readSourceExcerpt(m_lastFile, m_lastLine, 80);
+		if (!excerpt.isEmpty()) {
+			ctx["stopSourceExcerpt"] = excerpt;
+			ctx["stopFunctionsInExcerpt"] = extractFunctionNamesFromSource(excerpt, 40);
+		}
+	}
+
 	if (m_session) {
 		ctx["stack"] = topFrames(m_session->stackFrames(), 12);
 		ctx["variables"] = topVariables(m_session->variables(), 40);
@@ -346,6 +502,9 @@ QByteArray DebugAssistantDock::buildRequestBody(const QString& userText) const
 		"Propose actionable next steps with minimal, safe actions.\n"
 		"Prefer actions like evaluate expressions, run-to-cursor, stepping, and setting/toggling breakpoints.\n"
 		"Do not hallucinate facts about memory or program state: rely on provided context and ask for an evaluation action when needed.\n"
+		"If the user specifies only a line number, assume the file is ctx.stop.file (the current stop location).\n"
+		"If the user describes a function vaguely (e.g. \"the function that creates the request\"), use ctx.stopSourceExcerpt and ctx.stopFunctionsInExcerpt to infer a likely function name.\n"
+		"When setting/toggling a breakpoint, always provide either location=\"file:line\" or location=\"functionName\".\n"
 		"\n"
 		"Available action types and args (array of {key,value} strings):\n"
 		"- evaluate: key=expr\n"
@@ -486,15 +645,7 @@ void DebugAssistantDock::populateActionsFromJsonText(const QString& text)
 	for (const auto& aV : actions) {
 		const QJsonObject a = aV.toObject();
 		const QString type = a.value("type").toString();
-		const QJsonArray argsArr = a.value("args").toArray();
-		QJsonObject kv;
-		for (const auto& kvV : argsArr) {
-			const QJsonObject kvObj = kvV.toObject();
-			const QString k = kvObj.value("key").toString();
-			const QString v = kvObj.value("value").toString();
-			if (!k.isEmpty())
-				kv.insert(k, v);
-		}
+		const QJsonObject kv = parseArgsValue(a.value("args"));
 		const QString rationale = a.value("rationale").toString();
 
 		auto* item = new QTreeWidgetItem(m_actions);
@@ -517,6 +668,19 @@ void DebugAssistantDock::applySelectedActions()
 	if (!m_session)
 		return;
 
+	auto locationWithFallback = [this](const QJsonObject& args) -> QString {
+		QString location = normalizeLocation(args);
+		if (!location.isEmpty())
+			return location;
+
+		// If the assistant gives only a line number, assume current stop file.
+		int line = 0;
+		if (!m_lastFile.isEmpty() && parseLineNumber(args.value("line").toString(), &line))
+			return QString("%1:%2").arg(m_lastFile).arg(line);
+
+		return QString();
+	};
+
 	for (int i = 0; i < m_actions->topLevelItemCount(); ++i) {
 		auto* item = m_actions->topLevelItem(i);
 		if (!item || item->checkState(0) != Qt::Checked)
@@ -526,17 +690,40 @@ void DebugAssistantDock::applySelectedActions()
 		const QJsonObject args = item->data(0, Qt::UserRole + 1).toJsonObject();
 
 		if (type == "evaluate") {
-			m_session->evaluateExpression(args.value("expr").toString());
+			const QString expr = args.value("expr").toString().trimmed();
+			if (expr.isEmpty())
+				appendError("Cannot apply action 'evaluate': missing expr.");
+			else
+				m_session->evaluateExpression(expr);
 		} else if (type == "set_breakpoint") {
-			m_session->insertBreakpoint(args.value("location").toString());
+			const QString location = locationWithFallback(args);
+			if (location.isEmpty())
+				appendError(QString("Cannot apply action 'set_breakpoint': missing location (or file+line). args=%1")
+				                .arg(QString::fromUtf8(QJsonDocument(args).toJson(QJsonDocument::Compact))));
+			else
+				m_session->insertBreakpoint(location);
 		} else if (type == "toggle_breakpoint") {
-			m_session->toggleBreakpoint(args.value("location").toString());
+			const QString location = locationWithFallback(args);
+			if (location.isEmpty())
+				appendError(QString("Cannot apply action 'toggle_breakpoint': missing location (or file+line). args=%1")
+				                .arg(QString::fromUtf8(QJsonDocument(args).toJson(QJsonDocument::Compact))));
+			else
+				m_session->toggleBreakpoint(location);
 		} else if (type == "run_to_cursor") {
-			const QString file = args.value("file").toString();
-			const int line = args.value("line").toString().toInt();
-			m_session->runToCursor(QString("%1:%2").arg(file).arg(line));
+			const QString location = locationWithFallback(args);
+			if (location.isEmpty()) {
+				appendError(QString("Cannot apply action 'run_to_cursor': missing file+line (or location). args=%1")
+				                .arg(QString::fromUtf8(QJsonDocument(args).toJson(QJsonDocument::Compact))));
+			} else {
+				m_session->runToCursor(location);
+			}
 		} else if (type == "select_frame") {
-			m_session->selectStackFrame(args.value("index").toString().toInt());
+			bool ok = false;
+			const int index = args.value("index").toString().trimmed().toInt(&ok);
+			if (!ok)
+				appendError("Cannot apply action 'select_frame': missing/invalid index.");
+			else
+				m_session->selectStackFrame(index);
 		} else if (type == "step_into") {
 			m_session->stepInto();
 		} else if (type == "step_over") {
@@ -548,10 +735,20 @@ void DebugAssistantDock::applySelectedActions()
 		} else if (type == "interrupt") {
 			m_session->interruptExecution();
 		} else if (type == "set_variable") {
-			m_session->setVariable(args.value("path").toString(),
-			                       args.value("value").toString());
+			const QString path = args.value("path").toString().trimmed();
+			const QString value = args.value("value").toString();
+			if (path.isEmpty())
+				appendError("Cannot apply action 'set_variable': missing path.");
+			else
+				m_session->setVariable(path, value);
 		} else if (type == "raw_command") {
-			m_session->sendRawCommand(args.value("cmd").toString());
+			const QString cmd = args.value("cmd").toString().trimmed();
+			if (cmd.isEmpty())
+				appendError("Cannot apply action 'raw_command': missing cmd.");
+			else
+				m_session->sendRawCommand(cmd);
+		} else {
+			appendError(QString("Unknown action type '%1' (ignored).").arg(type));
 		}
 
 		item->setCheckState(0, Qt::Unchecked);

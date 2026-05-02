@@ -45,6 +45,16 @@ qddd focuses on **understanding program state**, not only execution flow.
 
 ---
 
+## 🤖 AI Debug Assistant
+
+<p align="center">
+  <img src="docs/screenshots/ai-breakpoint-demo.gif" width="700">
+</p>
+
+*The built-in assistant can propose and apply debugging actions like setting breakpoints.*
+
+---
+
 ## 📸 Screenshot
 
 <p align="center">
