@@ -621,18 +621,18 @@ GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
 	setStyleSheet(R"(
 	QScrollBar:vertical {
 		background: transparent;
-		width: 8px;
-		margin: 4px 2px 4px 2px;
+		width: 10px;
+		margin: 10px 4px 10px 4px;
 	}
 
 	QScrollBar::handle:vertical {
-		background: rgba(200, 200, 200, 120);
-		border-radius: 4px;
-		min-height: 30px;
+		background: #CBD5E1;
+		border-radius: 5px;
+		min-height: 32px;
 	}
 
 	QScrollBar::handle:vertical:hover {
-		background: rgba(220, 220, 220, 180);
+		background: #94A3B8;
 	}
 
 	QScrollBar::add-line:vertical,
@@ -649,18 +649,18 @@ GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
 
 	QScrollBar:horizontal {
 		background: transparent;
-		height: 8px;
-		margin: 2px 4px 2px 4px;
+		height: 10px;
+		margin: 4px 10px 4px 10px;
 	}
 
 	QScrollBar::handle:horizontal {
-		background: rgba(200, 200, 200, 120);
-		border-radius: 4px;
-		min-width: 30px;
+		background: #CBD5E1;
+		border-radius: 5px;
+		min-width: 32px;
 	}
 
 	QScrollBar::handle:horizontal:hover {
-		background: rgba(220, 220, 220, 180);
+		background: #94A3B8;
 	}
 
 	QScrollBar::add-line:horizontal,

@@ -344,7 +344,17 @@ DebugAssistantDock::DebugAssistantDock(DebuggerSession* session, QWidget* parent
 	m_log->setOpenExternalLinks(false);
 	m_log->setReadOnly(true);
 	m_log->setPlaceholderText(tr("Assistant output will appear here."));
-	m_log->setStyleSheet("QTextBrowser { background: #1e1e1e; border: 1px solid #3c3c3c; }");
+	m_log->setStyleSheet("QTextBrowser { background: #1e1e1e; border: 1px solid #3c3c3c; }"
+	                     "QScrollBar:vertical { background: transparent; width: 10px; margin: 10px 4px 10px 4px; }"
+	                     "QScrollBar::handle:vertical { background: #CBD5E1; border-radius: 5px; min-height: 32px; }"
+	                     "QScrollBar::handle:vertical:hover { background: #94A3B8; }"
+	                     "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+	                     "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }"
+	                     "QScrollBar:horizontal { background: transparent; height: 10px; margin: 4px 10px 4px 10px; }"
+	                     "QScrollBar::handle:horizontal { background: #CBD5E1; border-radius: 5px; min-width: 32px; }"
+	                     "QScrollBar::handle:horizontal:hover { background: #94A3B8; }"
+	                     "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }"
+	                     "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }");
 	split->addWidget(m_log);
 
 	auto* inputRow = new QHBoxLayout();
@@ -376,7 +386,17 @@ DebugAssistantDock::DebugAssistantDock(DebuggerSession* session, QWidget* parent
 	m_actions->setRootIsDecorated(false);
 	m_actions->setAlternatingRowColors(true);
 	m_actions->setSelectionMode(QAbstractItemView::NoSelection);
-	m_actions->setStyleSheet("QTreeWidget { background: #1e1e1e; border: 1px solid #3c3c3c; }");
+	m_actions->setStyleSheet("QTreeWidget { background: #1e1e1e; border: 1px solid #3c3c3c; }"
+	                         "QScrollBar:vertical { background: transparent; width: 10px; margin: 10px 4px 10px 4px; }"
+	                         "QScrollBar::handle:vertical { background: #CBD5E1; border-radius: 5px; min-height: 32px; }"
+	                         "QScrollBar::handle:vertical:hover { background: #94A3B8; }"
+	                         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+	                         "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }"
+	                         "QScrollBar:horizontal { background: transparent; height: 10px; margin: 4px 10px 4px 10px; }"
+	                         "QScrollBar::handle:horizontal { background: #CBD5E1; border-radius: 5px; min-width: 32px; }"
+	                         "QScrollBar::handle:horizontal:hover { background: #94A3B8; }"
+	                         "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }"
+	                         "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }");
 	actionsLayout->addWidget(m_actions, 1);
 
 	m_applyBtn = new QPushButton(tr("Apply Selected"), actionsPane);
