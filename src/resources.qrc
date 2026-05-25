@@ -22,6 +22,10 @@
    <file>resources/icons/symbol-array.svg</file>
    <file>resources/icons/debug-breakpoint-log.svg</file>
    <file>resources/icons/debug-breakpoint-log-unverified.svg</file>
+   <file>resources/icons/breakpoint-on.svg</file>
+   <file>resources/icons/breakpoint-off.svg</file>
+   <file>resources/icons/stack-up.svg</file>
+   <file>resources/icons/stack-down.svg</file>
    <file>resources/icons/toggle.svg</file>
  </qresource>
 </RCC>

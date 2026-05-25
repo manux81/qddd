@@ -37,6 +37,7 @@
 #include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QIcon>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QLabel>
@@ -130,6 +131,7 @@ void MainWindow::positionCommandOverlay()
 void MainWindow::setupUi() {
 	setDockOptions(QMainWindow::AllowTabbedDocks |
 	               QMainWindow::AllowNestedDocks);
+	setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
 
 	m_sourceTabs = new QTabWidget(this);
 	m_sourceTabs->setDocumentMode(true);
@@ -368,8 +370,10 @@ void MainWindow::setupMenusAndToolbars() {
 	stepOverAct->setIcon(QIcon(":/icons/resources/icons/step-over.svg"));
 	stepOutAct->setIcon(QIcon(":/icons/resources/icons/step-out.svg"));
 	interruptAct->setIcon(QIcon(":/icons/resources/icons/stop.svg"));
-	toggleBpAct->setIcon(QIcon(":/icons/resources/icons/toggle.svg"));
+	toggleBpAct->setIcon(QIcon(":/icons/resources/icons/breakpoint-on.svg"));
 	untilAct->setIcon(QIcon(":/icons/resources/icons/run-cursor.svg"));
+	upAct->setIcon(QIcon(":/icons/resources/icons/stack-up.svg"));
+	downAct->setIcon(QIcon(":/icons/resources/icons/stack-down.svg"));
 
 	connect(interruptAct, &QAction::triggered, this,
 			[this] { m_session->interruptExecution(); });
