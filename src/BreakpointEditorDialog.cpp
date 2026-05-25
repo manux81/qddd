@@ -42,6 +42,9 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QRegularExpressionValidator>
+#include <QDialogButtonBox>
+#include <QGuiApplication>
+#include <QScreen>
 
 BreakpointEditorDialog::BreakpointEditorDialog(DebuggerSession* session,
 											   int breakpointId,
@@ -50,8 +53,10 @@ BreakpointEditorDialog::BreakpointEditorDialog(DebuggerSession* session,
 	, m_session(session)
 	, m_breakpointId(breakpointId)
 {
-	setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
+	setWindowFlags(Qt::Dialog | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
 	setAttribute(Qt::WA_DeleteOnClose);
+	setModal(false);
+	setWindowTitle(tr("Edit Breakpoint"));
 
 	buildUi();
 	loadFromBreakpoint();
@@ -91,6 +96,10 @@ void BreakpointEditorDialog::buildUi()
 	// Condition
 	m_conditionEdit = new QLineEdit(this);
 	form->addRow(tr("Condition"), m_conditionEdit);
+
+	// Temporary
+	m_temporaryCheck = new QCheckBox(tr("Temporary (one-shot)"), this);
+	form->addRow(tr("Type"), m_temporaryCheck);
 
 	// Ignore
 	m_ignoreSpin = new QSpinBox(this);
@@ -137,6 +146,10 @@ void BreakpointEditorDialog::buildUi()
 
 	root->addLayout(form);
 
+	auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
+	connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
+	root->addWidget(buttons);
+
 	connect(addBtn, &QPushButton::clicked, this, &BreakpointEditorDialog::addAction);
 	connect(remBtn, &QPushButton::clicked, this, &BreakpointEditorDialog::removeSelectedAction);
 }
@@ -148,7 +161,8 @@ void BreakpointEditorDialog::loadFromBreakpoint()
 		if (bp.number == m_breakpointId) {
 			m_enableCheck->setChecked(bp.enabled);
 			m_conditionEdit->setText(bp.condition);
-			m_ignoreSpin->setValue(bp.hitCount);
+			m_ignoreSpin->setValue(bp.ignoreCount);
+			m_temporaryCheck->setChecked(bp.temporary);
 			m_autoContinueCheck->setChecked(bp.autoContinue);
 
 			for (const auto& action : bp.actions) {
@@ -167,6 +181,9 @@ void BreakpointEditorDialog::connectSignals()
 	connect(m_conditionEdit, &QLineEdit::editingFinished,
 			this, &BreakpointEditorDialog::applyCondition);
 
+	connect(m_temporaryCheck, &QCheckBox::toggled,
+	        this, &BreakpointEditorDialog::applyTemporary);
+
 	connect(m_ignoreSpin, qOverload<int>(&QSpinBox::valueChanged),
 			this, &BreakpointEditorDialog::applyIgnoreCount);
 
@@ -181,27 +198,22 @@ void BreakpointEditorDialog::applyEnabled()
 
 void BreakpointEditorDialog::applyCondition()
 {
-	/*
-	m_session->updateBreakpointCondition(m_breakpointId,
-										 m_conditionEdit->text());
-*/
+	m_session->updateBreakpointCondition(m_breakpointId, m_conditionEdit->text());
 }
 
 void BreakpointEditorDialog::applyIgnoreCount()
 {
-	/*
-	m_session->updateBreakpointIgnoreCount(m_breakpointId,
-										   m_ignoreSpin->value());
-*/
+	m_session->updateBreakpointIgnoreCount(m_breakpointId, m_ignoreSpin->value());
 }
 
 void BreakpointEditorDialog::applyAutoContinue()
 {
-/*
-	m_session->updateBreakpointAutoContinue(
-		m_breakpointId,
-		m_autoContinueCheck->isChecked());
-*/
+	// Not wired to backend yet.
+}
+
+void BreakpointEditorDialog::applyTemporary()
+{
+	m_session->updateBreakpointTemporary(m_breakpointId, m_temporaryCheck->isChecked());
 }
 
 void BreakpointEditorDialog::addAction()
@@ -228,5 +240,3 @@ void BreakpointEditorDialog::applyActions()
 	// Qui richiami la tua API:
 	// m_session->setBreakpointActions(...)
 }
-
-

@@ -44,12 +44,15 @@
 #include "VariablesView.h"
 
 #include "GraphicalVariablesView.h"
+#include "DisassemblyView.h"
 
 
 class QDockWidget;
 class QAction;
-class QToolBar;
+class QEvent;
+class QResizeEvent;
 class QTabWidget;
+class QWidget;
 class DebugAssistantDock;
 
 class MainWindow : public QMainWindow {
@@ -59,9 +62,14 @@ class MainWindow : public QMainWindow {
 	                    QWidget *parent = nullptr);
 	~MainWindow() override = default;
 
+  protected:
+	bool eventFilter(QObject* watched, QEvent* event) override;
+	void resizeEvent(QResizeEvent* event) override;
+
   private slots:
 	void openProgram();
 	void openSettings();
+	void selectGdbExecutable();
 	void runProgram();
 	void continueProgram();
 	void stepInto();
@@ -84,6 +92,7 @@ class MainWindow : public QMainWindow {
 	SourceEditor* ensureSourceTabForFile(const QString& file);
 	void showSourceLocation(const QString& file, int line);
 	void wireSourceEditor(SourceEditor* editor);
+	void positionCommandOverlay();
 
 	std::unique_ptr<DebuggerSession> m_session;
 
@@ -102,7 +111,10 @@ class MainWindow : public QMainWindow {
 	QDockWidget *m_consoleDock = nullptr;
 	QDockWidget *m_breakDock = nullptr;
 	QDockWidget *m_aiDock = nullptr;
+	QDockWidget *m_disasmDock = nullptr;
 	DebugAssistantDock *m_aiAssistant = nullptr;
+	DisassemblyView *m_disasmView = nullptr;
+	QWidget *m_commandOverlay = nullptr;
 
 	QString m_currentProgram;
 	bool m_breakOnMainInserted = false;

@@ -37,6 +37,8 @@
 #include <QFontDatabase>
 #include <QHeaderView>
 #include <QMenu>
+#include <QGuiApplication>
+#include <QScreen>
 
 // ============================================================================
 // ctor
@@ -277,8 +279,22 @@ void BreakpointsView::showContextMenu(const QPoint &pos) {
 	else if (chosen == actDisable)
 		m_session->setBreakpointEnabled(number, false);
 	else if (chosen == actCondition) {
-		auto* dlg = new BreakpointEditorDialog(m_session, 0, this);
-		dlg->move(QCursor::pos());
+		auto* dlg = new BreakpointEditorDialog(m_session, number, this);
+		// Place near cursor but keep it fully on-screen.
+		const QPoint cursor = QCursor::pos();
+		QScreen* screen = QGuiApplication::screenAt(cursor);
+		const QRect avail = screen ? screen->availableGeometry() : QRect();
+		const QSize hint = dlg->sizeHint();
+		QPoint pos = cursor + QPoint(12, 12);
+		if (avail.isValid()) {
+			pos.setX(qMin(pos.x(), avail.right() - hint.width()));
+			pos.setY(qMin(pos.y(), avail.bottom() - hint.height()));
+			pos.setX(qMax(pos.x(), avail.left()));
+			pos.setY(qMax(pos.y(), avail.top()));
+		}
+		dlg->move(pos);
 		dlg->show();
+		dlg->raise();
+		dlg->activateWindow();
 	}
 }

@@ -31,6 +31,7 @@
 
 #include "SettingsDialog.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFileDialog>
@@ -56,6 +57,7 @@ constexpr const char* kKeyRemotePort   = "target/remotePort";
 constexpr const char* kKeyOpenAIKey    = "ai/openaiApiKey";
 constexpr const char* kKeyOpenAIModel  = "ai/openaiModel";
 constexpr const char* kKeyOpenAIBaseUrl= "ai/openaiBaseUrl";
+constexpr const char* kKeyAIEnabled    = "ai/enabled";
 constexpr const char* kKeyAIProvider   = "ai/provider";
 constexpr const char* kKeyOllamaModel  = "ai/ollamaModel";
 constexpr const char* kKeyOllamaBaseUrl= "ai/ollamaBaseUrl";
@@ -147,7 +149,7 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 	targetForm->addRow(tr("Remote port:"), m_remotePortSpin);
 
 	auto* targetHint = new QLabel(
-		tr("Remote/ST-Link/J-Link/Lauterbach integration will be wired in later; settings are stored now."),
+		tr("Remote (gdbserver) / J-Link: qddd will connect via GDB using -target-select remote host:port."),
 		targetPage);
 	targetHint->setWordWrap(true);
 	targetHint->setStyleSheet("color: rgba(255,255,255,140);");
@@ -165,6 +167,9 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 
 	auto* aiBox = new QGroupBox(tr("LLM Provider"), aiPage);
 	auto* aiForm = new QFormLayout(aiBox);
+
+	m_aiEnabledCheck = new QCheckBox(tr("Enable Debug Assistant"), aiBox);
+	aiForm->addRow(QString(), m_aiEnabledCheck);
 
 	m_aiProviderCombo = new QComboBox(aiBox);
 	m_aiProviderCombo->addItem(tr("Ollama (local)"), "ollama");
@@ -250,6 +255,8 @@ void SettingsDialog::load()
 	m_openaiModelEdit->setText(s.value(kKeyOpenAIModel, "gpt-4.1-mini").toString());
 	m_openaiBaseUrlEdit->setText(s.value(kKeyOpenAIBaseUrl, "https://api.openai.com/v1").toString());
 
+	m_aiEnabledCheck->setChecked(s.value(kKeyAIEnabled, true).toBool());
+
 	const QString provider = s.value(kKeyAIProvider, "ollama").toString();
 	const int providerIdx = m_aiProviderCombo->findData(provider);
 	m_aiProviderCombo->setCurrentIndex(providerIdx >= 0 ? providerIdx : 0);
@@ -282,6 +289,7 @@ void SettingsDialog::save() const
 	s.setValue(kKeyOpenAIModel, m_openaiModelEdit->text().trimmed());
 	s.setValue(kKeyOpenAIBaseUrl, m_openaiBaseUrlEdit->text().trimmed());
 
+	s.setValue(kKeyAIEnabled, m_aiEnabledCheck->isChecked());
 	s.setValue(kKeyAIProvider, m_aiProviderCombo->currentData().toString());
 	s.setValue(kKeyOllamaModel, m_ollamaModelEdit->text().trimmed());
 	s.setValue(kKeyOllamaBaseUrl, m_ollamaBaseUrlEdit->text().trimmed());

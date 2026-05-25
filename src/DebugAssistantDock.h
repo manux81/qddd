@@ -71,6 +71,7 @@ private:
 	void updateApplyEnabled();
 
 	DebuggerSession* m_session = nullptr;
+	QString m_lastUserText;
 	QString m_lastFile;
 	QString m_lastFunction;
 	int m_lastLine = 0;

@@ -95,6 +95,17 @@ from the underlying debugging engine.
 - GDB with MI support
 - CMake
 
+## 🎯 Remote targets (gdbserver / SEGGER J-Link)
+
+qddd can connect to a remote target through GDB using `-target-select remote host:port`.
+
+- `File → Settings… → Target`
+  - `Type`: `Remote gdbserver` or `J-Link`
+  - `Remote host` / `Remote port`: endpoint of your GDB server
+- Start your GDB server separately (example, SEGGER):
+  - `JLinkGDBServer -if SWD -speed auto -port 2331 -device <MCU>`
+- Open your local ELF (`File → Open Program…`) to load symbols, then `Run` to continue execution on the target.
+
 ---
 
 ## 🚀 Build & Run

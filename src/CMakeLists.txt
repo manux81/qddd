@@ -18,6 +18,8 @@ add_executable(qddd
     GraphicalVariablesView.h
     ConsoleWidget.cpp
     ConsoleWidget.h
+    DisassemblyView.cpp
+    DisassemblyView.h
     BreakpointsView.cpp
     BreakpointsView.h
     BreakpointEditorDialog.cpp

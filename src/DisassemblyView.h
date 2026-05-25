@@ -31,43 +31,30 @@
 
 #pragma once
 
-#include <QDialog>
+#include <QWidget>
 
-class QComboBox;
-class QCheckBox;
-class QLineEdit;
-class QSpinBox;
+class DebuggerSession;
+class QTableWidget;
 
-class SettingsDialog final : public QDialog
+class DisassemblyView final : public QWidget
 {
 	Q_OBJECT
 
 public:
-	explicit SettingsDialog(QWidget* parent = nullptr);
-	~SettingsDialog() override = default;
+	explicit DisassemblyView(QWidget* parent = nullptr);
 
-	void load();
-	void save() const;
+	void setSession(DebuggerSession* session);
+	void setAutoRefreshEnabled(bool enabled);
 
 private slots:
-	void browseGdb();
-	void browseLldbMi();
+	void setDisassemblyText(const QString& text);
+	void setCurrentAddress(const QString& addr);
 
 private:
-	QComboBox* m_backendCombo = nullptr;
-	QLineEdit* m_gdbPathEdit = nullptr;
-	QLineEdit* m_lldbMiPathEdit = nullptr;
+	void rebuildTableFromText(const QString& text);
 
-	QComboBox* m_targetTypeCombo = nullptr;
-	QLineEdit* m_remoteHostEdit = nullptr;
-	QSpinBox* m_remotePortSpin = nullptr;
-
-	QLineEdit* m_openaiApiKeyEdit = nullptr;
-	QLineEdit* m_openaiModelEdit = nullptr;
-	QLineEdit* m_openaiBaseUrlEdit = nullptr;
-
-	QCheckBox* m_aiEnabledCheck = nullptr;
-	QComboBox* m_aiProviderCombo = nullptr;
-	QLineEdit* m_ollamaModelEdit = nullptr;
-	QLineEdit* m_ollamaBaseUrlEdit = nullptr;
+	QTableWidget* m_table = nullptr;
+	DebuggerSession* m_session = nullptr;
+	QString m_currentAddr;
+	bool m_autoRefreshEnabled = false;
 };

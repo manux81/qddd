@@ -45,7 +45,7 @@ int main(int argc, char *argv[]) {
 	app.setWindowIcon(QIcon(":icons/resources/icons/appicon.png"));
 	Q_INIT_RESOURCE(resources);
 
-	app.setStyleSheet(R"(
+	QString styleSheet = QStringLiteral(R"(
     QMainWindow {
         background-color: #1e1e1e;
     }
@@ -62,7 +62,6 @@ int main(int argc, char *argv[]) {
     QWidget {
         background-color: #1e1e1e;
         color: #cccccc;
-        font-family: "Segoe UI", sans-serif;
     }
     
     QTabBar::tab {
@@ -127,6 +126,11 @@ int main(int argc, char *argv[]) {
         background: transparent;
     }
 )");
+
+#ifdef Q_OS_WIN
+	styleSheet += QStringLiteral("\nQWidget { font-family: \"Segoe UI\", sans-serif; }\n");
+#endif
+	app.setStyleSheet(styleSheet);
 
 	QDDDSplash splash(":icons/resources/images/qddd_splash.png");
 	splash.show();

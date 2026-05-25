@@ -61,6 +61,67 @@
 
 namespace {
 
+QString extractFirstJsonObjectText(const QString& s)
+{
+	const int start = s.indexOf('{');
+	if (start < 0)
+		return QString();
+
+	int depth = 0;
+	bool inString = false;
+	bool escape = false;
+	for (int i = start; i < s.size(); ++i) {
+		const QChar ch = s.at(i);
+
+		if (inString) {
+			if (escape) {
+				escape = false;
+				continue;
+			}
+			if (ch == '\\') {
+				escape = true;
+				continue;
+			}
+			if (ch == '"')
+				inString = false;
+			continue;
+		}
+
+		if (ch == '"') {
+			inString = true;
+			continue;
+		}
+
+		if (ch == '{') {
+			++depth;
+		} else if (ch == '}') {
+			--depth;
+			if (depth == 0)
+				return s.mid(start, i - start + 1).trimmed();
+		}
+	}
+
+	return QString();
+}
+
+QJsonDocument parseJsonMaybeWrapped(const QString& s, QJsonParseError* outErr = nullptr)
+{
+	QJsonParseError err{};
+	QJsonDocument doc = QJsonDocument::fromJson(s.toUtf8(), &err);
+	if (err.error != QJsonParseError::NoError) {
+		// Some models (especially local LLMs) occasionally wrap JSON in prose.
+		const QString extracted = extractFirstJsonObjectText(s);
+		if (!extracted.isEmpty()) {
+			err = QJsonParseError{};
+			doc = QJsonDocument::fromJson(extracted.toUtf8(), &err);
+		}
+	}
+
+	if (outErr)
+		*outErr = err;
+	return doc;
+}
+
 QString jsonValueToString(const QJsonValue& v)
 {
 	if (v.isString())
@@ -446,6 +507,7 @@ void DebugAssistantDock::sendUserMessage()
 	if (userText.isEmpty())
 		return;
 
+	m_lastUserText = userText;
 	m_input->clear();
 	appendUser(userText);
 	setBusy(true);
@@ -535,6 +597,16 @@ QByteArray DebugAssistantDock::buildRequestBody(const QString& userText) const
 		"- set_variable: keys path, value\n"
 		"- raw_command: key=cmd\n";
 
+	// Extra guidance for common user intents.
+	// Prefer actionable MI commands when a direct expression is ambiguous.
+	const QString intentGuidance =
+		"\n"
+		"Common intents:\n"
+		"- If the user asks to set a field/variable (e.g. \"set x = 1\" or \"setta pkt.id = 0x100\"), prefer set_variable path=\"...\" value=\"...\".\n"
+		"- If the user asks for function parameters/arguments (e.g. \"how many parameters does the current function have?\"), prefer raw_command cmd=\"-stack-list-arguments 0 0 0\".\n"
+		"- If the user asks about local variables in the current function/frame (e.g. \"how many variables\"), prefer raw_command cmd=\"-stack-list-variables --simple-values\".\n"
+		"- If you choose evaluate, expr must never be empty.\n";
+
 	const QString userPayload =
 		QString("User request:\n%1\n\nDebug context JSON:\n%2")
 			.arg(userText)
@@ -549,7 +621,7 @@ QByteArray DebugAssistantDock::buildRequestBody(const QString& userText) const
 		QJsonObject req;
 		req["model"] = model;
 		req["input"] = QJsonArray{
-			QJsonObject{{"role", "system"}, {"content", asInputText(systemPrompt)}},
+			QJsonObject{{"role", "system"}, {"content", asInputText(systemPrompt + intentGuidance)}},
 			QJsonObject{{"role", "user"}, {"content", asInputText(userPayload)}}
 		};
 		req["text"] = QJsonObject{
@@ -571,7 +643,7 @@ QByteArray DebugAssistantDock::buildRequestBody(const QString& userText) const
 	req["model"] = model;
 	req["stream"] = false;
 	req["messages"] = QJsonArray{
-		QJsonObject{{"role", "system"}, {"content", systemPrompt}},
+		QJsonObject{{"role", "system"}, {"content", systemPrompt + intentGuidance}},
 		QJsonObject{{"role", "user"}, {"content", userPayload}}
 	};
 	req["format"] = responseSchema();
@@ -653,9 +725,11 @@ QString DebugAssistantDock::extractResponseText(const QByteArray& json) const
 void DebugAssistantDock::populateActionsFromJsonText(const QString& text)
 {
 	QJsonParseError err{};
-	const QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8(), &err);
-	if (err.error != QJsonParseError::NoError || !doc.isObject())
+	const QJsonDocument doc = parseJsonMaybeWrapped(text, &err);
+	if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+		appendError(QString("Assistant output is not valid JSON (schema). Parse error: %1").arg(err.errorString()));
 		return;
+	}
 
 	m_actions->blockSignals(true);
 	m_actions->clear();
@@ -711,10 +785,14 @@ void DebugAssistantDock::applySelectedActions()
 
 		if (type == "evaluate") {
 			const QString expr = args.value("expr").toString().trimmed();
-			if (expr.isEmpty())
-				appendError("Cannot apply action 'evaluate': missing expr.");
-			else
+			if (expr.isEmpty()) {
+				// Fallback: for common "args/params" queries, run a safe MI command.
+				// This prevents a silent no-op when some models omit required args.
+				m_session->sendRawCommand("-stack-list-arguments 0 0 0");
+				appendInfo("evaluate missing expr; ran MI command: -stack-list-arguments 0 0 0");
+			} else {
 				m_session->evaluateExpression(expr);
+			}
 		} else if (type == "set_breakpoint") {
 			const QString location = locationWithFallback(args);
 			if (location.isEmpty())
@@ -763,10 +841,21 @@ void DebugAssistantDock::applySelectedActions()
 				m_session->setVariable(path, value);
 		} else if (type == "raw_command") {
 			const QString cmd = args.value("cmd").toString().trimmed();
-			if (cmd.isEmpty())
-				appendError("Cannot apply action 'raw_command': missing cmd.");
-			else
+			if (cmd.isEmpty()) {
+				// Fallback for models that omit required args: infer a safe command from the last user request.
+				const QString intent = m_lastUserText.toLower();
+				if (intent.contains("variabil")) {
+					m_session->sendRawCommand("-stack-list-variables --simple-values");
+					appendInfo("raw_command missing cmd; ran MI command: -stack-list-variables --simple-values");
+				} else if (intent.contains("parametr") || intent.contains("argoment")) {
+					m_session->sendRawCommand("-stack-list-arguments 0 0 0");
+					appendInfo("raw_command missing cmd; ran MI command: -stack-list-arguments 0 0 0");
+				} else {
+					appendError("Cannot apply action 'raw_command': missing cmd.");
+				}
+			} else {
 				m_session->sendRawCommand(cmd);
+			}
 		} else {
 			appendError(QString("Unknown action type '%1' (ignored).").arg(type));
 		}
