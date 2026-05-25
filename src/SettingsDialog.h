@@ -34,6 +34,7 @@
 #include <QDialog>
 
 class QComboBox;
+class QCheckBox;
 class QLineEdit;
 class QSpinBox;
 
@@ -60,5 +61,13 @@ private:
 	QComboBox* m_targetTypeCombo = nullptr;
 	QLineEdit* m_remoteHostEdit = nullptr;
 	QSpinBox* m_remotePortSpin = nullptr;
-};
 
+	QLineEdit* m_openaiApiKeyEdit = nullptr;
+	QLineEdit* m_openaiModelEdit = nullptr;
+	QLineEdit* m_openaiBaseUrlEdit = nullptr;
+
+	QCheckBox* m_aiEnabledCheck = nullptr;
+	QComboBox* m_aiProviderCombo = nullptr;
+	QLineEdit* m_ollamaModelEdit = nullptr;
+	QLineEdit* m_ollamaBaseUrlEdit = nullptr;
+};

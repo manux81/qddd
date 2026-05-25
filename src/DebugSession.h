@@ -82,6 +82,7 @@ struct BreakpointInfo
 
 	// Condition / counter
 	QString condition;
+	int ignoreCount = 0; // times to ignore before stopping (MI: "ignore")
 	int hitCount = 0;
 	bool autoContinue = false;
 
@@ -164,12 +165,20 @@ public:
 		LldbMi
 	};
 
+	enum class TargetType {
+		Local,
+		RemoteGdbserver,
+		JLink
+	};
+
 	explicit DebuggerSession(QObject* parent = nullptr);
 	~DebuggerSession() override;
 
 	void setBackend(Backend backend);
 	void setGdbExecutable(const QString& path);
 	void setLldbMiExecutable(const QString& path);
+	void setTargetType(TargetType type);
+	void setRemoteEndpoint(const QString& host, int port);
 	void startSession(const QString& executablePath);
 	void terminateSession();
 
@@ -194,6 +203,9 @@ public:
 	void clearAllBreakpoints();
 	void setBreakpointEnabled(int breakpointId, bool enabled);
 	void toggleBreakpoint(const QString& location);
+	void updateBreakpointCondition(int breakpointId, const QString& expr);
+	void updateBreakpointIgnoreCount(int breakpointId, int ignoreCount);
+	void updateBreakpointTemporary(int breakpointId, bool temporary);
 
 	// Stack navigation
 	void selectStackFrame(int frameIndex);
@@ -210,6 +222,8 @@ public:
 	void evaluateExpression(const QString& expression);
 	void sendRawCommand(const QString& cmd);
 	void setVariable(const QString& fullPath, const QString& newValue);
+	void requestDisassembly(const QString& file, int line, int instructionCount = 80);
+	void requestDisassemblyAtLastStop(int instructionCount = 80);
 	void dereferencePointer(const QString& pointerExpr,
 							std::function<void(const QString& value,
 											   const QString& type)> cb);
@@ -223,6 +237,7 @@ signals:
 	void targetStopped();
 	void targetExited(int exitCode);
 	void stoppedAt(const QString& file, int line, const QString& function);
+	void stoppedAtAddress(const QString& address);
 
 	void stackFramesUpdated();
 	void variablesUpdated();
@@ -235,6 +250,7 @@ signals:
 								 int toStep);
 
 	void debuggerOutput(const QString& text);
+	void disassemblyUpdated(const QString& text);
 
 private:
 	Q_DISABLE_COPY_MOVE(DebuggerSession)
@@ -275,11 +291,26 @@ private:
 	void computeVariableChanges(const ExecutionSnapshot& previous,
 								const ExecutionSnapshot& current);
 
+	[[nodiscard]] bool isRemoteTarget() const;
+	[[nodiscard]] QString remoteSpec() const;
+
 private:
 	Backend m_backend = Backend::LldbMi;
 
+	QString m_lastStopFile;
+	QString m_lastStopFunction;
+	int m_lastStopLine = 0;
+	QString m_lastStopAddr;
+
+	bool m_captureDisassembly = false;
+	QString m_disassemblyBuffer;
+
 	QString m_gdbExecutable = "gdb";
 	QString m_lldbMiExecutable = "/usr/local/bin/lldb-mi";
+
+	TargetType m_targetType = TargetType::Local;
+	QString m_remoteHost = "127.0.0.1";
+	int m_remotePort = 3333;
 
 	QProcess m_debuggerProcess;
 

@@ -61,6 +61,7 @@ private:
 	void applyIgnoreCount();
 	void applyEnabled();
 	void applyAutoContinue();
+	void applyTemporary();
 	void applyActions();
 
 	void addAction();
@@ -74,6 +75,7 @@ private:
 	QLineEdit*  m_nameEdit = nullptr;
 	QLineEdit*  m_conditionEdit = nullptr;
 	QSpinBox*   m_ignoreSpin = nullptr;
+	QCheckBox*  m_temporaryCheck = nullptr;
 
 	QComboBox*  m_actionTypeCombo = nullptr;
 	QLineEdit* m_actionPayloadEdit = nullptr;
@@ -81,5 +83,4 @@ private:
 
 	QCheckBox*  m_autoContinueCheck = nullptr;
 };
-
 

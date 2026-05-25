@@ -45,7 +45,7 @@ int main(int argc, char *argv[]) {
 	app.setWindowIcon(QIcon(":icons/resources/icons/appicon.png"));
 	Q_INIT_RESOURCE(resources);
 
-	app.setStyleSheet(R"(
+	QString styleSheet = QStringLiteral(R"(
     QMainWindow {
         background-color: #1e1e1e;
     }
@@ -62,7 +62,6 @@ int main(int argc, char *argv[]) {
     QWidget {
         background-color: #1e1e1e;
         color: #cccccc;
-        font-family: "Segoe UI", sans-serif;
     }
     
     QTabBar::tab {
@@ -82,7 +81,56 @@ int main(int argc, char *argv[]) {
         border: 0px;
         top: -1px;
     }
+
+    QScrollBar:vertical {
+        background: transparent;
+        width: 10px;
+        margin: 10px 4px 10px 4px;
+    }
+    QScrollBar::handle:vertical {
+        background: #CBD5E1;
+        border-radius: 5px;
+        min-height: 32px;
+    }
+    QScrollBar::handle:vertical:hover {
+        background: #94A3B8;
+    }
+    QScrollBar::add-line:vertical,
+    QScrollBar::sub-line:vertical {
+        height: 0px;
+    }
+    QScrollBar::add-page:vertical,
+    QScrollBar::sub-page:vertical {
+        background: transparent;
+    }
+
+    QScrollBar:horizontal {
+        background: transparent;
+        height: 10px;
+        margin: 4px 10px 4px 10px;
+    }
+    QScrollBar::handle:horizontal {
+        background: #CBD5E1;
+        border-radius: 5px;
+        min-width: 32px;
+    }
+    QScrollBar::handle:horizontal:hover {
+        background: #94A3B8;
+    }
+    QScrollBar::add-line:horizontal,
+    QScrollBar::sub-line:horizontal {
+        width: 0px;
+    }
+    QScrollBar::add-page:horizontal,
+    QScrollBar::sub-page:horizontal {
+        background: transparent;
+    }
 )");
+
+#ifdef Q_OS_WIN
+	styleSheet += QStringLiteral("\nQWidget { font-family: \"Segoe UI\", sans-serif; }\n");
+#endif
+	app.setStyleSheet(styleSheet);
 
 	QDDDSplash splash(":icons/resources/images/qddd_splash.png");
 	splash.show();

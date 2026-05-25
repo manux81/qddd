@@ -18,6 +18,8 @@ add_executable(qddd
     GraphicalVariablesView.h
     ConsoleWidget.cpp
     ConsoleWidget.h
+    DisassemblyView.cpp
+    DisassemblyView.h
     BreakpointsView.cpp
     BreakpointsView.h
     BreakpointEditorDialog.cpp
@@ -26,6 +28,8 @@ add_executable(qddd
     QDDDSplash.h
     SettingsDialog.cpp
     SettingsDialog.h
+    DebugAssistantDock.cpp
+    DebugAssistantDock.h
 
     resources.qrc
 )
@@ -35,4 +39,5 @@ target_link_libraries(qddd
         Qt5::Core
         Qt5::Gui
         Qt5::Widgets
+        Qt5::Network
 )

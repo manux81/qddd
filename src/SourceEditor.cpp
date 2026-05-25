@@ -33,6 +33,9 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QPainter>
+#include <QPainterPath>
+#include <QLinearGradient>
+#include <QRadialGradient>
 #include <QScrollBar>
 #include <QTextBlock>
 #include <QMouseEvent>
@@ -93,7 +96,17 @@ SourceEditor::SourceEditor(QWidget *parent)
 	              " background: #1e1e1e;"
 	              " color: #e0e0e0;"
 	              " selection-background-color: #264f78;"
-	              "}");
+	              "}"
+	              "QScrollBar:vertical { background: transparent; width: 10px; margin: 10px 4px 10px 4px; }"
+	              "QScrollBar::handle:vertical { background: #CBD5E1; border-radius: 5px; min-height: 32px; }"
+	              "QScrollBar::handle:vertical:hover { background: #94A3B8; }"
+	              "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+	              "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }"
+	              "QScrollBar:horizontal { background: transparent; height: 10px; margin: 4px 10px 4px 10px; }"
+	              "QScrollBar::handle:horizontal { background: #CBD5E1; border-radius: 5px; min-width: 32px; }"
+	              "QScrollBar::handle:horizontal:hover { background: #94A3B8; }"
+	              "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }"
+	              "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }");
 
 	setMouseTracking(true);
 	m_hoverTimer.setSingleShot(true);
@@ -201,13 +214,16 @@ SourceEditor::SourceEditor(QWidget *parent)
 						}
 						#hoverHintBody QScrollBar:vertical {
 							background: transparent;
-							width: 8px;
-							margin: 2px;
+							width: 10px;
+							margin: 10px 4px 10px 4px;
 						}
 						#hoverHintBody QScrollBar::handle:vertical {
-							background: rgba(200, 200, 200, 100);
-							border-radius: 4px;
-							min-height: 20px;
+							background: #CBD5E1;
+							border-radius: 5px;
+							min-height: 32px;
+						}
+						#hoverHintBody QScrollBar::handle:vertical:hover {
+							background: #94A3B8;
 						}
 						#hoverHintBody QScrollBar::add-line:vertical,
 						#hoverHintBody QScrollBar::sub-line:vertical {
@@ -574,6 +590,7 @@ void SourceEditor::resizeEvent(QResizeEvent *event) {
 void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 	QPainter painter(m_lineNumberArea);
 	painter.fillRect(event->rect(), QColor("#252525"));
+	painter.setRenderHint(QPainter::Antialiasing, true);
 
 	QTextBlock block = firstVisibleBlock();
 	int blockNumber = block.blockNumber();
@@ -581,8 +598,9 @@ void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 	    blockBoundingGeometry(block).translated(contentOffset()).top());
 	int bottom = top + static_cast<int>(blockBoundingRect(block).height());
 
-	const int iconX = 2;
-	const int iconSize = fontMetrics().height() - 2;
+	const int markerPaddingX = 3;
+	const int markerColumnW = 16; // keep a stable gutter like IDEs (VS/Delphi)
+	const int markerCenterX = markerPaddingX + markerColumnW / 2;
 	const QString curFile = property("currentFile").toString();
 	const QString curFileAbs = curFile.isEmpty() ? QString{} : QFileInfo(curFile).absoluteFilePath();
 
@@ -590,6 +608,9 @@ void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 		if (block.isVisible() && bottom >= event->rect().top()) {
 
 			int lineIndex = blockNumber + 1;
+			const int blockH = qMax(1, bottom - top);
+			const int markerD = qBound(8, qMin(12, blockH - 4), 14);
+			const int markerY = top + (blockH - markerD) / 2;
 
 			const bool hasBp = m_session && !curFileAbs.isEmpty()
 				? std::any_of(
@@ -605,22 +626,48 @@ void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 				)
 				: false;
 
-			if (hasBp) {
-				painter.setBrush(QColor("#cc2222"));
-				painter.setPen(Qt::NoPen);
-				painter.drawEllipse(iconX, top + 4, iconSize / 2, iconSize / 2);
+			if (lineIndex == m_currentPC) {
+				// Visual Studio-like execution arrow.
+				const qreal cx = markerCenterX;
+				const qreal cy = markerY + markerD / 2.0;
+				const qreal h = markerD * 0.9;
+				const qreal w = markerD * 1.15;
+
+				QPainterPath arrow;
+				arrow.moveTo(cx - w * 0.55, cy - h * 0.5);
+				arrow.lineTo(cx + w * 0.15, cy - h * 0.5);
+				arrow.lineTo(cx + w * 0.55, cy);
+				arrow.lineTo(cx + w * 0.15, cy + h * 0.5);
+				arrow.lineTo(cx - w * 0.55, cy + h * 0.5);
+				arrow.closeSubpath();
+
+				QLinearGradient g(QPointF(0, markerY), QPointF(0, markerY + markerD));
+				g.setColorAt(0.0, QColor("#fff3a0"));
+				g.setColorAt(1.0, QColor("#ffc400"));
+
+				painter.setPen(QPen(QColor("#9a6b00"), 1.0));
+				painter.setBrush(g);
+				painter.drawPath(arrow);
 			}
 
-			if (lineIndex == m_currentPC) {
-				painter.setRenderHint(QPainter::Antialiasing);
-				painter.setBrush(QColor("#ffd700"));
+			if (hasBp) {
+				// Breakpoint dot (VS/Delphi-like): glossy red with dark border.
+				const QRectF r(markerCenterX - markerD / 2.0, markerY, markerD, markerD);
+				QRadialGradient grad(r.center() - QPointF(markerD * 0.2, markerD * 0.2),
+				                     markerD * 0.75);
+				grad.setColorAt(0.0, QColor("#ff8a8a"));
+				grad.setColorAt(0.55, QColor("#e53935"));
+				grad.setColorAt(1.0, QColor("#8b1d1d"));
+
+				painter.setPen(QPen(QColor("#3a0f0f"), 1.0));
+				painter.setBrush(grad);
+				painter.drawEllipse(r);
+
+				// Subtle highlight.
 				painter.setPen(Qt::NoPen);
-
-				QPointF p1(iconX + 8, top + iconSize / 2);
-				QPointF p2(iconX, top + iconSize / 2 - 6);
-				QPointF p3(iconX, top + iconSize / 2 + 6);
-
-				painter.drawPolygon(QPolygonF({p1, p2, p3}));
+				painter.setBrush(QColor(255, 255, 255, 60));
+				painter.drawEllipse(r.adjusted(markerD * 0.18, markerD * 0.16,
+				                               -markerD * 0.42, -markerD * 0.52));
 			}
 
 			// --- NUMERO DI RIGA ---

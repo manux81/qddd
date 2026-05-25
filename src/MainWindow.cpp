@@ -34,11 +34,11 @@
 #include <QAction>
 #include <QDir>
 #include <QDockWidget>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMenuBar>
 #include <QMessageBox>
-#include <QToolBar>
 #include <QLabel>
 #include <QToolButton>
 #include <QHBoxLayout>
@@ -49,6 +49,7 @@
 #include <QSettings>
 
 #include "SettingsDialog.h"
+#include "DebugAssistantDock.h"
 
 MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
     : QMainWindow(parent), m_session(std::make_unique<DebuggerSession>(this)),
@@ -62,6 +63,8 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 	m_stackView->setSession(m_session.get());
 	m_variablesView->setSession(m_session.get());
 	m_graphicalView->setSession(m_session.get());
+	if (m_disasmView)
+		m_disasmView->setSession(m_session.get());
 
 	connect(m_session.get(), &DebuggerSession::targetStopped, this,
 	        &MainWindow::onTargetStopped);
@@ -81,13 +84,47 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 				  &GraphicalVariablesView::refresh);
 
 	connect(m_session.get(), &DebuggerSession::stoppedAt, this,
-	        [this](const QString& file, int line, const QString&) {
+	        [this](const QString& file, int line, const QString& function) {
 		        showSourceLocation(file, line);
+		        if (m_aiAssistant)
+			        m_aiAssistant->setLastStopLocation(file, line, function);
 	        });
 
 	if (!m_currentProgram.isEmpty()) {
 		startDebugger(m_currentProgram);
 	}
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event)
+{
+	QMainWindow::resizeEvent(event);
+	positionCommandOverlay();
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+	if (watched == m_sourceTabs &&
+	    (event->type() == QEvent::Resize || event->type() == QEvent::Show)) {
+		positionCommandOverlay();
+	}
+
+	return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::positionCommandOverlay()
+{
+	if (!m_commandOverlay)
+		return;
+
+	if (m_sourceTabs) {
+		const int bottomMargin = 10;
+		const int y = qMax(0, m_sourceTabs->height() - m_commandOverlay->height() - bottomMargin);
+		m_commandOverlay->setGeometry(0, y, m_sourceTabs->width(), m_commandOverlay->height());
+	} else {
+		m_commandOverlay->setGeometry(0, height() - m_commandOverlay->height() - 10,
+		                              width(), m_commandOverlay->height());
+	}
+	m_commandOverlay->raise();
 }
 
 void MainWindow::setupUi() {
@@ -98,6 +135,7 @@ void MainWindow::setupUi() {
 	m_sourceTabs->setDocumentMode(true);
 	m_sourceTabs->setMovable(true);
 	m_sourceTabs->setTabsClosable(false);
+	m_sourceTabs->installEventFilter(this);
 	setCentralWidget(m_sourceTabs);
 
 	auto* initialEditor = new SourceEditor(m_sourceTabs);
@@ -134,6 +172,14 @@ void MainWindow::setupUi() {
 	addDockWidget(Qt::BottomDockWidgetArea, m_consoleDock);
 	tabifyDockWidget(m_dataDock, m_consoleDock);
 
+	m_disasmDock = new QDockWidget(tr("Disassembly"), this);
+	m_disasmView = new DisassemblyView(m_disasmDock);
+	m_disasmDock->setWidget(m_disasmView);
+	addDockWidget(Qt::RightDockWidgetArea, m_disasmDock);
+	tabifyDockWidget(m_stackDock, m_disasmDock);
+	m_disasmDock->setVisible(false);
+	m_disasmView->setAutoRefreshEnabled(false);
+
 
 	connect(m_stackView, &StackView::frameActivated, this,
 	        [&](QString file, int line) {
@@ -149,6 +195,13 @@ void MainWindow::setupUi() {
 	tabifyDockWidget(m_varsDock, m_breakDock);
 
 	m_breakView->setSession(m_session.get());
+
+	// AI Debug Assistant
+	m_aiDock = new QDockWidget(tr("Debug Assistant"), this);
+	m_aiAssistant = new DebugAssistantDock(m_session.get(), m_aiDock);
+	m_aiDock->setWidget(m_aiAssistant);
+	addDockWidget(Qt::RightDockWidgetArea, m_aiDock);
+	tabifyDockWidget(m_varsDock, m_aiDock);
 
 	// Select a breakpoint → jump to editor
 	connect(m_breakView, &BreakpointsView::breakpointSelected, this,
@@ -241,6 +294,8 @@ void MainWindow::setupMenusAndToolbars() {
 	QAction *settingsAct = fileMenu->addAction(tr("Settings..."));
 	settingsAct->setShortcut(QKeySequence::Preferences);
 	connect(settingsAct, &QAction::triggered, this, &MainWindow::openSettings);
+	QAction *selectGdbAct = fileMenu->addAction(tr("Select GDB..."));
+	connect(selectGdbAct, &QAction::triggered, this, &MainWindow::selectGdbExecutable);
 	fileMenu->addSeparator();
 	fileMenu->addAction(tr("Quit"), this, &QWidget::close);
 
@@ -274,6 +329,17 @@ void MainWindow::setupMenusAndToolbars() {
 	toggleVars->setChecked(true);
 	connect(toggleVars, &QAction::triggered, this,
 	        [this] { m_varsDock->setVisible(!m_varsDock->isVisible()); });
+
+	QAction *toggleDisasm = viewMenu->addAction(tr("Disassembly"));
+	toggleDisasm->setCheckable(true);
+	toggleDisasm->setChecked(false);
+	connect(toggleDisasm, &QAction::toggled, this,
+	        [this](bool on) {
+		        if (m_disasmDock)
+			        m_disasmDock->setVisible(on);
+		        if (m_disasmView)
+			        m_disasmView->setAutoRefreshEnabled(on);
+	        });
 
 	QMenu *programMenu = menuBar()->addMenu(tr("&Program"));
 
@@ -354,98 +420,150 @@ void MainWindow::setupMenusAndToolbars() {
 	QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
 	helpMenu->addAction(tr("About"));
 
-	QToolBar *dbgBar = new QToolBar(tr("Program Controls"), this);
-	dbgBar->setMovable(true);
-	dbgBar->setFloatable(true);
-	dbgBar->setAllowedAreas(Qt::AllToolBarAreas);
-	dbgBar->setIconSize(QSize(18, 18));
-	dbgBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-	dbgBar->setStyleSheet(R"(
-		QToolBar {
-			background: #1f1f1f;
-			border-bottom: 1px solid #3c3c3c;
-			padding: 0px;
-			spacing: 0px;
+	auto* toolbarWrap = new QWidget(m_sourceTabs ? static_cast<QWidget*>(m_sourceTabs) : this);
+	toolbarWrap->setObjectName("toolbarWrap");
+	toolbarWrap->setStyleSheet(R"(
+		#toolbarWrap {
+			background: transparent;
 		}
-	)");
-
-	auto* ribbon = new QWidget(dbgBar);
-	ribbon->setObjectName("ribbon");
-	ribbon->setStyleSheet(R"(
-		#ribbon {
-			background: #1f1f1f;
+		QFrame#commandPill {
+			background: #252526;
+			border: 1px solid #3a3a3a;
+			border-radius: 18px;
 		}
 		QToolButton {
 			background: transparent;
 			border: none;
-			padding: 6px 8px;
+			border-radius: 13px;
+			padding: 4px;
 			margin: 0px;
-			color: #e6e6e6;
-			font-size: 12px;
+			color: #d8d8d8;
+			min-width: 26px;
+			min-height: 26px;
+			max-width: 26px;
+			max-height: 26px;
 		}
 		QToolButton:hover {
-			background: #2a2a2a;
+			background: #333333;
 		}
 		QToolButton:pressed {
-			background: #151515;
+			background: #1b1b1b;
 		}
-		QLabel#groupTitle {
-			color: rgba(255,255,255,120);
-			font-size: 11px;
-			padding: 2px 0 0 0;
-		}
-		QFrame#groupFrame {
+		QToolButton:disabled {
+			color: #5f5f5f;
 			background: transparent;
-			padding: 6px 10px 4px 10px;
 		}
-		QFrame#groupSep {
-			background: rgba(255,255,255,20);
+		QToolButton#primaryCommand {
+			background: #2f3f33;
+			color: #d8f3dc;
+		}
+		QToolButton#primaryCommand:hover {
+			background: #3b5141;
+		}
+		QToolButton#dangerCommand:hover {
+			background: #4a2a2a;
+		}
+		QFrame#commandSep {
+			background: #3a3a3a;
 			min-width: 1px;
 			max-width: 1px;
-			margin: 8px 6px;
+			min-height: 24px;
+			max-height: 24px;
+			margin: 0px 6px;
+		}
+		QLabel#targetName {
+			background: transparent;
+			color: #dcdcdc;
+			font-size: 12px;
+			font-weight: 600;
+			padding-left: 8px;
+		}
+		QLabel#targetState {
+			background: transparent;
+			color: #9a9a9a;
+			font-size: 11px;
+			padding-left: 8px;
 		}
 	)");
 
-	auto* ribbonLayout = new QHBoxLayout(ribbon);
-	ribbonLayout->setContentsMargins(8, 4, 8, 4);
-	ribbonLayout->setSpacing(0);
+	auto* wrapLayout = new QHBoxLayout(toolbarWrap);
+	wrapLayout->setContentsMargins(0, 0, 0, 0);
+	wrapLayout->setSpacing(0);
+	wrapLayout->addStretch(1);
 
-	auto addGroup = [&](const QString& title, const QList<QAction*>& actions) {
-		auto* frame = new QFrame(ribbon);
-		frame->setObjectName("groupFrame");
+	auto* commandPill = new QFrame(toolbarWrap);
+	commandPill->setObjectName("commandPill");
+	auto* pillLayout = new QHBoxLayout(commandPill);
+	pillLayout->setContentsMargins(8, 4, 8, 4);
+	pillLayout->setSpacing(2);
 
-		auto* v = new QVBoxLayout(frame);
-		v->setContentsMargins(0, 0, 0, 0);
-		v->setSpacing(2);
-
-		auto* row = new QHBoxLayout();
-		row->setContentsMargins(0, 0, 0, 0);
-		row->setSpacing(8);
-
-		for (QAction* a : actions) {
-			auto* b = new QToolButton(frame);
-			b->setDefaultAction(a);
-			b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-			b->setIconSize(QSize(18, 18));
-			b->setAutoRaise(true);
-			b->setMinimumHeight(30);
-			row->addWidget(b);
-		}
-
-		v->addLayout(row);
-
-		auto* l = new QLabel(title, frame);
-		l->setObjectName("groupTitle");
-		l->setAlignment(Qt::AlignHCenter);
-		v->addWidget(l);
-
-		ribbonLayout->addWidget(frame);
-
-		auto* sep = new QFrame(ribbon);
-		sep->setObjectName("groupSep");
+	auto addSeparator = [&] {
+		auto* sep = new QFrame(commandPill);
+		sep->setObjectName("commandSep");
 		sep->setFrameShape(QFrame::VLine);
-		ribbonLayout->addWidget(sep);
+		pillLayout->addWidget(sep);
 	};
+
+	auto addButton = [&](QAction* action, const char* objectName = nullptr) {
+		auto* button = new QToolButton(commandPill);
+		button->setDefaultAction(action);
+		button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+		button->setIconSize(QSize(16, 16));
+		button->setAutoRaise(true);
+		if (objectName)
+			button->setObjectName(objectName);
+		pillLayout->addWidget(button);
+		return button;
+	};
+
+	runAct->setToolTip(tr("Run (F2)"));
+	contAct->setToolTip(tr("Continue (F9)"));
+	stepInAct->setToolTip(tr("Step Into (F5)"));
+	stepOverAct->setToolTip(tr("Step Over (F6)"));
+	stepOutAct->setToolTip(tr("Step Out"));
+	interruptAct->setToolTip(tr("Interrupt"));
+	untilAct->setToolTip(tr("Run Until Cursor (F7)"));
+	upAct->setToolTip(tr("Up Stack Frame"));
+	downAct->setToolTip(tr("Down Stack Frame"));
+	toggleBpAct->setToolTip(tr("Toggle Breakpoint"));
+
+	auto* targetName = new QLabel(commandPill);
+	targetName->setObjectName("targetName");
+	auto* targetState = new QLabel(commandPill);
+	targetState->setObjectName("targetState");
+	pillLayout->addWidget(targetName);
+	pillLayout->addWidget(targetState);
+	addSeparator();
+	addButton(runAct, "primaryCommand");
+	addButton(contAct);
+	addButton(interruptAct, "dangerCommand");
+	addSeparator();
+	addButton(stepInAct);
+	addButton(stepOverAct);
+	addButton(stepOutAct);
+	addSeparator();
+	addButton(untilAct);
+	addButton(upAct);
+	addButton(downAct);
+	addButton(toggleBpAct);
+
+	wrapLayout->addWidget(commandPill, 0, Qt::AlignCenter);
+	wrapLayout->addStretch(1);
+
+	auto updateTargetChip = [this, targetName, targetState](const QString& state) {
+		const QFileInfo fi(m_currentProgram);
+		targetName->setText(fi.exists() ? fi.fileName() : tr("No target"));
+		targetState->setText(state);
+	};
+	updateTargetChip(m_currentProgram.isEmpty() ? tr("Open a program to debug") : tr("Ready"));
+	connect(m_session.get(), &DebuggerSession::targetStarted, this,
+	        [updateTargetChip] { updateTargetChip(QObject::tr("Session started")); });
+	connect(m_session.get(), &DebuggerSession::targetRunning, this,
+	        [updateTargetChip] { updateTargetChip(QObject::tr("Running")); });
+	connect(m_session.get(), &DebuggerSession::targetStopped, this,
+	        [updateTargetChip] { updateTargetChip(QObject::tr("Stopped")); });
+	connect(m_session.get(), &DebuggerSession::targetExited, this,
+	        [updateTargetChip](int code) { updateTargetChip(QObject::tr("Exited (%1)").arg(code)); });
 
 	// Reverse flow control (best-effort)
 	auto* stepBackAct = new QAction(tr("Step Back"), this);
@@ -461,14 +579,10 @@ void MainWindow::setupMenusAndToolbars() {
 	connect(nextBackAct, &QAction::triggered, this, [this] { m_session->reverseStepOver(); });
 	connect(contBackAct, &QAction::triggered, this, [this] { m_session->reverseContinueExecution(); });
 
-	addGroup(tr("Flow Control"),
-	         {runAct, contAct, stepInAct, stepOverAct, stepOutAct, interruptAct});
-	addGroup(tr("Reverse Flow Control"),
-	         {stepBackAct, nextBackAct, contBackAct});
-	addGroup(tr("Navigation"),
-	         {untilAct, upAct, downAct, toggleBpAct});
-
-	ribbonLayout->addStretch(1);
+	addSeparator();
+	addButton(stepBackAct);
+	addButton(nextBackAct);
+	addButton(contBackAct);
 
 	auto updateReverseActions = [this, stepBackAct, nextBackAct, contBackAct] {
 		const bool ok = m_session && m_session->supportsReverseExecution();
@@ -486,9 +600,11 @@ void MainWindow::setupMenusAndToolbars() {
 	connect(m_session.get(), &DebuggerSession::targetStarted, this, updateReverseActions);
 	connect(m_session.get(), &DebuggerSession::targetStopped, this, updateReverseActions);
 
-	dbgBar->addWidget(ribbon);
-	dbgBar->setMinimumHeight(64);
-	addToolBar(Qt::TopToolBarArea, dbgBar);
+	m_commandOverlay = toolbarWrap;
+	m_commandOverlay->setFixedHeight(44);
+	positionCommandOverlay();
+	m_commandOverlay->raise();
+	m_commandOverlay->show();
 }
 
 void MainWindow::startDebugger(const QString &programPath) {
@@ -516,6 +632,17 @@ void MainWindow::openSettings()
 	applySettingsToSession();
 }
 
+void MainWindow::selectGdbExecutable()
+{
+	const QString file = QFileDialog::getOpenFileName(this, tr("Select GDB executable"), QDir::homePath());
+	if (file.isEmpty())
+		return;
+
+	QSettings s;
+	s.setValue("debugger/gdbPath", file);
+	applySettingsToSession();
+}
+
 void MainWindow::applySettingsToSession()
 {
 	QSettings s;
@@ -527,6 +654,21 @@ void MainWindow::applySettingsToSession()
 
 	m_session->setGdbExecutable(s.value("debugger/gdbPath", "gdb").toString());
 	m_session->setLldbMiExecutable(s.value("debugger/lldbMiPath", "/usr/local/bin/lldb-mi").toString());
+
+	const QString targetType = s.value("target/type", "local").toString();
+	if (targetType == "gdbserver")
+		m_session->setTargetType(DebuggerSession::TargetType::RemoteGdbserver);
+	else if (targetType == "jlink")
+		m_session->setTargetType(DebuggerSession::TargetType::JLink);
+	else
+		m_session->setTargetType(DebuggerSession::TargetType::Local);
+
+	m_session->setRemoteEndpoint(
+		s.value("target/remoteHost", "127.0.0.1").toString(),
+		s.value("target/remotePort", 3333).toInt());
+
+	if (m_aiDock)
+		m_aiDock->setVisible(s.value("ai/enabled", true).toBool());
 }
 
 void MainWindow::runProgram() {

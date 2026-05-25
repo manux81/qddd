@@ -45,6 +45,16 @@ qddd focuses on **understanding program state**, not only execution flow.
 
 ---
 
+## 🤖 AI Debug Assistant
+
+<p align="center">
+  <img src="docs/screenshots/ai-breakpoint-demo.gif" width="700">
+</p>
+
+*The built-in assistant can propose and apply debugging actions like setting breakpoints.*
+
+---
+
 ## 📸 Screenshot
 
 <p align="center">
@@ -84,6 +94,17 @@ from the underlying debugging engine.
 - C++17 compatible compiler
 - GDB with MI support
 - CMake
+
+## 🎯 Remote targets (gdbserver / SEGGER J-Link)
+
+qddd can connect to a remote target through GDB using `-target-select remote host:port`.
+
+- `File → Settings… → Target`
+  - `Type`: `Remote gdbserver` or `J-Link`
+  - `Remote host` / `Remote port`: endpoint of your GDB server
+- Start your GDB server separately (example, SEGGER):
+  - `JLinkGDBServer -if SWD -speed auto -port 2331 -device <MCU>`
+- Open your local ELF (`File → Open Program…`) to load symbols, then `Run` to continue execution on the target.
 
 ---
 

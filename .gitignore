@@ -50,11 +50,15 @@ qrc_*.cpp
 *.log
 *.tmp
 *.cache
+temp/
+test/
 
 # macOS artifacts
 .DS_Store
 *.dSYM/
 
+# macOS resource fork files (shouldn't be committed)
+._*
+
 # Windows artifacts
 Thumbs.db
-

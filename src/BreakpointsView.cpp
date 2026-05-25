@@ -37,6 +37,8 @@
 #include <QFontDatabase>
 #include <QHeaderView>
 #include <QMenu>
+#include <QGuiApplication>
+#include <QScreen>
 
 // ============================================================================
 // ctor
@@ -99,7 +101,17 @@ void BreakpointsView::setupView() {
 	header()->setSortIndicatorShown(true);
 	header()->setStretchLastSection(true);
 
-	setStyleSheet("QTreeView::item { height: 22px; }");
+	setStyleSheet("QTreeView::item { height: 22px; }"
+	              "QScrollBar:vertical { background: transparent; width: 10px; margin: 10px 4px 10px 4px; }"
+	              "QScrollBar::handle:vertical { background: #CBD5E1; border-radius: 5px; min-height: 32px; }"
+	              "QScrollBar::handle:vertical:hover { background: #94A3B8; }"
+	              "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+	              "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }"
+	              "QScrollBar:horizontal { background: transparent; height: 10px; margin: 4px 10px 4px 10px; }"
+	              "QScrollBar::handle:horizontal { background: #CBD5E1; border-radius: 5px; min-width: 32px; }"
+	              "QScrollBar::handle:horizontal:hover { background: #94A3B8; }"
+	              "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }"
+	              "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }");
 
 	setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(this, &QWidget::customContextMenuRequested, this,
@@ -267,8 +279,22 @@ void BreakpointsView::showContextMenu(const QPoint &pos) {
 	else if (chosen == actDisable)
 		m_session->setBreakpointEnabled(number, false);
 	else if (chosen == actCondition) {
-		auto* dlg = new BreakpointEditorDialog(m_session, 0, this);
-		dlg->move(QCursor::pos());
+		auto* dlg = new BreakpointEditorDialog(m_session, number, this);
+		// Place near cursor but keep it fully on-screen.
+		const QPoint cursor = QCursor::pos();
+		QScreen* screen = QGuiApplication::screenAt(cursor);
+		const QRect avail = screen ? screen->availableGeometry() : QRect();
+		const QSize hint = dlg->sizeHint();
+		QPoint pos = cursor + QPoint(12, 12);
+		if (avail.isValid()) {
+			pos.setX(qMin(pos.x(), avail.right() - hint.width()));
+			pos.setY(qMin(pos.y(), avail.bottom() - hint.height()));
+			pos.setX(qMax(pos.x(), avail.left()));
+			pos.setY(qMax(pos.y(), avail.top()));
+		}
+		dlg->move(pos);
 		dlg->show();
+		dlg->raise();
+		dlg->activateWindow();
 	}
 }

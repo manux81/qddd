@@ -91,6 +91,27 @@ static QString miGet(const QString& blob, const QString& key)
     return decodeCString('"' + m.captured(1) + '"');
 }
 
+static QString miQuote(const QString& s)
+{
+	QString out = s;
+	out.replace("\\", "\\\\");
+	out.replace("\"", "\\\"");
+	return QString("\"%1\"").arg(out);
+}
+
+static QString bpBestLocation(const BreakpointInfo& bp)
+{
+	if (!bp.originalLocation.isEmpty())
+		return bp.originalLocation;
+	if (!bp.file.isEmpty() && bp.line > 0)
+		return QString("%1:%2").arg(bp.file).arg(bp.line);
+	if (!bp.function.isEmpty())
+		return bp.function;
+	if (!bp.address.isEmpty())
+		return bp.address;
+	return QString();
+}
+
 // Extract top-level { ... } blocks (without outer braces)
 static QVector<QString> miExtractBraceObjects(const QString& s)
 {
@@ -111,6 +132,50 @@ static QVector<QString> miExtractBraceObjects(const QString& s)
         }
     }
     return out;
+}
+
+static QString formatDisassemblyFromReply(const QString& replyBlob)
+{
+	const int idx = replyBlob.indexOf("asm_insns=[");
+	if (idx < 0)
+		return replyBlob.trimmed();
+
+	const QVector<QString> insns = miExtractBraceObjects(replyBlob.mid(idx));
+	if (insns.isEmpty())
+		return replyBlob.trimmed();
+
+	QStringList lines;
+	lines.reserve(insns.size());
+	for (const auto& iblob : insns) {
+		const QString addr = miGet(iblob, "address");
+		const QString inst = miGet(iblob, "inst");
+		QString opcode = miGet(iblob, "opcode");
+		if (opcode.isEmpty())
+			opcode = miGet(iblob, "opcodes");
+		const QString fn = miGet(iblob, "func-name");
+		const QString off = miGet(iblob, "offset");
+
+		QString left = addr;
+		if (!fn.isEmpty()) {
+			left += " <" + fn;
+			if (!off.isEmpty())
+				left += "+" + off;
+			left += ">";
+		}
+
+		opcode = opcode.simplified();
+
+		QString line = left;
+		if (!opcode.isEmpty())
+			line += "\t" + opcode;
+		if (!inst.isEmpty())
+			line += "\t" + inst;
+
+		if (!line.isEmpty())
+			lines << line;
+	}
+
+	return lines.join('\n');
 }
 
 // Parse optional leading token: 12^done,...
@@ -240,6 +305,31 @@ void DebuggerSession::setLldbMiExecutable(const QString& path)
 		m_lldbMiExecutable = path.trimmed();
 }
 
+void DebuggerSession::setTargetType(TargetType type)
+{
+	m_targetType = type;
+}
+
+void DebuggerSession::setRemoteEndpoint(const QString& host, int port)
+{
+	const QString h = host.trimmed();
+	if (!h.isEmpty())
+		m_remoteHost = h;
+	if (port > 0 && port <= 65535)
+		m_remotePort = port;
+}
+
+bool DebuggerSession::isRemoteTarget() const
+{
+	return m_targetType == TargetType::RemoteGdbserver
+		|| m_targetType == TargetType::JLink;
+}
+
+QString DebuggerSession::remoteSpec() const
+{
+	return QString("%1:%2").arg(m_remoteHost).arg(m_remotePort);
+}
+
 void DebuggerSession::startSession(const QString& executablePath)
 {
     QFileInfo fi(executablePath);
@@ -269,9 +359,18 @@ void DebuggerSession::startSession(const QString& executablePath)
         return;
     }
 
-    // carica exe
-    enqueueCommand(QString("-file-exec-and-symbols \"%1\"").arg(executablePath));
-    emit targetStarted();
+	// 1) Load local symbols
+	enqueueCommand(QString("-file-exec-and-symbols \"%1\"").arg(executablePath),
+	               [this](const QString&) {
+		               // 2) Optionally connect to a remote target (SEGGER J-Link uses a GDB server)
+		               if (m_backend == Backend::GdbMi && isRemoteTarget()) {
+			               enqueueCommand(QString("-target-select remote %1").arg(remoteSpec()),
+			                              [this](const QString&) { emit targetStarted(); });
+			               return;
+		               }
+
+		               emit targetStarted();
+	               });
 }
 
 void DebuggerSession::terminateSession()
@@ -289,7 +388,14 @@ bool DebuggerSession::isRunning() const
 // Execution control
 // ============================================================================
 
-void DebuggerSession::run()                 { enqueueCommand("-exec-run"); }
+void DebuggerSession::run()
+{
+	// For remote targets, "-exec-run" is often unsupported/undesired; continue instead.
+	if (m_backend == Backend::GdbMi && isRemoteTarget())
+		enqueueCommand("-exec-continue");
+	else
+		enqueueCommand("-exec-run");
+}
 void DebuggerSession::continueExecution()   { enqueueCommand("-exec-continue"); }
 void DebuggerSession::stepInto()            { enqueueCommand("-exec-step"); }
 void DebuggerSession::stepOver()            { enqueueCommand("-exec-next"); }
@@ -452,6 +558,128 @@ void DebuggerSession::toggleBreakpoint(const QString& location)
 	}
 }
 
+void DebuggerSession::updateBreakpointCondition(int breakpointId, const QString& expr)
+{
+	const QString e = expr.trimmed();
+
+	if (m_backend == Backend::GdbMi) {
+		enqueueCommand(QString("-break-condition %1 %2").arg(breakpointId).arg(miQuote(e)));
+		return;
+	}
+
+	// LLDB console best-effort (works when using LLDB as the underlying debugger).
+	if (e.isEmpty()) {
+		enqueueCommand(QString("-interpreter-exec console \"breakpoint modify -c '' %1\"")
+		                   .arg(breakpointId));
+	} else {
+		enqueueCommand(QString("-interpreter-exec console \"breakpoint modify -c %1 %2\"")
+		                   .arg(miQuote(e))
+		                   .arg(breakpointId));
+	}
+}
+
+void DebuggerSession::updateBreakpointIgnoreCount(int breakpointId, int ignoreCount)
+{
+	const int v = qMax(0, ignoreCount);
+
+	if (m_backend == Backend::GdbMi) {
+		enqueueCommand(QString("-break-after %1 %2").arg(breakpointId).arg(v));
+		return;
+	}
+
+	enqueueCommand(QString("-interpreter-exec console \"breakpoint modify -i %1 %2\"")
+	                   .arg(v)
+	                   .arg(breakpointId));
+}
+
+void DebuggerSession::updateBreakpointTemporary(int breakpointId, bool temporary)
+{
+	int idx = -1;
+	for (int i = 0; i < m_breakpoints.size(); ++i) {
+		if (m_breakpoints[i].number == breakpointId) {
+			idx = i;
+			break;
+		}
+	}
+	if (idx < 0)
+		return;
+
+	const BreakpointInfo bp = m_breakpoints[idx];
+	if (bp.temporary == temporary)
+		return;
+
+	const QString location = bpBestLocation(bp);
+	if (location.isEmpty())
+		return;
+
+	// Recreate as temp/non-temp.
+	removeBreakpoint(breakpointId);
+
+	if (m_backend == Backend::GdbMi) {
+		enqueueCommand(QString("-break-insert %1 %2")
+		                   .arg(temporary ? "-t" : "")
+		                   .arg(location));
+	} else {
+		// LLDB console best-effort one-shot.
+		enqueueCommand(QString("-interpreter-exec console \"breakpoint set %1 %2\"")
+		                   .arg(temporary ? "-o true" : "-o false")
+		                   .arg(location));
+	}
+}
+
+void DebuggerSession::requestDisassembly(const QString& file, int line, int instructionCount)
+{
+	if (file.trimmed().isEmpty() || line <= 0 || instructionCount <= 0)
+		return;
+
+	const QString header = QString("%1:%2\n").arg(file).arg(line);
+
+	// GDB/MI supports -data-disassemble with -f/-l/-n; LLDB/MI usually doesn't.
+	if (m_backend == Backend::GdbMi) {
+		// Prefer address-based disassembly when we have the current PC; it tends to align
+		// better with highlighting.
+		const QString cmd = !m_lastStopAddr.isEmpty()
+			? QString("-data-disassemble -a %1 -n %2 -- 0")
+			      .arg(m_lastStopAddr)
+			      .arg(instructionCount)
+			: QString("-data-disassemble -f \"%1\" -l %2 -n %3 -- 0")
+			      .arg(file)
+			      .arg(line)
+			      .arg(instructionCount);
+
+		enqueueCommand(cmd, [this, header](const QString& reply) {
+			const QString formatted = formatDisassemblyFromReply(reply);
+			emit disassemblyUpdated(header + formatted);
+		});
+		return;
+	}
+
+	// LLDB console: disassemble current frame and capture stream output.
+	m_captureDisassembly = true;
+	m_disassemblyBuffer.clear();
+
+	// Prefer address-based disassembly when possible.
+	const QString cmd = !m_lastStopAddr.isEmpty()
+		? QString("-interpreter-exec console \"disassemble -s %1 -c %2\"")
+		      .arg(m_lastStopAddr)
+		      .arg(instructionCount)
+		: QString("-interpreter-exec console \"disassemble -f -c %1\"")
+		      .arg(instructionCount);
+	enqueueCommand(cmd, [this, header](const QString&) {
+		m_captureDisassembly = false;
+		const QString body = m_disassemblyBuffer.trimmed();
+		m_disassemblyBuffer.clear();
+		emit disassemblyUpdated(header + (body.isEmpty() ? QStringLiteral("(no disassembly output)") : body));
+	});
+}
+
+void DebuggerSession::requestDisassemblyAtLastStop(int instructionCount)
+{
+	if (m_lastStopFile.isEmpty() || m_lastStopLine <= 0)
+		return;
+	requestDisassembly(m_lastStopFile, m_lastStopLine, instructionCount);
+}
+
 
 const QVector<BreakpointInfo>& DebuggerSession::breakpoints() const
 {
@@ -547,7 +775,10 @@ void DebuggerSession::dispatchDebuggerMessage(const QString& rawLine)
 	// 2) Stream records (console / target / log)
 	// ------------------------------------------------------------
 	if (line.startsWith("~\"") || line.startsWith("@\"") || line.startsWith("&\"")) {
-		emit debuggerOutput(decodeCString(line.mid(2)));
+		const QString decoded = decodeCString(line.mid(2));
+		if (m_captureDisassembly)
+			m_disassemblyBuffer += decoded;
+		emit debuggerOutput(decoded);
 		return;
 	}
 
@@ -669,12 +900,21 @@ void DebuggerSession::onTargetStoppedInternal(const QString& stopMsg)
                 const QString fullname = miGet(fblob, "fullname");
                 const QString file = miGet(fblob, "file");
                 const QString path = !fullname.isEmpty() ? fullname : file;
+				const QString addr = miGet(fblob, "addr");
 
                 bool ok = false;
                 const int lineNo = miGet(fblob, "line").toInt(&ok);
 
-                if (!path.isEmpty() && ok && lineNo > 0)
-                    emit stoppedAt(path, lineNo, func);
+				if (!path.isEmpty() && ok && lineNo > 0) {
+					m_lastStopFile = path;
+					m_lastStopLine = lineNo;
+					m_lastStopFunction = func;
+					emit stoppedAt(path, lineNo, func);
+				}
+				if (!addr.isEmpty()) {
+					m_lastStopAddr = addr;
+					emit stoppedAtAddress(addr);
+				}
             }
         }
     }
@@ -747,6 +987,7 @@ void DebuggerSession::handleBreakpointEvent(const QString& line)
 
 	const QString addr = miGet(bkptBlob, "addr");
 	const QString func = miGet(bkptBlob, "func");
+	const QString disp = miGet(bkptBlob, "disp");
 
 	const QString fullname = miGet(bkptBlob, "fullname");
 	const QString file = miGet(bkptBlob, "file");
@@ -755,9 +996,11 @@ void DebuggerSession::handleBreakpointEvent(const QString& line)
 	const int lineNo = toIntSafe(miGet(bkptBlob, "line"));
 
 	const QString cond = miGet(bkptBlob, "cond");
+	const int ignoreCount = toIntSafe(miGet(bkptBlob, "ignore"));
 	// Some version: "times" or "hit-count"
 	const QString timesStr = miGet(bkptBlob, "times");
 	const int hitCount = toIntSafe(timesStr);
+	const QString originalLoc = miGet(bkptBlob, "original-location");
 
 	// 1) cerca se esiste già
 	int idx = -1;
@@ -776,9 +1019,16 @@ void DebuggerSession::handleBreakpointEvent(const QString& line)
 	info.file = path;
 	info.line = (lineNo > 0 ? lineNo : 0);
 	info.condition = cond;
+	info.ignoreCount = (ignoreCount >= 0 ? ignoreCount : 0);
 	info.hitCount = (hitCount >= 0 ? hitCount : 0);
+	info.temporary = (disp.trimmed().toLower() == "del");
+	if (!originalLoc.isEmpty())
+		info.originalLocation = originalLoc;
 
 	if (idx >= 0) {
+		// Preserve originalLocation if the backend doesn't report it.
+		if (info.originalLocation.isEmpty())
+			info.originalLocation = m_breakpoints[idx].originalLocation;
 		m_breakpoints[idx] = info;
 	} else {
 		m_breakpoints.push_back(info);
