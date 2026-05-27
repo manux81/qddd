@@ -37,6 +37,7 @@
 #include <QGraphicsItem>
 #include <QGraphicsPathItem>
 #include <QTimer>
+#include <functional>
 #include <vector>
 
 class GraphicalNodeItem;
@@ -59,6 +60,7 @@ private:
 	QPointF m_pos[SEGMENTS]{};
 	QPointF m_vel[SEGMENTS]{};
 	QPointF m_targetEnd;
+	qreal   m_routeOffset = 0.0;
 	QTimer  m_timer;
 
 	void tick();
@@ -68,7 +70,7 @@ private:
 class GraphicalNodeItem : public QGraphicsItem
 {
 public:
-	explicit GraphicalNodeItem(DebugVariable* node);
+	explicit GraphicalNodeItem(DebugVariable* node, QString layoutKey = {});
 
 	QRectF boundingRect() const override;
 	void paint(QPainter* painter,
@@ -83,6 +85,7 @@ public:
 	void recalculateWidth();
 	void addEdge(GraphicalEdgeItem* e);
 	DebugVariable* variableAt(const QPointF& localPos) const;
+	void setPositionChangedCallback(std::function<void(const QString&, const QPointF&)> cb);
 
 protected:
 	void mousePressEvent(QGraphicsSceneMouseEvent*) override;
@@ -95,6 +98,8 @@ private:
 
 private:
 	DebugVariable* m_node = nullptr;
+	QString m_layoutKey;
+	std::function<void(const QString&, const QPointF&)> m_onPositionChanged;
 	QList<GraphicalEdgeItem*> m_edges;
 	QHash<DebugVariable*, bool> m_expanded;
 
@@ -133,10 +138,13 @@ private:
 	void ensurePointerNodeOpen(const QString& pointerExpr,
 							   DebugVariable* ptrVar,
 							   GraphicalNodeItem* fromItem);
+	void rememberNodePosition(const QString& key, const QPointF& pos);
+	QPointF positionForNode(const QString& key, const QPointF& defaultPos) const;
 
 	QGraphicsScene*  m_scene   = nullptr;
 	DebuggerSession* m_session = nullptr;
 
+	QHash<QString, QPointF> m_nodePositions;
 	std::vector<std::unique_ptr<DebugVariable>> m_dynamicRoots;
 	QHash<QString, DebugVariable*> m_dynamicRootByKey;
 	QHash<DebugVariable*, GraphicalNodeItem*> m_dynamicItems;

@@ -39,6 +39,7 @@
 #include <QStyle>
 #include <cmath>
 #include <memory>
+#include <utility>
 
 
 // =======================================================
@@ -161,6 +162,21 @@ static DebugVariable* rootOf(DebugVariable* v)
 	return v;
 }
 
+static QString layoutKeyForVariable(DebugVariable* v)
+{
+	if (!v)
+		return {};
+
+	const QString path = v->fullPath();
+	if (!path.isEmpty())
+		return QStringLiteral("var:%1").arg(path);
+
+	if (!v->address.isEmpty())
+		return QStringLiteral("addr:%1").arg(v->address);
+
+	return QStringLiteral("name:%1").arg(v->name);
+}
+
 static void drawTriangle(QPainter* p,
 						 QPointF c,
 						 bool expanded)
@@ -188,8 +204,9 @@ static void drawTriangle(QPainter* p,
 // GraphicalNodeItem
 // ------------------------------------------------------------
 
-GraphicalNodeItem::GraphicalNodeItem(DebugVariable* node)
+GraphicalNodeItem::GraphicalNodeItem(DebugVariable* node, QString layoutKey)
 	: m_node(node)
+	, m_layoutKey(std::move(layoutKey))
 {
 	setFlag(ItemIsMovable);
 	setFlag(ItemSendsGeometryChanges);
@@ -527,6 +544,12 @@ void GraphicalNodeItem::addEdge(GraphicalEdgeItem* e)
 	m_edges << e;
 }
 
+void GraphicalNodeItem::setPositionChangedCallback(
+	std::function<void(const QString&, const QPointF&)> cb)
+{
+	m_onPositionChanged = std::move(cb);
+}
+
 QPointF GraphicalNodeItem::inputPort() const
 {
 	return mapToScene(QPointF(0, HeaderHeight / 2));
@@ -556,9 +579,12 @@ QPointF GraphicalNodeItem::outputPortFor(DebugVariable* child) const
 QVariant GraphicalNodeItem::itemChange(GraphicsItemChange c,
 									   const QVariant& v)
 {
-	if (c == ItemPositionHasChanged)
+	if (c == ItemPositionHasChanged) {
 		for (auto* e : m_edges)
 			e->updatePosition();
+		if (!m_layoutKey.isEmpty() && m_onPositionChanged)
+			m_onPositionChanged(m_layoutKey, pos());
+	}
 	return QGraphicsItem::itemChange(c, v);
 }
 
@@ -574,9 +600,15 @@ GraphicalEdgeItem::GraphicalEdgeItem(GraphicalNodeItem* f,
 	, m_fromChild(child)
 {
 	setZValue(-1);
-	QPen pen(QColor(180,180,180));
+	QPen pen(QColor(180, 180, 180, 210));
 	pen.setWidthF(2);
+	pen.setCapStyle(Qt::RoundCap);
+	pen.setJoinStyle(Qt::RoundJoin);
 	setPen(pen);
+
+	const QString routeKey = child ? child->fullPath() : QString();
+	const uint lane = qHash(routeKey) % 9;
+	m_routeOffset = (static_cast<int>(lane) - 4) * 12.0;
 
 	// ✔ CORRETTO: GraphicalEdgeItem NON è QObject
 	QObject::connect(&m_timer, &QTimer::timeout,
@@ -594,9 +626,33 @@ void GraphicalEdgeItem::updatePosition()
 void GraphicalEdgeItem::tick()
 {
 	m_pos[SEGMENTS - 1] = m_targetEnd;
+	const QPointF start = m_pos[0];
+	const QPointF end = m_pos[SEGMENTS - 1];
+	const qreal dx = end.x() - start.x();
+	const qreal direction = dx >= 0 ? 1.0 : -1.0;
+	const qreal tension = qMax<qreal>(80.0, std::abs(dx) * 0.45);
+	const qreal verticalSpread = m_routeOffset;
+
 	QPainterPath p;
-	p.moveTo(m_pos[0]);
-	p.lineTo(m_pos[SEGMENTS - 1]);
+	p.moveTo(start);
+
+	if (std::abs(dx) < 70.0) {
+		const qreal side = direction * (90.0 + std::abs(verticalSpread));
+		const qreal midY = (start.y() + end.y()) * 0.5 + verticalSpread;
+		p.cubicTo(start + QPointF(side, 0),
+				  QPointF(start.x() + side, midY),
+				  QPointF(start.x() + side, midY));
+		p.cubicTo(QPointF(end.x() - side, midY),
+				  end - QPointF(side, 0),
+				  end);
+	} else {
+		p.cubicTo(QPointF(start.x() + direction * tension,
+						  start.y() + verticalSpread),
+				  QPointF(end.x() - direction * tension,
+						  end.y() + verticalSpread),
+				  end);
+	}
+
 	setPath(p);
 	m_timer.stop();
 }
@@ -742,9 +798,14 @@ void GraphicalVariablesView::refresh()
 
 	int y = 0;
 	for (auto& v : m_session->variables()) {
-		auto* item = new GraphicalNodeItem(v.get());
+		const QString layoutKey = layoutKeyForVariable(v.get());
+		auto* item = new GraphicalNodeItem(v.get(), layoutKey);
+		item->setPositionChangedCallback(
+			[this](const QString& key, const QPointF& pos) {
+				rememberNodePosition(key, pos);
+			});
 		m_scene->addItem(item);
-		item->setPos(0, y);
+		item->setPos(positionForNode(layoutKey, QPointF(0, y)));
 		nodeMap[v.get()] = item;
 		varByPath[v->fullPath()] = v.get();
 
@@ -792,6 +853,21 @@ void GraphicalVariablesView::refresh()
 			}
 		}
 	}
+}
+
+void GraphicalVariablesView::rememberNodePosition(const QString& key, const QPointF& pos)
+{
+	if (!key.isEmpty())
+		m_nodePositions.insert(key, pos);
+}
+
+QPointF GraphicalVariablesView::positionForNode(
+	const QString& key,
+	const QPointF& defaultPos) const
+{
+	if (key.isEmpty())
+		return defaultPos;
+	return m_nodePositions.value(key, defaultPos);
 }
 
 // ------------------------------------------------------------
@@ -886,9 +962,14 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 		if (!rootRaw)
 			return;
 
+		const QString layoutKey = QStringLiteral("dynamic:%1").arg(key);
 		auto* existing = m_dynamicItems.value(rootRaw, nullptr);
 		if (!existing) {
-			existing = new GraphicalNodeItem(rootRaw);
+			existing = new GraphicalNodeItem(rootRaw, layoutKey);
+			existing->setPositionChangedCallback(
+				[this](const QString& key, const QPointF& pos) {
+					rememberNodePosition(key, pos);
+				});
 			m_scene->addItem(existing);
 			m_dynamicItems[rootRaw] = existing;
 
@@ -899,7 +980,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 			e->updatePosition();
 		}
 
-		existing->setPos(fromItem->pos() + QPointF(340, 0));
+		existing->setPos(positionForNode(layoutKey, fromItem->pos() + QPointF(340, 0)));
 		centerOn(existing);
 		return;
 	}
@@ -924,9 +1005,14 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 			m_dynamicRoots.push_back(std::move(root));
 			m_dynamicRootByKey.insert(key, rootRaw);
 
-			auto* item = new GraphicalNodeItem(rootRaw);
+			const QString layoutKey = QStringLiteral("dynamic:%1").arg(key);
+			auto* item = new GraphicalNodeItem(rootRaw, layoutKey);
+			item->setPositionChangedCallback(
+				[this](const QString& key, const QPointF& pos) {
+					rememberNodePosition(key, pos);
+				});
 			m_scene->addItem(item);
-			item->setPos(fromItem->pos() + QPointF(340, 0));
+			item->setPos(positionForNode(layoutKey, fromItem->pos() + QPointF(340, 0)));
 			m_dynamicItems[rootRaw] = item;
 
 			auto* e = new GraphicalEdgeItem(fromItem, item, ptrVar);
