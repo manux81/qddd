@@ -30,6 +30,7 @@
  */
 
 #include "SettingsDialog.h"
+#include "HardwareDebugPage.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -51,9 +52,9 @@ namespace {
 constexpr const char* kKeyBackend      = "debugger/backend";
 constexpr const char* kKeyGdbPath      = "debugger/gdbPath";
 constexpr const char* kKeyLldbMiPath   = "debugger/lldbMiPath";
-constexpr const char* kKeyTargetType   = "target/type";
-constexpr const char* kKeyRemoteHost   = "target/remoteHost";
-constexpr const char* kKeyRemotePort   = "target/remotePort";
+constexpr const char* kKeyTargetType         = "target/type";
+constexpr const char* kKeyRemoteHost         = "target/remoteHost";
+constexpr const char* kKeyRemotePort         = "target/remotePort";
 constexpr const char* kKeyOpenAIKey    = "ai/openaiApiKey";
 constexpr const char* kKeyOpenAIModel  = "ai/openaiModel";
 constexpr const char* kKeyOpenAIBaseUrl= "ai/openaiBaseUrl";
@@ -124,7 +125,7 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 	dbgLayout->addWidget(hint);
 	dbgLayout->addStretch(1);
 
-	// --- Target tab (future-proofing) ---
+	// --- Target tab (classic remote gdbserver / local) ---
 	auto* targetPage = new QWidget(tabs);
 	auto* targetLayout = new QVBoxLayout(targetPage);
 
@@ -134,9 +135,6 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 	m_targetTypeCombo = new QComboBox(targetBox);
 	m_targetTypeCombo->addItem(tr("Local executable"), "local");
 	m_targetTypeCombo->addItem(tr("Remote gdbserver"), "gdbserver");
-	m_targetTypeCombo->addItem(tr("ST-Link (future)"), "stlink");
-	m_targetTypeCombo->addItem(tr("J-Link (future)"), "jlink");
-	m_targetTypeCombo->addItem(tr("Lauterbach (future)"), "lauterbach");
 	targetForm->addRow(tr("Type:"), m_targetTypeCombo);
 
 	m_remoteHostEdit = new QLineEdit(targetBox);
@@ -149,7 +147,7 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 	targetForm->addRow(tr("Remote port:"), m_remotePortSpin);
 
 	auto* targetHint = new QLabel(
-		tr("Remote (gdbserver) / J-Link: qddd will connect via GDB using -target-select remote host:port."),
+		tr("For ST-LINK, J-Link or other GDB server hardware probes, use the 'Hardware Debugging' tab instead."),
 		targetPage);
 	targetHint->setWordWrap(true);
 	targetHint->setStyleSheet("color: rgba(255,255,255,140);");
@@ -220,6 +218,10 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 
 	tabs->addTab(aiPage, tr("AI"));
 
+	// --- Hardware Debugging tab ---
+	m_hardwarePage = new HardwareDebugPage(tabs);
+	tabs->addTab(m_hardwarePage, tr("Hardware Debugging"));
+
 	auto* buttons = new QDialogButtonBox(
 		QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
 		Qt::Horizontal,
@@ -237,6 +239,10 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 void SettingsDialog::load()
 {
 	QSettings s;
+
+	// Hardware debug page
+	if (m_hardwarePage)
+		m_hardwarePage->load();
 
 	const QString backend = s.value(kKeyBackend, "gdb-mi").toString();
 	const int backendIdx = m_backendCombo->findData(backend);
@@ -274,9 +280,14 @@ void SettingsDialog::load()
 	}
 }
 
-void SettingsDialog::save() const
+void SettingsDialog::save()
 {
 	QSettings s;
+
+	// Save hardware debug page (flushes UI to config manager, then persists)
+	if (m_hardwarePage)
+		m_hardwarePage->save();
+
 	s.setValue(kKeyBackend, m_backendCombo->currentData().toString());
 	s.setValue(kKeyGdbPath, m_gdbPathEdit->text().trimmed());
 	s.setValue(kKeyLldbMiPath, m_lldbMiPathEdit->text().trimmed());
@@ -308,3 +319,4 @@ void SettingsDialog::browseLldbMi()
 	if (!path.isEmpty())
 		m_lldbMiPathEdit->setText(path);
 }
+

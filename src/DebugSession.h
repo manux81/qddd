@@ -168,7 +168,8 @@ public:
 	enum class TargetType {
 		Local,
 		RemoteGdbserver,
-		JLink
+		JLink,
+		Stlink
 	};
 
 	explicit DebuggerSession(QObject* parent = nullptr);
@@ -179,6 +180,8 @@ public:
 	void setLldbMiExecutable(const QString& path);
 	void setTargetType(TargetType type);
 	void setRemoteEndpoint(const QString& host, int port);
+	void setStlinkServerPath(const QString& path);
+	void setStlinkGdbPort(int port);
 	void startSession(const QString& executablePath);
 	void terminateSession();
 
@@ -312,7 +315,11 @@ private:
 	QString m_remoteHost = "127.0.0.1";
 	int m_remotePort = 3333;
 
+	QString m_stlinkServerPath = "ST-LINK_gdbserver";
+	int m_stlinkGdbPort = 4242;
+
 	QProcess m_debuggerProcess;
+	QProcess m_stlinkProcess;
 
 	bool m_commandInFlight = false;
 	int  m_nextToken = 1;

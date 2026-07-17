@@ -664,6 +664,8 @@ void MainWindow::applySettingsToSession()
 		m_session->setTargetType(DebuggerSession::TargetType::RemoteGdbserver);
 	else if (targetType == "jlink")
 		m_session->setTargetType(DebuggerSession::TargetType::JLink);
+	else if (targetType == "stlink")
+		m_session->setTargetType(DebuggerSession::TargetType::Stlink);
 	else
 		m_session->setTargetType(DebuggerSession::TargetType::Local);
 

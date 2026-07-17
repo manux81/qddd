@@ -319,10 +319,23 @@ void DebuggerSession::setRemoteEndpoint(const QString& host, int port)
 		m_remotePort = port;
 }
 
+void DebuggerSession::setStlinkServerPath(const QString& path)
+{
+	if (!path.trimmed().isEmpty())
+		m_stlinkServerPath = path.trimmed();
+}
+
+void DebuggerSession::setStlinkGdbPort(int port)
+{
+	if (port > 0 && port <= 65535)
+		m_stlinkGdbPort = port;
+}
+
 bool DebuggerSession::isRemoteTarget() const
 {
 	return m_targetType == TargetType::RemoteGdbserver
-		|| m_targetType == TargetType::JLink;
+		|| m_targetType == TargetType::JLink
+		|| m_targetType == TargetType::Stlink;
 }
 
 QString DebuggerSession::remoteSpec() const
@@ -337,6 +350,32 @@ void DebuggerSession::startSession(const QString& executablePath)
         qWarning() << "Executable not found:" << executablePath;
         return;
     }
+
+	// For ST-Link, first launch the GDB server
+	if (m_targetType == TargetType::Stlink) {
+		QStringList serverArgs;
+		serverArgs << "-g" << QString("-p%1").arg(m_stlinkGdbPort)
+		           << "-l" << "-1"   // listen on localhost only via -g
+		           << "-v";          // verbose
+
+		emit debuggerOutput(tr("Starting ST-LINK GDB server: %1 %2\n")
+		                      .arg(m_stlinkServerPath, serverArgs.join(' ')));
+
+		m_stlinkProcess.start(m_stlinkServerPath, serverArgs);
+
+		if (!m_stlinkProcess.waitForStarted(5000)) {
+			qWarning() << "Failed to start ST-LINK GDB server:" << m_stlinkServerPath;
+			emit debuggerOutput(tr("ERROR: Failed to start ST-LINK GDB server: %1\n")
+			                      .arg(m_stlinkServerPath));
+			return;
+		}
+
+		// Give the ST-Link server a moment to initialise
+		m_stlinkProcess.waitForReadyRead(2000);
+		const QByteArray stlinkOutput = m_stlinkProcess.readAllStandardOutput();
+		if (!stlinkOutput.isEmpty())
+			emit debuggerOutput(QString::fromUtf8(stlinkOutput));
+	}
 
     QString debugger;
     QStringList args;
@@ -362,9 +401,17 @@ void DebuggerSession::startSession(const QString& executablePath)
 	// 1) Load local symbols
 	enqueueCommand(QString("-file-exec-and-symbols \"%1\"").arg(executablePath),
 	               [this](const QString&) {
-		               // 2) Optionally connect to a remote target (SEGGER J-Link uses a GDB server)
+		               // 2) Optionally connect to a remote target
 		               if (m_backend == Backend::GdbMi && isRemoteTarget()) {
-			               enqueueCommand(QString("-target-select remote %1").arg(remoteSpec()),
+						   // For ST-Link we connect to localhost:stlinkGdbPort
+						   const QString host = (m_targetType == TargetType::Stlink)
+							   ? QString("localhost")
+							   : m_remoteHost;
+						   const int port = (m_targetType == TargetType::Stlink)
+							   ? m_stlinkGdbPort
+							   : m_remotePort;
+
+			               enqueueCommand(QString("-target-select remote %1:%2").arg(host).arg(port),
 			                              [this](const QString&) { emit targetStarted(); });
 			               return;
 		               }
@@ -377,6 +424,9 @@ void DebuggerSession::terminateSession()
 {
     if (m_debuggerProcess.state() != QProcess::NotRunning)
         m_debuggerProcess.kill();
+
+    if (m_stlinkProcess.state() != QProcess::NotRunning)
+        m_stlinkProcess.kill();
 }
 
 bool DebuggerSession::isRunning() const

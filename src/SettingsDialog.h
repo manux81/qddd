@@ -37,6 +37,7 @@ class QComboBox;
 class QCheckBox;
 class QLineEdit;
 class QSpinBox;
+class HardwareDebugPage;
 
 class SettingsDialog final : public QDialog
 {
@@ -47,7 +48,9 @@ public:
 	~SettingsDialog() override = default;
 
 	void load();
-	void save() const;
+	void save();
+
+	HardwareDebugPage* hardwareDebugPage() const { return m_hardwarePage; }
 
 private slots:
 	void browseGdb();
@@ -70,4 +73,6 @@ private:
 	QComboBox* m_aiProviderCombo = nullptr;
 	QLineEdit* m_ollamaModelEdit = nullptr;
 	QLineEdit* m_ollamaBaseUrlEdit = nullptr;
+
+	HardwareDebugPage* m_hardwarePage = nullptr;
 };

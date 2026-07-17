@@ -31,6 +31,17 @@ add_executable(qddd
     DebugAssistantDock.cpp
     DebugAssistantDock.h
 
+    HardwareServerConfig.cpp
+    HardwareServerConfig.h
+    GdbServerProcess.cpp
+    GdbServerProcess.h
+    HardwareDebugSession.cpp
+    HardwareDebugSession.h
+    HardwareDebugPage.cpp
+    HardwareDebugPage.h
+    MockGdbServer.cpp
+    MockGdbServer.h
+
     resources.qrc
 )
 
