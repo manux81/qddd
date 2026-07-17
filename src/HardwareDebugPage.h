@@ -62,7 +62,7 @@ public:
     ~HardwareDebugPage() override;
 
     void load();
-    void save() const;
+    void save();
 
     // Access to config manager for MainWindow
     HardwareDebugConfigManager& configManager() { return m_configManager; }

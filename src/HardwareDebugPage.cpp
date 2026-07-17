@@ -50,6 +50,7 @@
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QTabWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 // ============================================================================
@@ -418,10 +419,10 @@ void HardwareDebugPage::load()
     }
 }
 
-void HardwareDebugPage::save() const
+void HardwareDebugPage::save()
 {
-    // Save current edits to the active config before persisting
-    // Note: saveCurrentToConfig() should be called before this if needed
+    // Flush current UI to config manager before persisting
+    saveCurrentToConfig();
     QSettings s;
     m_configManager.save(s);
 }

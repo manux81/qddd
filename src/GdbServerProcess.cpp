@@ -71,7 +71,9 @@ GdbServerProcess::~GdbServerProcess()
     stopTcpProbe();
     if (m_process.state() != QProcess::NotRunning) {
         m_process.kill();
-        m_process.waitForFinished(3000);
+        // Don't waitForFinished in destructor - it blocks the event loop
+        // and can cause crashes if called from within signal handlers.
+        // The process will be reaped by the kernel.
     }
 }
 
