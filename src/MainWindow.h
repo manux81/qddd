@@ -123,4 +123,7 @@ class MainWindow : public QMainWindow {
 
 	QString m_currentProgram;
 	bool m_breakOnMainInserted = false;
+	int m_activeTargetId = -4;
+	bool m_runAfterSessionStart = false;
+	bool m_hardwareAutoRuns = false;
 };

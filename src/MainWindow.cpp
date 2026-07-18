@@ -86,8 +86,22 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 	        m_consoleWidget, &ConsoleWidget::appendOutput);
 	connect(m_hardwareSession.get(), &HardwareDebugSession::sessionError, this,
 	        [this](const QString& message) {
+		        m_runAfterSessionStart = false;
 		        QMessageBox::critical(this, tr("Hardware debug"), message);
 	        });
+	connect(m_session.get(), &DebuggerSession::targetStarted, this, [this] {
+		if (m_runAfterSessionStart && m_activeTargetId < 0) {
+			m_runAfterSessionStart = false;
+			runProgram();
+		}
+	});
+	connect(m_hardwareSession.get(), &HardwareDebugSession::sessionStarted, this, [this] {
+		if (!m_runAfterSessionStart || m_activeTargetId < 0)
+			return;
+		m_runAfterSessionStart = false;
+		if (!m_hardwareAutoRuns)
+			runProgram();
+	});
 
 	connect(m_session.get(), &DebuggerSession::breakpointLinesChanged, this,
 	        [this](const QString &file, const QSet<int> &lines) {
@@ -677,6 +691,8 @@ void MainWindow::startDebugger(const QString &programPath) {
 			m_session->setTargetType(DebuggerSession::TargetType::RemoteGdbserver);
 		// Automatic deliberately keeps the legacy target/type setting applied
 		// above, preserving command-line and existing project workflows.
+		m_activeTargetId = configIndex;
+		m_hardwareAutoRuns = false;
 		m_session->startSession(programPath);
 		return;
 	}
@@ -695,6 +711,8 @@ void MainWindow::startDebugger(const QString &programPath) {
 	config.programImage = programPath;
 	if (config.symbolFile.isEmpty())
 		config.symbolFile = programPath;
+	m_activeTargetId = configIndex;
+	m_hardwareAutoRuns = config.runAfterLoad;
 	m_hardwareSession->startSession(config, m_session.get());
 }
 
@@ -794,6 +812,15 @@ void MainWindow::applySettingsToSession()
 void MainWindow::runProgram() {
 	if (m_currentProgram.isEmpty())
 		return;
+
+	const int selectedTarget = m_targetSelector
+		? m_targetSelector->currentData().toInt()
+		: kAutomaticTarget;
+	if (selectedTarget != m_activeTargetId || !m_session->isRunning()) {
+		m_runAfterSessionStart = true;
+		startDebugger(m_currentProgram);
+		return;
+	}
 
 	if (!m_breakOnMainInserted) {
 		m_session->insertBreakpoint("main");
