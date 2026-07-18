@@ -128,6 +128,7 @@ private:
     void executeGdbSequence();
     void sendCommand(const QString& cmd,
                      std::function<void(const QString&)> cb = nullptr);
+    void advanceSequence(const QString& reply = QString());
     void abortSession(const QString& reason);
 
     // State

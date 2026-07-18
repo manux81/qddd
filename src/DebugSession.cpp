@@ -319,6 +319,13 @@ void DebuggerSession::setRemoteEndpoint(const QString& host, int port)
 		m_remotePort = port;
 }
 
+void DebuggerSession::setRemoteConnectCommands(const QStringList& commands,
+                                               bool extendedRemote)
+{
+	m_remoteConnectCommands = commands;
+	m_useExtendedRemote = extendedRemote;
+}
+
 void DebuggerSession::setStlinkServerPath(const QString& path)
 {
 	if (!path.trimmed().isEmpty())
@@ -411,7 +418,14 @@ void DebuggerSession::startSession(const QString& executablePath)
 							   ? m_stlinkGdbPort
 							   : m_remotePort;
 
-			               enqueueCommand(QString("-target-select remote %1:%2").arg(host).arg(port),
+			               for (const QString& command : m_remoteConnectCommands) {
+				               if (!command.trimmed().isEmpty())
+					               enqueueCommand(command.trimmed());
+			               }
+			               const QString mode = m_useExtendedRemote
+				               ? QStringLiteral("extended-remote")
+				               : QStringLiteral("remote");
+			               enqueueCommand(QString("-target-select %1 %2:%3").arg(mode, host).arg(port),
 			                              [this](const QString&) { emit targetStarted(); });
 			               return;
 		               }
@@ -1334,11 +1348,14 @@ void DebuggerSession::evaluateExpression(const QString& expression)
         });
 }
 
-void DebuggerSession::sendRawCommand(const QString& cmd)
+void DebuggerSession::sendRawCommand(const QString& cmd,
+	                                  std::function<void(const QString&)> cb)
 {
     enqueueCommand(cmd,
-        [this](const QString& reply) {
+        [this, cb = std::move(cb)](const QString& reply) {
             emit debuggerOutput(reply);
+            if (cb)
+                cb(reply);
         });
 }
 

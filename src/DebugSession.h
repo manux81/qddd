@@ -180,6 +180,7 @@ public:
 	void setLldbMiExecutable(const QString& path);
 	void setTargetType(TargetType type);
 	void setRemoteEndpoint(const QString& host, int port);
+	void setRemoteConnectCommands(const QStringList& commands, bool extendedRemote = false);
 	void setStlinkServerPath(const QString& path);
 	void setStlinkGdbPort(int port);
 	void startSession(const QString& executablePath);
@@ -223,7 +224,8 @@ public:
 
 	// Expression evaluation / raw MI
 	void evaluateExpression(const QString& expression);
-	void sendRawCommand(const QString& cmd);
+	void sendRawCommand(const QString& cmd,
+	                    std::function<void(const QString&)> cb = nullptr);
 	void setVariable(const QString& fullPath, const QString& newValue);
 	void requestDisassembly(const QString& file, int line, int instructionCount = 80);
 	void requestDisassemblyAtLastStop(int instructionCount = 80);
@@ -312,6 +314,8 @@ private:
 	QString m_lldbMiExecutable = "/usr/local/bin/lldb-mi";
 
 	TargetType m_targetType = TargetType::Local;
+	QStringList m_remoteConnectCommands;
+	bool m_useExtendedRemote = false;
 	QString m_remoteHost = "127.0.0.1";
 	int m_remotePort = 3333;
 

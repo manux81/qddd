@@ -79,13 +79,20 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 {
 	setWindowTitle(tr("Settings"));
 	setModal(true);
-	resize(620, 360);
+	resize(900, 680);
+	setMinimumSize(760, 560);
 
 	auto* tabs = new QTabWidget(this);
 
 	// --- Debugger tab ---
 	auto* debuggerPage = new QWidget(tabs);
 	auto* dbgLayout = new QVBoxLayout(debuggerPage);
+	auto* debuggerIntro = new QLabel(
+		tr("Choose the debugger engine here. The target itself is selected from the main window."),
+		debuggerPage);
+	debuggerIntro->setWordWrap(true);
+	debuggerIntro->setStyleSheet("padding: 8px; background: rgba(70,120,180,35); border-radius: 5px;");
+	dbgLayout->addWidget(debuggerIntro);
 
 	auto* dbgBox = new QGroupBox(tr("Debugger Backend"), debuggerPage);
 	auto* dbgForm = new QFormLayout(dbgBox);
@@ -123,19 +130,18 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 
 	dbgLayout->addWidget(dbgBox);
 	dbgLayout->addWidget(hint);
-	dbgLayout->addStretch(1);
 
 	// --- Target tab (classic remote gdbserver / local) ---
 	auto* targetPage = new QWidget(tabs);
 	auto* targetLayout = new QVBoxLayout(targetPage);
 
-	auto* targetBox = new QGroupBox(tr("Target Connection"), targetPage);
+	auto* targetBox = new QGroupBox(tr("External GDB server"), targetPage);
 	auto* targetForm = new QFormLayout(targetBox);
 
 	m_targetTypeCombo = new QComboBox(targetBox);
-	m_targetTypeCombo->addItem(tr("Local executable"), "local");
-	m_targetTypeCombo->addItem(tr("Remote gdbserver"), "gdbserver");
-	targetForm->addRow(tr("Type:"), m_targetTypeCombo);
+	m_targetTypeCombo->addItem(tr("Local process"), "local");
+	m_targetTypeCombo->addItem(tr("External GDB server"), "gdbserver");
+	m_targetTypeCombo->hide(); // target mode is selected explicitly in the main window
 
 	m_remoteHostEdit = new QLineEdit(targetBox);
 	m_remoteHostEdit->setPlaceholderText("127.0.0.1");
@@ -147,17 +153,16 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 	targetForm->addRow(tr("Remote port:"), m_remotePortSpin);
 
 	auto* targetHint = new QLabel(
-		tr("For ST-LINK, J-Link or other GDB server hardware probes, use the 'Hardware Debugging' tab instead."),
+		tr("Use this only when a GDB server is already running outside QDDD. For ST-LINK, J-Link or OpenOCD managed by QDDD, create a Hardware Probe profile."),
 		targetPage);
 	targetHint->setWordWrap(true);
 	targetHint->setStyleSheet("color: rgba(255,255,255,140);");
 
-	targetLayout->addWidget(targetBox);
-	targetLayout->addWidget(targetHint);
-	targetLayout->addStretch(1);
+	dbgLayout->addWidget(targetBox);
+	dbgLayout->addWidget(targetHint);
+	dbgLayout->addStretch(1);
 
 	tabs->addTab(debuggerPage, tr("Debugger"));
-	tabs->addTab(targetPage, tr("Target"));
 
 	// --- AI tab ---
 	auto* aiPage = new QWidget(tabs);
@@ -220,14 +225,19 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 
 	// --- Hardware Debugging tab ---
 	m_hardwarePage = new HardwareDebugPage(tabs);
-	tabs->addTab(m_hardwarePage, tr("Hardware Debugging"));
+	tabs->insertTab(1, m_hardwarePage, tr("Hardware Probes"));
 
 	auto* buttons = new QDialogButtonBox(
-		QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+		QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Apply,
 		Qt::Horizontal,
 		this);
-	connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+	connect(buttons, &QDialogButtonBox::accepted, this, [this] {
+		save();
+		accept();
+	});
 	connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+	connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
+	        this, &SettingsDialog::save);
 
 	auto* root = new QVBoxLayout(this);
 	root->addWidget(tabs, 1);
@@ -319,4 +329,3 @@ void SettingsDialog::browseLldbMi()
 	if (!path.isEmpty())
 		m_lldbMiPathEdit->setText(path);
 }
-

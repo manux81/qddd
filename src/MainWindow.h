@@ -54,6 +54,8 @@ class QResizeEvent;
 class QTabWidget;
 class QWidget;
 class DebugAssistantDock;
+class QComboBox;
+class HardwareDebugSession;
 
 class MainWindow : public QMainWindow {
 	Q_OBJECT
@@ -88,6 +90,7 @@ class MainWindow : public QMainWindow {
 	void setupMenusAndToolbars();
 	void startDebugger(const QString &programPath);
 	void applySettingsToSession();
+	void refreshHardwareTargetSelector();
 	SourceEditor* currentSourceEditor() const;
 	SourceEditor* ensureSourceTabForFile(const QString& file);
 	void showSourceLocation(const QString& file, int line);
@@ -95,6 +98,8 @@ class MainWindow : public QMainWindow {
 	void positionCommandOverlay();
 
 	std::unique_ptr<DebuggerSession> m_session;
+	std::unique_ptr<HardwareDebugSession> m_hardwareSession;
+	QComboBox* m_targetSelector = nullptr;
 
 	QTabWidget *m_sourceTabs = nullptr;
 	SourceEditor *m_sourceEditor = nullptr;

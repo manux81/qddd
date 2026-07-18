@@ -96,6 +96,7 @@ private:
 
     // Config manager
     HardwareDebugConfigManager m_configManager;
+    int m_loadedIndex = -1;
 
     // Config list
     QListWidget* m_configList = nullptr;
@@ -151,6 +152,9 @@ private:
 
     // Command preview
     QLabel* m_commandPreview = nullptr;
+
+    // Active checkbox
+    QCheckBox* m_enabledCheck = nullptr;
 
     // Test button
     QPushButton* m_testBtn = nullptr;

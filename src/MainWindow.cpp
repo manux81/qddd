@@ -48,15 +48,26 @@
 #include <QFrame>
 #include <QTabWidget>
 #include <QSettings>
+#include <QComboBox>
 
 #include "SettingsDialog.h"
 #include "DebugAssistantDock.h"
+#include "HardwareDebugSession.h"
+#include "HardwareServerConfig.h"
+
+namespace {
+constexpr int kAutomaticTarget = -3;
+constexpr int kExternalServerTarget = -2;
+constexpr int kLocalTarget = -1;
+}
 
 MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
     : QMainWindow(parent), m_session(std::make_unique<DebuggerSession>(this)),
+      m_hardwareSession(std::make_unique<HardwareDebugSession>(this)),
       m_currentProgram(initialProgram) {
 	setupUi();
 	setupMenusAndToolbars();
+	refreshHardwareTargetSelector();
 
 	applySettingsToSession();
 
@@ -69,6 +80,14 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 
 	connect(m_session.get(), &DebuggerSession::targetStopped, this,
 	        &MainWindow::onTargetStopped);
+	connect(m_hardwareSession.get(), &HardwareDebugSession::debugOutput,
+	        m_consoleWidget, &ConsoleWidget::appendOutput);
+	connect(m_hardwareSession.get(), &HardwareDebugSession::serverOutput,
+	        m_consoleWidget, &ConsoleWidget::appendOutput);
+	connect(m_hardwareSession.get(), &HardwareDebugSession::sessionError, this,
+	        [this](const QString& message) {
+		        QMessageBox::critical(this, tr("Hardware debug"), message);
+	        });
 
 	connect(m_session.get(), &DebuggerSession::breakpointLinesChanged, this,
 	        [this](const QString &file, const QSet<int> &lines) {
@@ -92,6 +111,14 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 	        });
 
 	if (!m_currentProgram.isEmpty()) {
+		// A program supplied on the command line must retain the pre-selector
+		// launch semantics, regardless of the last manual hardware choice.
+		const int automaticIndex = m_targetSelector->findData(kAutomaticTarget);
+		if (automaticIndex >= 0) {
+			m_targetSelector->blockSignals(true);
+			m_targetSelector->setCurrentIndex(automaticIndex);
+			m_targetSelector->blockSignals(false);
+		}
 		startDebugger(m_currentProgram);
 	}
 }
@@ -488,6 +515,17 @@ void MainWindow::setupMenusAndToolbars() {
 			font-size: 11px;
 			padding-left: 8px;
 		}
+		QComboBox#targetSelector {
+			background: transparent;
+			border: none;
+			border-right: 1px solid #3a3a3a;
+			padding: 3px 18px 3px 6px;
+			color: #dcdcdc;
+			font-size: 12px;
+			font-weight: 600;
+		}
+		QComboBox#targetSelector:hover { background: #333333; border-radius: 4px; }
+		QComboBox#targetSelector::drop-down { border: none; width: 18px; }
 	)");
 
 	auto* wrapLayout = new QHBoxLayout(toolbarWrap);
@@ -531,11 +569,20 @@ void MainWindow::setupMenusAndToolbars() {
 	downAct->setToolTip(tr("Down Stack Frame"));
 	toggleBpAct->setToolTip(tr("Toggle Breakpoint"));
 
-	auto* targetName = new QLabel(commandPill);
-	targetName->setObjectName("targetName");
 	auto* targetState = new QLabel(commandPill);
 	targetState->setObjectName("targetState");
-	pillLayout->addWidget(targetName);
+	m_targetSelector = new QComboBox(commandPill);
+	m_targetSelector->setObjectName("targetSelector");
+	m_targetSelector->setMinimumWidth(105);
+	m_targetSelector->setMaximumWidth(160);
+	m_targetSelector->setToolTip(tr("Debug target / hardware probe"));
+	connect(m_targetSelector, QOverload<int>::of(&QComboBox::currentIndexChanged),
+	        this, [this](int) {
+		        QSettings settings;
+		        settings.setValue("hardwareDebug/selectedIndex",
+		                          m_targetSelector->currentData().toInt());
+	        });
+	pillLayout->addWidget(m_targetSelector);
 	pillLayout->addWidget(targetState);
 	addSeparator();
 	addButton(runAct, "primaryCommand");
@@ -554,12 +601,12 @@ void MainWindow::setupMenusAndToolbars() {
 	wrapLayout->addWidget(commandPill, 0, Qt::AlignCenter);
 	wrapLayout->addStretch(1);
 
-	auto updateTargetChip = [this, targetName, targetState](const QString& state) {
+	auto updateTargetChip = [this, targetState](const QString& state) {
 		const QFileInfo fi(m_currentProgram);
-		targetName->setText(fi.exists() ? fi.fileName() : tr("No target"));
-		targetState->setText(state);
+		const QString program = fi.exists() ? fi.fileName() : tr("No firmware");
+		targetState->setText(QStringLiteral("%1 · %2").arg(program, state));
 	};
-	updateTargetChip(m_currentProgram.isEmpty() ? tr("Open a program to debug") : tr("Ready"));
+	updateTargetChip(m_currentProgram.isEmpty() ? tr("Select firmware") : tr("Ready"));
 	connect(m_session.get(), &DebuggerSession::targetStarted, this,
 	        [updateTargetChip] { updateTargetChip(QObject::tr("Session started")); });
 	connect(m_session.get(), &DebuggerSession::targetRunning, this,
@@ -614,7 +661,41 @@ void MainWindow::setupMenusAndToolbars() {
 void MainWindow::startDebugger(const QString &programPath) {
 	m_currentProgram = programPath;
 	m_breakOnMainInserted = false;
-	m_session->startSession(programPath);
+	if (m_hardwareSession)
+		m_hardwareSession->stopSession();
+	else if (m_session->isRunning())
+		m_session->terminateSession();
+
+	const int configIndex = m_targetSelector
+		? m_targetSelector->currentData().toInt()
+		: -1;
+	if (configIndex < 0) {
+		applySettingsToSession();
+		if (configIndex == kLocalTarget)
+			m_session->setTargetType(DebuggerSession::TargetType::Local);
+		else if (configIndex == kExternalServerTarget)
+			m_session->setTargetType(DebuggerSession::TargetType::RemoteGdbserver);
+		// Automatic deliberately keeps the legacy target/type setting applied
+		// above, preserving command-line and existing project workflows.
+		m_session->startSession(programPath);
+		return;
+	}
+
+	QSettings settings;
+	HardwareDebugConfigManager manager;
+	manager.load(settings);
+	if (configIndex >= manager.configurations.size()) {
+		QMessageBox::warning(this, tr("Hardware debug"),
+		                     tr("The selected hardware configuration no longer exists."));
+		refreshHardwareTargetSelector();
+		return;
+	}
+
+	HardwareDebugConfiguration config = manager.configurations[configIndex];
+	config.programImage = programPath;
+	if (config.symbolFile.isEmpty())
+		config.symbolFile = programPath;
+	m_hardwareSession->startSession(config, m_session.get());
 }
 
 void MainWindow::openProgram() {
@@ -629,11 +710,43 @@ void MainWindow::openProgram() {
 void MainWindow::openSettings()
 {
 	SettingsDialog dlg(this);
-	if (dlg.exec() != QDialog::Accepted)
+	const int result = dlg.exec();
+	applySettingsToSession();
+	refreshHardwareTargetSelector();
+	if (result != QDialog::Accepted)
+		return;
+}
+
+void MainWindow::refreshHardwareTargetSelector()
+{
+	if (!m_targetSelector)
 		return;
 
-	dlg.save();
-	applySettingsToSession();
+	QSettings settings;
+	const int previous = settings.value("hardwareDebug/selectedIndex", kAutomaticTarget).toInt();
+	HardwareDebugConfigManager manager;
+	manager.load(settings);
+
+	m_targetSelector->blockSignals(true);
+	m_targetSelector->clear();
+	m_targetSelector->addItem(tr("Automatic"), kAutomaticTarget);
+	m_targetSelector->setItemData(0,
+		tr("Use the legacy launch configuration; this is the compatibility default for firmware passed on the command line"),
+		Qt::ToolTipRole);
+	m_targetSelector->addItem(tr("Local"), kLocalTarget);
+	m_targetSelector->setItemData(1, tr("Debug a local executable"), Qt::ToolTipRole);
+	m_targetSelector->addItem(tr("External server"), kExternalServerTarget);
+	m_targetSelector->setItemData(2, tr("Connect to the GDB server configured in Settings"), Qt::ToolTipRole);
+	for (int i = 0; i < manager.configurations.size(); ++i) {
+		const auto& config = manager.configurations[i];
+		if (config.enabled)
+			m_targetSelector->addItem(config.name, i);
+	}
+	int selected = m_targetSelector->findData(previous);
+	if (selected < 0 && manager.activeIndex >= 0)
+		selected = m_targetSelector->findData(manager.activeIndex);
+	m_targetSelector->setCurrentIndex(selected >= 0 ? selected : 0);
+	m_targetSelector->blockSignals(false);
 }
 
 void MainWindow::selectGdbExecutable()
@@ -672,6 +785,7 @@ void MainWindow::applySettingsToSession()
 	m_session->setRemoteEndpoint(
 		s.value("target/remoteHost", "127.0.0.1").toString(),
 		s.value("target/remotePort", 3333).toInt());
+	m_session->setRemoteConnectCommands({}, false);
 
 	if (m_aiDock)
 		m_aiDock->setVisible(s.value("ai/enabled", true).toBool());

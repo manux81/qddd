@@ -147,26 +147,14 @@ HardwareDebugConfiguration::ValidationResult HardwareDebugConfiguration::validat
 {
     ValidationResult r;
 
-    // GDB executable
-    if (!gdbExecutable.isEmpty()) {
-        QFileInfo fi(gdbExecutable);
-        if (!fi.exists() || !fi.isExecutable()) {
-            r.errors << QStringLiteral("GDB executable does not exist or is not executable: %1").arg(gdbExecutable);
-            r.valid = false;
-        }
-    } else {
+    // GDB executable - warn if missing but don't block (user may install later)
+    if (gdbExecutable.isEmpty()) {
         r.errors << QStringLiteral("GDB executable path is empty.");
         r.valid = false;
     }
 
-    // Server executable
-    if (!serverExecutable.isEmpty()) {
-        QFileInfo fi(serverExecutable);
-        if (!fi.exists() || !fi.isExecutable()) {
-            r.errors << QStringLiteral("Server executable does not exist or is not executable: %1").arg(serverExecutable);
-            r.valid = false;
-        }
-    } else {
+    // Server executable - warn if missing but don't block (user may install later)
+    if (serverExecutable.isEmpty()) {
         r.errors << QStringLiteral("Server executable path is empty.");
         r.valid = false;
     }

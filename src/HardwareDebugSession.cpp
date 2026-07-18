@@ -226,6 +226,9 @@ void HardwareDebugSession::onServerReady()
 
     m_gdbSession->setTargetType(DebuggerSession::TargetType::RemoteGdbserver);
     m_gdbSession->setRemoteEndpoint(m_config.host, m_config.port);
+    m_gdbSession->setRemoteConnectCommands(
+        m_config.preConnectCommands,
+        m_config.serverType == HardwareServerType::STLink);
 
     // Start GDB process only (without full session logic)
     // We need this because startSession does the load+target-select in sequence.
@@ -284,6 +287,7 @@ void HardwareDebugSession::onGdbTargetStarted()
 {
     emit debugOutput(QStringLiteral("[HARDWARE DEBUG] GDB target started\n"));
     setSessionState(SessionState::GdbConnected);
+    executeGdbSequence();
 }
 
 void HardwareDebugSession::onGdbTargetStopped()
@@ -318,59 +322,8 @@ void HardwareDebugSession::executeGdbSequence()
 
     // Build the sequence based on configuration
     //
-    // 1. Load symbols (if requested)
-    // 2. Pre-connect commands
-    // 3. Target select (remote)
-    // 4. Post-connect commands
-    // 5. Reset / halt (if requested)
-    // 6. Pre-load commands
-    // 7. Download image (if requested)
-    // 8. Post-load commands
-    // 9. Insert initial breakpoint (if configured)
-    // 10. Run (if requested)
-
-    if (m_config.loadSymbols && !m_config.programImage.isEmpty()) {
-        m_sequenceSteps.append([this](const QString&) {
-            const QString symFile = m_config.symbolFile.isEmpty()
-                ? m_config.programImage
-                : m_config.symbolFile;
-            emit debugOutput(
-                QStringLiteral("[HARDWARE DEBUG] Loading symbols: %1\n").arg(symFile));
-            sendCommand(
-                QStringLiteral("-file-exec-and-symbols \"%1\"").arg(symFile));
-        });
-    }
-
-    if (!m_config.preConnectCommands.isEmpty()) {
-        for (const auto& cmd : m_config.preConnectCommands) {
-            m_sequenceSteps.append([this, cmd](const QString&) {
-                emit debugOutput(
-                    QStringLiteral("[HARDWARE DEBUG] Pre-connect: %1\n").arg(cmd));
-                sendCommand(cmd);
-            });
-        }
-    }
-
-    // Target select
-    m_sequenceSteps.append([this](const QString&) {
-        const QString targetSpec = QStringLiteral("%1:%2")
-            .arg(m_config.host).arg(m_config.port);
-        emit debugOutput(
-            QStringLiteral("[HARDWARE DEBUG] Connecting to target: %1\n").arg(targetSpec));
-
-        // Determine if we need extended-remote or remote
-        // ST-LINK typically uses extended-remote
-        // J-Link uses remote
-        if (m_config.serverType == HardwareServerType::STLink) {
-            sendCommand(
-                QStringLiteral("-target-select extended-remote %1:%2")
-                .arg(m_config.host).arg(m_config.port));
-        } else {
-            sendCommand(
-                QStringLiteral("-target-select remote %1:%2")
-                .arg(m_config.host).arg(m_config.port));
-        }
-    });
+    // Symbol loading, pre-connect commands and target-select are performed by
+    // DebuggerSession. This sequence starts once the remote target is connected.
 
     if (!m_config.postConnectCommands.isEmpty()) {
         for (const auto& cmd : m_config.postConnectCommands) {
@@ -489,7 +442,18 @@ void HardwareDebugSession::sendCommand(const QString& cmd,
 
     // Use the existing command queue from DebuggerSession
     // The callback chains into the next sequence step
-    m_gdbSession->sendRawCommand(cmd);
+    m_gdbSession->sendRawCommand(cmd, [this, cb = std::move(cb)](const QString& reply) {
+        if (cb)
+            cb(reply);
+        advanceSequence(reply);
+    });
+}
+
+void HardwareDebugSession::advanceSequence(const QString& reply)
+{
+    ++m_sequenceStep;
+    if (m_sequenceStep < m_sequenceSteps.size())
+        m_sequenceSteps[m_sequenceStep](reply);
 }
 
 // ============================================================================

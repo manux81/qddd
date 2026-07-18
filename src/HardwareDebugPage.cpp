@@ -35,6 +35,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -73,10 +74,17 @@ void HardwareDebugPage::setupUi()
 {
     auto* rootLayout = new QVBoxLayout(this);
 
+    auto* intro = new QLabel(
+        tr("Create one profile for each hardware probe. Enabled profiles appear in the target selector in the main window. Changes are stored with Apply or OK."),
+        this);
+    intro->setWordWrap(true);
+    intro->setStyleSheet("padding: 8px; background: rgba(70,120,180,35); border-radius: 5px;");
+    rootLayout->addWidget(intro);
+
     // ================================================================
     // Top: Configuration list management
     // ================================================================
-    auto* configListBox = new QGroupBox(tr("Configurations"), this);
+    auto* configListBox = new QGroupBox(tr("Hardware probe profiles"), this);
     auto* configListLayout = new QVBoxLayout(configListBox);
 
     m_configList = new QListWidget(configListBox);
@@ -85,8 +93,8 @@ void HardwareDebugPage::setupUi()
             this, &HardwareDebugPage::onConfigSelected);
 
     auto* configBtnLayout = new QHBoxLayout();
-    m_addBtn = new QPushButton(tr("Add"), configListBox);
-    m_deleteBtn = new QPushButton(tr("Delete"), configListBox);
+    m_addBtn = new QPushButton(tr("New profile"), configListBox);
+    m_deleteBtn = new QPushButton(tr("Delete profile"), configListBox);
     m_duplicateBtn = new QPushButton(tr("Duplicate"), configListBox);
     m_renameBtn = new QPushButton(tr("Rename"), configListBox);
 
@@ -123,6 +131,9 @@ void HardwareDebugPage::setupUi()
     m_nameEdit = new QLineEdit(generalBox);
     m_nameEdit->setPlaceholderText(tr("Configuration name"));
     generalForm->addRow(tr("Name:"), m_nameEdit);
+
+    m_enabledCheck = new QCheckBox(tr("Show this configuration in the main debugger selector"), generalBox);
+    generalForm->addRow(QString(), m_enabledCheck);
 
     m_serverTypeCombo = new QComboBox(generalBox);
     m_serverTypeCombo->addItem(tr("Generic GDB Server"), "generic");
@@ -415,7 +426,7 @@ void HardwareDebugPage::load()
     populateConfigList();
 
     if (!m_configManager.configurations.isEmpty()) {
-        m_configList->setCurrentRow(0);
+        m_configList->setCurrentRow(m_configManager.activeIndex);
     }
 }
 
@@ -425,6 +436,10 @@ void HardwareDebugPage::save()
     saveCurrentToConfig();
     QSettings s;
     m_configManager.save(s);
+    const int selected = m_loadedIndex;
+    populateConfigList();
+    if (selected >= 0 && selected < m_configList->count())
+        m_configList->setCurrentRow(selected);
 }
 
 // ============================================================================
@@ -438,7 +453,7 @@ void HardwareDebugPage::populateConfigList()
     for (const auto& cfg : m_configManager.configurations) {
         QString display = cfg.name;
         if (cfg.enabled)
-            display += QStringLiteral(" [Active]");
+            display += tr("  • visible in main window");
         m_configList->addItem(display);
     }
     m_configList->blockSignals(false);
@@ -456,6 +471,7 @@ void HardwareDebugPage::onAddConfig()
 
     HardwareDebugConfiguration cfg = HardwareDebugConfiguration::defaultConfig();
     cfg.name = name.trimmed();
+    cfg.enabled = true;
 
     m_configManager.configurations.append(cfg);
     m_configManager.activeIndex = m_configManager.configurations.size() - 1;
@@ -476,6 +492,7 @@ void HardwareDebugPage::onDeleteConfig()
         return;
 
     m_configManager.configurations.removeAt(idx);
+    m_loadedIndex = -1;
     if (!m_configManager.configurations.isEmpty()) {
         m_configManager.activeIndex = qMin(idx, m_configManager.configurations.size() - 1);
     } else {
@@ -529,7 +546,7 @@ void HardwareDebugPage::onConfigSelected(int index)
     if (index < 0 || index >= m_configManager.configurations.size())
         return;
 
-    // Save current UI to previous config before switching
+    // Save the previously displayed profile before switching.
     saveCurrentToConfig();
 
     m_configManager.activeIndex = index;
@@ -544,12 +561,13 @@ void HardwareDebugPage::onConfigSelected(int index)
 
 void HardwareDebugPage::saveCurrentToConfig()
 {
-    const int idx = m_configList->currentRow();
+    const int idx = m_loadedIndex;
     if (idx < 0 || idx >= m_configManager.configurations.size())
         return;
 
     HardwareDebugConfiguration& cfg = m_configManager.configurations[idx];
     cfg.name = m_nameEdit->text().trimmed();
+    cfg.enabled = m_enabledCheck->isChecked();
     cfg.serverType = static_cast<HardwareServerType>(m_serverTypeCombo->currentIndex());
     cfg.gdbExecutable = m_gdbPathEdit->text().trimmed();
     cfg.serverExecutable = m_serverPathEdit->text().trimmed();
@@ -601,7 +619,9 @@ void HardwareDebugPage::loadConfigToUi(int index)
         return;
 
     const HardwareDebugConfiguration& cfg = m_configManager.configurations[index];
+    m_loadedIndex = index;
     m_nameEdit->setText(cfg.name);
+    m_enabledCheck->setChecked(cfg.enabled);
 
     const int typeIdx = static_cast<int>(cfg.serverType);
     m_serverTypeCombo->setCurrentIndex(typeIdx >= 0 && typeIdx < m_serverTypeCombo->count()
@@ -762,52 +782,84 @@ void HardwareDebugPage::onTestConfig()
 
     const HardwareDebugConfiguration& cfg = m_configManager.configurations[idx];
 
-    // Validate first
-    const auto vr = cfg.validate();
-    if (!vr.valid) {
-        m_testStatusLabel->setText(QStringLiteral("<span style='color:red'>Validation failed:</span><br>%1")
-                                   .arg(vr.errors.join(QStringLiteral("<br>"))));
+    // Check server executable exists before trying to start
+    if (cfg.serverExecutable.isEmpty()) {
+        m_testStatusLabel->setText(
+            QStringLiteral("<span style='color:orange'>Server executable not configured.</span>"));
         return;
     }
 
-    m_testStatusLabel->setText(tr("Starting test..."));
+    QFileInfo fi(cfg.serverExecutable);
+    if (!fi.exists()) {
+        m_testStatusLabel->setText(
+            QStringLiteral("<span style='color:orange'>Server executable not found:</span><br>%1")
+            .arg(cfg.serverExecutable));
+        return;
+    }
+    if (!fi.isExecutable()) {
+        m_testStatusLabel->setText(
+            QStringLiteral("<span style='color:orange'>Server executable is not executable:</span><br>%1")
+            .arg(cfg.serverExecutable));
+        return;
+    }
+
+    // Quick connectivity test: try TCP connect to host:port
+    m_testStatusLabel->setText(
+        QStringLiteral("Testing connectivity to %1:%2...")
+        .arg(cfg.host).arg(cfg.port));
     m_testBtn->setEnabled(false);
 
+    // Reset any previous test server
+    if (m_testServer) {
+        m_testServer->disconnect();
+        m_testServer->deleteLater();
+        m_testServer.release();
+    }
+
     // Create a temporary server process for testing
-    m_testServer = std::make_unique<GdbServerProcess>(this);
+    m_testServer = std::make_unique<GdbServerProcess>();
 
     connect(m_testServer.get(), &GdbServerProcess::ready, this, [this]() {
         m_testStatusLabel->setText(
-            QStringLiteral("<span style='color:green'>Server is ready!</span>"));
-        m_testBtn->setEnabled(true);
-
-        // Stop the test server
-        m_testServer->stop();
-        QTimer::singleShot(1000, this, [this]() {
-            m_testServer.reset();
+            QStringLiteral("<span style='color:green'>Server is ready! Connection OK.</span>"));
+        QTimer::singleShot(0, this, [this]() {
+            m_testBtn->setEnabled(true);
+            if (m_testServer) {
+                m_testServer->stop();
+                m_testServer->disconnect();
+                m_testServer->deleteLater();
+                m_testServer.release();
+            }
         });
     });
 
     connect(m_testServer.get(), &GdbServerProcess::errorOccurred, this, [this](const QString& msg) {
         m_testStatusLabel->setText(
-            QStringLiteral("<span style='color:red'>Error:</span><br>%1").arg(msg));
-        m_testBtn->setEnabled(true);
-        m_testServer.reset();
+            QStringLiteral("<span style='color:red'>%1</span>").arg(msg));
+        QTimer::singleShot(0, this, [this]() {
+            m_testBtn->setEnabled(true);
+            if (m_testServer) {
+                m_testServer->disconnect();
+                m_testServer->deleteLater();
+                m_testServer.release();
+            }
+        });
     });
 
-    connect(m_testServer.get(), &GdbServerProcess::outputReceived, this, [this](const QString& text) {
-        m_testStatusLabel->setText(
-            m_testStatusLabel->text() + QStringLiteral("<br>") + text.toHtmlEscaped());
-    });
-
-    connect(m_testServer.get(), &GdbServerProcess::finished, this, [this](int exitCode, QProcess::ExitStatus) {
-        if (m_testServer) {
+    connect(m_testServer.get(), &GdbServerProcess::finished, this, [this](int exitCode, QProcess::ExitStatus status) {
+        if (m_testServer && status == QProcess::CrashExit) {
             m_testStatusLabel->setText(
-                m_testStatusLabel->text() +
-                QStringLiteral("<br><span style='color:orange'>Server exited with code %1</span>").arg(exitCode));
+                QStringLiteral("<span style='color:orange'>Server process exited unexpectedly (code %1)</span>")
+                .arg(exitCode));
         }
-        m_testBtn->setEnabled(true);
-        m_testServer.reset();
+        QTimer::singleShot(0, this, [this]() {
+            m_testBtn->setEnabled(true);
+            if (m_testServer) {
+                m_testServer->disconnect();
+                m_testServer->deleteLater();
+                m_testServer.release();
+            }
+        });
     });
 
     m_testServer->start(cfg);
