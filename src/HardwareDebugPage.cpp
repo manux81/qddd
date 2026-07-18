@@ -34,6 +34,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -50,6 +51,7 @@
 #include <QSettings>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QStandardPaths>
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -436,6 +438,7 @@ void HardwareDebugPage::save()
     saveCurrentToConfig();
     QSettings s;
     m_configManager.save(s);
+    s.sync();
     const int selected = m_loadedIndex;
     populateConfigList();
     if (selected >= 0 && selected < m_configList->count())
@@ -482,7 +485,7 @@ void HardwareDebugPage::onAddConfig()
 
 void HardwareDebugPage::onDeleteConfig()
 {
-    const int idx = m_configList->currentRow();
+    const int idx = m_loadedIndex;
     if (idx < 0 || idx >= m_configManager.configurations.size())
         return;
 
@@ -618,7 +621,8 @@ void HardwareDebugPage::loadConfigToUi(int index)
     if (index < 0 || index >= m_configManager.configurations.size())
         return;
 
-    const HardwareDebugConfiguration& cfg = m_configManager.configurations[index];
+    m_loadingUi = true;
+    const HardwareDebugConfiguration cfg = m_configManager.configurations[index];
     m_loadedIndex = index;
     m_nameEdit->setText(cfg.name);
     m_enabledCheck->setChecked(cfg.enabled);
@@ -665,11 +669,14 @@ void HardwareDebugPage::loadConfigToUi(int index)
     m_jlinkSerialEdit->setText(cfg.jlinkSerialNumber);
     const int endIdx = m_jlinkEndianCombo->findData(cfg.jlinkEndianess);
     m_jlinkEndianCombo->setCurrentIndex(endIdx >= 0 ? endIdx : 0);
+    m_loadingUi = false;
 }
 
 void HardwareDebugPage::onServerTypeChanged(int /*index*/)
 {
     updateServerTypeSpecificFields();
+    if (m_loadingUi)
+        return;
     updateCommandPreview();
 }
 
@@ -684,6 +691,8 @@ void HardwareDebugPage::updateServerTypeSpecificFields()
 
 void HardwareDebugPage::updateCommandPreview()
 {
+    if (m_loadingUi)
+        return;
     saveCurrentToConfig();
 
     const int idx = m_configList->currentRow();
@@ -692,7 +701,7 @@ void HardwareDebugPage::updateCommandPreview()
         return;
     }
 
-    const HardwareDebugConfiguration& cfg = m_configManager.configurations[idx];
+    HardwareDebugConfiguration cfg = m_configManager.configurations[idx];
 
     QString preview;
     preview += QStringLiteral("Server executable:\n  %1\n\n").arg(cfg.serverExecutable);
@@ -776,21 +785,26 @@ void HardwareDebugPage::onTestConfig()
 {
     saveCurrentToConfig();
 
-    const int idx = m_configList->currentRow();
+    const int idx = m_loadedIndex;
     if (idx < 0 || idx >= m_configManager.configurations.size())
         return;
 
-    const HardwareDebugConfiguration& cfg = m_configManager.configurations[idx];
+    HardwareDebugConfiguration cfg = m_configManager.configurations[idx];
 
-    // Check server executable exists before trying to start
+    // Accept either an absolute path or a command available through PATH.
     if (cfg.serverExecutable.isEmpty()) {
         m_testStatusLabel->setText(
             QStringLiteral("<span style='color:orange'>Server executable not configured.</span>"));
         return;
     }
 
-    QFileInfo fi(cfg.serverExecutable);
-    if (!fi.exists()) {
+    QString resolvedServer = cfg.serverExecutable;
+    const QFileInfo configuredFile(resolvedServer);
+    if (!configuredFile.isAbsolute() && !resolvedServer.contains(QDir::separator()))
+        resolvedServer = QStandardPaths::findExecutable(resolvedServer);
+
+    const QFileInfo fi(resolvedServer);
+    if (resolvedServer.isEmpty() || !fi.exists()) {
         m_testStatusLabel->setText(
             QStringLiteral("<span style='color:orange'>Server executable not found:</span><br>%1")
             .arg(cfg.serverExecutable));
@@ -803,10 +817,18 @@ void HardwareDebugPage::onTestConfig()
         return;
     }
 
-    // Quick connectivity test: try TCP connect to host:port
+    cfg.serverExecutable = resolvedServer;
+    // The test starts only the GDB server. Firmware and debugger validation
+    // belongs to the full session launch, not to this connectivity check.
+    cfg.gdbExecutable = QStringLiteral("test-only");
+    cfg.loadImage = false;
+    cfg.loadSymbols = false;
+    cfg.programImage.clear();
+    cfg.symbolFile.clear();
+
     m_testStatusLabel->setText(
-        QStringLiteral("Testing connectivity to %1:%2...")
-        .arg(cfg.host).arg(cfg.port));
+        tr("Starting %1 and waiting for %2:%3...")
+        .arg(fi.fileName(), cfg.host).arg(cfg.port));
     m_testBtn->setEnabled(false);
 
     // Reset any previous test server

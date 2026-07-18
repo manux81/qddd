@@ -38,6 +38,7 @@ class QCheckBox;
 class QLineEdit;
 class QSpinBox;
 class HardwareDebugPage;
+class QLabel;
 
 class SettingsDialog final : public QDialog
 {
@@ -75,4 +76,5 @@ private:
 	QLineEdit* m_ollamaBaseUrlEdit = nullptr;
 
 	HardwareDebugPage* m_hardwarePage = nullptr;
+	QLabel* m_saveStatusLabel = nullptr;
 };

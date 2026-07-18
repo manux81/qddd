@@ -238,9 +238,12 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 	connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 	connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
 	        this, &SettingsDialog::save);
+	m_saveStatusLabel = new QLabel(this);
+	m_saveStatusLabel->setStyleSheet("color: #7cc47c; padding-left: 4px;");
 
 	auto* root = new QVBoxLayout(this);
 	root->addWidget(tabs, 1);
+	root->addWidget(m_saveStatusLabel);
 	root->addWidget(buttons);
 
 	load();
@@ -314,6 +317,9 @@ void SettingsDialog::save()
 	s.setValue(kKeyAIProvider, m_aiProviderCombo->currentData().toString());
 	s.setValue(kKeyOllamaModel, m_ollamaModelEdit->text().trimmed());
 	s.setValue(kKeyOllamaBaseUrl, m_ollamaBaseUrlEdit->text().trimmed());
+	s.sync();
+	if (m_saveStatusLabel)
+		m_saveStatusLabel->setText(tr("Settings saved."));
 }
 
 void SettingsDialog::browseGdb()

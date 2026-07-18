@@ -97,6 +97,7 @@ private:
     // Config manager
     HardwareDebugConfigManager m_configManager;
     int m_loadedIndex = -1;
+    bool m_loadingUi = false;
 
     // Config list
     QListWidget* m_configList = nullptr;

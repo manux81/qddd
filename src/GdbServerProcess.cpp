@@ -252,7 +252,8 @@ void GdbServerProcess::onProcessErrorOccurred(QProcess::ProcessError error)
     QString msg;
     switch (error) {
     case QProcess::FailedToStart:
-        msg = QStringLiteral("Failed to start: %1").arg(m_config.serverExecutable);
+        msg = QStringLiteral("Failed to start %1: %2")
+            .arg(m_config.serverExecutable, m_process.errorString());
         break;
     case QProcess::Crashed:
         msg = QStringLiteral("Process crashed");
