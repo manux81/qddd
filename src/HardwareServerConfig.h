@@ -127,6 +127,7 @@ struct HardwareDebugConfiguration
 
     // Preset argument generation
     QStringList generateServerArguments() const;
+    QString effectiveStlinkCubeProgrammerPath() const;
 
     // Default configuration
     static HardwareDebugConfiguration defaultConfig();

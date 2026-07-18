@@ -303,8 +303,9 @@ void GdbServerProcess::onProcessFinished(int exitCode, QProcess::ExitStatus stat
 
     if (m_state == GdbServerState::Starting) {
         // Process died before becoming ready
-        const QString msg = QStringLiteral("Server terminated before becoming ready (%1)")
-            .arg(exitDesc);
+        const QString msg = QStringLiteral(
+            "Server terminated before becoming ready (%1).\nLast output:\n%2")
+            .arg(exitDesc, recentLog());
         emit errorOccurred(msg);
         setState(GdbServerState::Failed);
     } else if (m_state == GdbServerState::Ready || m_state == GdbServerState::Stopping) {

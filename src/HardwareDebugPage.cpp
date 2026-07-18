@@ -301,7 +301,7 @@ void HardwareDebugPage::setupUi()
     stlinkForm->addRow(tr("CubeProgrammer path:"), cubeRow);
 
     m_stlinkLogLevelSpin = new QSpinBox(m_stlinkGroup);
-    m_stlinkLogLevelSpin->setRange(0, 3);
+    m_stlinkLogLevelSpin->setRange(0, 31);
     m_stlinkLogLevelSpin->setValue(1);
     stlinkForm->addRow(tr("Log level:"), m_stlinkLogLevelSpin);
 
@@ -738,8 +738,18 @@ void HardwareDebugPage::onBrowseGdb()
 void HardwareDebugPage::onBrowseServer()
 {
     const QString path = QFileDialog::getOpenFileName(this, tr("Select GDB Server executable"));
-    if (!path.isEmpty())
+    if (!path.isEmpty()) {
         m_serverPathEdit->setText(path);
+        if (m_serverTypeCombo->currentIndex() == static_cast<int>(HardwareServerType::STLink)
+            && m_stlinkCubeProgPathEdit->text().trimmed().isEmpty()) {
+            HardwareDebugConfiguration probe = HardwareDebugConfiguration::defaultConfig();
+            probe.serverExecutable = path;
+            const QString inferred = probe.effectiveStlinkCubeProgrammerPath();
+            if (!inferred.isEmpty())
+                m_stlinkCubeProgPathEdit->setText(inferred);
+        }
+        updateCommandPreview();
+    }
 }
 
 void HardwareDebugPage::onBrowseWorkingDir()

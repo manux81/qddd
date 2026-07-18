@@ -210,6 +210,11 @@ HardwareDebugConfiguration::ValidationResult HardwareDebugConfiguration::validat
             r.errors << QStringLiteral("ST-LINK GDB server executable is required.");
             r.valid = false;
         }
+        if (effectiveStlinkCubeProgrammerPath().isEmpty()) {
+            r.errors << QStringLiteral(
+                "STM32CubeProgrammer bin directory is required and could not be inferred from the server path.");
+            r.valid = false;
+        }
     }
 
     // J-Link specific
@@ -237,6 +242,25 @@ HardwareDebugConfiguration::ValidationResult HardwareDebugConfiguration::validat
 // Preset argument generation
 // ============================================================================
 
+QString HardwareDebugConfiguration::effectiveStlinkCubeProgrammerPath() const
+{
+    if (!stlinkCubeProgrammerPath.trimmed().isEmpty())
+        return QDir::cleanPath(stlinkCubeProgrammerPath.trimmed());
+
+    QFileInfo serverInfo(serverExecutable);
+    if (serverInfo.absolutePath().isEmpty())
+        return {};
+
+    QDir root(serverInfo.absoluteDir());
+    if (root.dirName().compare(QStringLiteral("bin"), Qt::CaseInsensitive) == 0)
+        root.cdUp();
+    if (root.dirName().compare(QStringLiteral("STLink-gdb-server"), Qt::CaseInsensitive) == 0)
+        root.cdUp();
+
+    const QString candidate = root.filePath(QStringLiteral("STM32CubeProgrammer/bin"));
+    return QDir(candidate).exists() ? QDir::cleanPath(candidate) : QString();
+}
+
 QStringList HardwareDebugConfiguration::generateServerArguments() const
 {
     switch (serverType) {
@@ -244,16 +268,17 @@ QStringList HardwareDebugConfiguration::generateServerArguments() const
         {
             QStringList args;
             args << QStringLiteral("-p") << QString::number(port);
-            if (!stlinkCubeProgrammerPath.isEmpty()) {
-                args << QStringLiteral("-cp") << stlinkCubeProgrammerPath;
+            const QString cubeProgrammerPath = effectiveStlinkCubeProgrammerPath();
+            if (!cubeProgrammerPath.isEmpty()) {
+                args << QStringLiteral("-cp") << cubeProgrammerPath;
             }
             args << QStringLiteral("-l") << QString::number(stlinkLogLevel);
             if (!stlinkSerialNumber.isEmpty()) {
                 args << QStringLiteral("-sn") << stlinkSerialNumber;
             }
-            if (stlinkSwdMode) {
-                args << QStringLiteral("-s");
-            }
+            args << (stlinkSwdMode
+                ? QStringLiteral("--swd")
+                : QStringLiteral("--jtag"));
             // Append any user-defined extra arguments
             args << serverArguments;
             return args;
