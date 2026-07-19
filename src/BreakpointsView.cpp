@@ -166,6 +166,8 @@ void BreakpointsView::rebuild(const QVector<BreakpointInfo> &list) {
 		    QString("%1:%2").arg(QFileInfo(bp.file).fileName()).arg(bp.line);
 		auto *locItem = new QStandardItem(loc);
 		locItem->setEditable(false);
+		locItem->setData(bp.file, RoleLocationFile);
+		locItem->setData(bp.line, RoleLocationLine);
 		locItem->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
 
 		// Labels: function name
@@ -205,7 +207,14 @@ void BreakpointsView::onActivated(const QModelIndex &index) {
 	if (!index.isValid())
 		return;
 
-	const QString loc = m_model->item(index.row(), ColLocation)->text();
+	const QStandardItem* locationItem = m_model->item(index.row(), ColLocation);
+	if (!locationItem)
+		return;
+	const QString file = locationItem->data(RoleLocationFile).toString();
+	const int line = locationItem->data(RoleLocationLine).toInt();
+	const QString loc = file.isEmpty()
+		? locationItem->text()
+		: QString("%1:%2").arg(file).arg(line);
 
 	if (!loc.isEmpty())
 		emit breakpointSelected(loc);

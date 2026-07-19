@@ -77,6 +77,10 @@ void LineNumberArea::paintEvent(QPaintEvent *event) {
 	m_editor->lineNumberAreaPaintEvent(event);
 }
 
+void LineNumberArea::mousePressEvent(QMouseEvent *event) {
+	m_editor->lineNumberAreaMousePressEvent(event);
+}
+
 SourceEditor::SourceEditor(QWidget *parent)
     : QPlainTextEdit(parent), m_lineNumberArea(new LineNumberArea(this)) {
 	connect(this, &SourceEditor::blockCountChanged, this,
@@ -693,6 +697,28 @@ void SourceEditor::setCurrentPC(int line) {
 	highlightCurrentLine();
 }
 
+void SourceEditor::lineNumberAreaMousePressEvent(QMouseEvent *event)
+{
+	if (!event)
+		return;
+
+	QString file;
+	int currentLine = 0;
+	currentLocation(file, currentLine);
+	if (file.isEmpty())
+		return;
+
+	const QTextCursor cursor = cursorForPosition(QPoint(0, event->pos().y()));
+	const int line = cursor.blockNumber() + 1;
+	if (line <= 0)
+		return;
+
+	if (event->button() == Qt::LeftButton)
+		emit toggleBreakpointRequested(file, line);
+	else if (event->button() == Qt::RightButton)
+		emit runUntilRequested(file, line);
+}
+
 void SourceEditor::mousePressEvent(QMouseEvent *event)
 {
     QPlainTextEdit::mousePressEvent(event);
@@ -706,13 +732,6 @@ void SourceEditor::mousePressEvent(QMouseEvent *event)
 
     if (file.isEmpty())
         return;
-
-    if (event->button() == Qt::LeftButton &&
-        event->x() < m_lineNumberArea->width()) {
-
-        emit toggleBreakpointRequested(file, line);
-        return;
-    }
 
     if (event->button() == Qt::RightButton) {
         emit runUntilRequested(file, line);

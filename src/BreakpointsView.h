@@ -68,7 +68,9 @@ private:
 
 	enum {
 		RoleBkptNumber = Qt::UserRole + 1,
-		RoleSortValue
+		RoleSortValue,
+		RoleLocationFile,
+		RoleLocationLine
 	};
 
 	void setupModel();
@@ -81,5 +83,4 @@ private:
 	DebuggerSession *m_session = nullptr;
 	bool m_blockItemChanged = false;
 };
-
 

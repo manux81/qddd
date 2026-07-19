@@ -49,6 +49,7 @@ class SourceEditor : public QPlainTextEdit {
 	void showLocation(const QString &file, int line);
 	int lineNumberAreaWidth();
 	void lineNumberAreaPaintEvent(QPaintEvent *event);
+	void lineNumberAreaMousePressEvent(QMouseEvent *event);
 	void setCurrentPC(int line);
 
 	void currentLocation(QString &file, int &line) const;
@@ -94,6 +95,7 @@ class LineNumberArea : public QWidget {
 
   protected:
 	void paintEvent(QPaintEvent *event) override;
+	void mousePressEvent(QMouseEvent *event) override;
 
   private:
 	SourceEditor *m_editor;
