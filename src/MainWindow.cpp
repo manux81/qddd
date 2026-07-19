@@ -737,6 +737,8 @@ void MainWindow::setupMenusAndToolbars() {
 	updateReverseActions();
 	connect(m_session.get(), &DebuggerSession::targetStarted, this, updateReverseActions);
 	connect(m_session.get(), &DebuggerSession::targetStopped, this, updateReverseActions);
+	connect(m_session.get(), &DebuggerSession::reverseExecutionAvailabilityChanged,
+	        this, updateReverseActions);
 
 	m_commandOverlay = toolbarWrap;
 	m_commandOverlay->setFixedHeight(44);
@@ -862,6 +864,15 @@ void MainWindow::applySettingsToSession()
 
 	m_session->setGdbExecutable(s.value("debugger/gdbPath", "gdb").toString());
 	m_session->setLldbMiExecutable(s.value("debugger/lldbMiPath", "/usr/local/bin/lldb-mi").toString());
+	const QString reverseMode = s.value("debugger/reverseMode", "auto").toString();
+	if (reverseMode == "disabled")
+		m_session->setReverseMode(DebuggerSession::ReverseMode::Disabled);
+	else if (reverseMode == "full")
+		m_session->setReverseMode(DebuggerSession::ReverseMode::FullRecord);
+	else if (reverseMode == "btrace")
+		m_session->setReverseMode(DebuggerSession::ReverseMode::BranchTrace);
+	else
+		m_session->setReverseMode(DebuggerSession::ReverseMode::Auto);
 
 	const QString targetType = s.value("target/type", "local").toString();
 	if (targetType == "gdbserver")

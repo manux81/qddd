@@ -171,6 +171,12 @@ public:
 		JLink,
 		Stlink
 	};
+	enum class ReverseMode {
+		Disabled,
+		Auto,
+		BranchTrace,
+		FullRecord
+	};
 
 	explicit DebuggerSession(QObject* parent = nullptr);
 	~DebuggerSession() override;
@@ -179,6 +185,7 @@ public:
 	void setGdbExecutable(const QString& path);
 	void setLldbMiExecutable(const QString& path);
 	void setTargetType(TargetType type);
+	void setReverseMode(ReverseMode mode);
 	void setRemoteEndpoint(const QString& host, int port);
 	void setRemoteConnectCommands(const QStringList& commands, bool extendedRemote = false);
 	void setStlinkServerPath(const QString& path);
@@ -256,6 +263,7 @@ signals:
 
 	void debuggerOutput(const QString& text);
 	void disassemblyUpdated(const QString& text);
+	void reverseExecutionAvailabilityChanged();
 
 private:
 	Q_DISABLE_COPY_MOVE(DebuggerSession)
@@ -316,6 +324,7 @@ private:
 	QString m_lldbMiExecutable = "/usr/local/bin/lldb-mi";
 
 	TargetType m_targetType = TargetType::Local;
+	ReverseMode m_reverseMode = ReverseMode::Auto;
 	QStringList m_remoteConnectCommands;
 	bool m_useExtendedRemote = false;
 	QString m_remoteHost = "127.0.0.1";
@@ -342,6 +351,7 @@ private:
 	QSet<QString> m_changedPaths;
 	bool m_reverseRecordingRequested = false;
 	bool m_reverseRecordingFailed = false;
+	bool m_reverseRecordingReady = false;
 
 	int m_stepCounter = 0;
 	bool m_pendingStack = false;

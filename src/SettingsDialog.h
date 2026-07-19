@@ -61,6 +61,7 @@ private:
 	QComboBox* m_backendCombo = nullptr;
 	QLineEdit* m_gdbPathEdit = nullptr;
 	QLineEdit* m_lldbMiPathEdit = nullptr;
+	QComboBox* m_reverseModeCombo = nullptr;
 
 	QComboBox* m_targetTypeCombo = nullptr;
 	QLineEdit* m_remoteHostEdit = nullptr;
