@@ -93,6 +93,7 @@ class MainWindow : public QMainWindow {
 	void refreshHardwareTargetSelector();
 	SourceEditor* currentSourceEditor() const;
 	SourceEditor* ensureSourceTabForFile(const QString& file);
+	QString resolveSourceFile(const QString& file) const;
 	void showSourceLocation(const QString& file, int line);
 	void wireSourceEditor(SourceEditor* editor);
 	void positionCommandOverlay();

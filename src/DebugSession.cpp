@@ -433,9 +433,11 @@ void DebuggerSession::startSession(const QString& executablePath)
 
 		               if (m_backend == Backend::GdbMi) {
 			               // GDB 12's full recorder cannot decode AVX instructions
-			               // selected by glibc on modern x86_64 processors.
+			               // selected by glibc on modern x86_64 processors. Disabling
+			               // tcache also avoids its getrandom syscall, which record
+			               // full in GDB 12 cannot replay.
 			               enqueueCommand(
-			                   "-gdb-set environment GLIBC_TUNABLES=glibc.cpu.hwcaps=-AVX,-AVX2,-AVX512F");
+			                   "-gdb-set environment GLIBC_TUNABLES=glibc.cpu.hwcaps=-AVX,-AVX2,-AVX512F:glibc.malloc.tcache_count=0");
 		               }
 		               emit targetStarted();
 	               });
