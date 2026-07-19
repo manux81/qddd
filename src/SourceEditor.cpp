@@ -46,6 +46,7 @@
 #include <QGraphicsDropShadowEffect>
 #include <QPlainTextEdit>
 #include <QFontMetrics>
+#include <QtMath>
 #include <algorithm>
 
 static QString prettyValueForHint(const QString& value);
@@ -296,9 +297,9 @@ SourceEditor::SourceEditor(QWidget *parent)
 						const int lineH = QFontMetrics(body->font()).height();
 						const int blocks = qMax(1, body->document()->blockCount());
 						const int docH = qMax(
-							int(std::ceil(body->document()->size().height())),
-							blocks * lineH
-						);
+						            qCeil(body->document()->size().height()),
+						            blocks * lineH
+						            );
 						int maxBodyH = 260;
 						if (QScreen* s = QGuiApplication::screenAt(global)) {
 							const QRect avail = s->availableGeometry();
