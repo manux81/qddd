@@ -49,6 +49,7 @@
 #include <QTabWidget>
 #include <QSettings>
 #include <QComboBox>
+#include <QTimer>
 
 #include "SettingsDialog.h"
 #include "DebugAssistantDock.h"
@@ -177,7 +178,7 @@ void MainWindow::setupUi() {
 	m_sourceTabs = new QTabWidget(this);
 	m_sourceTabs->setDocumentMode(true);
 	m_sourceTabs->setMovable(true);
-	m_sourceTabs->setTabsClosable(false);
+	m_sourceTabs->setTabsClosable(true);
 	m_sourceTabs->installEventFilter(this);
 	setCentralWidget(m_sourceTabs);
 
@@ -191,6 +192,30 @@ void MainWindow::setupUi() {
 		auto* ed = qobject_cast<SourceEditor*>(w);
 		if (ed)
 			m_sourceEditor = ed;
+	});
+	connect(m_sourceTabs, &QTabWidget::tabCloseRequested, this, [this](int idx) {
+		if (!m_sourceTabs || idx < 0 || idx >= m_sourceTabs->count())
+			return;
+		auto* editor = qobject_cast<SourceEditor*>(m_sourceTabs->widget(idx));
+		if (editor) {
+			for (auto it = m_sourceEditorByFile.begin(); it != m_sourceEditorByFile.end(); ) {
+				if (it.value() == editor)
+					it = m_sourceEditorByFile.erase(it);
+				else
+					++it;
+			}
+		}
+		QWidget* page = m_sourceTabs->widget(idx);
+		m_sourceTabs->removeTab(idx);
+		if (page)
+			page->deleteLater();
+
+		if (m_sourceTabs->count() == 0) {
+			auto* replacement = new SourceEditor(m_sourceTabs);
+			wireSourceEditor(replacement);
+			m_sourceTabs->addTab(replacement, tr("Source"));
+		}
+		m_sourceEditor = qobject_cast<SourceEditor*>(m_sourceTabs->currentWidget());
 	});
 
 	m_varsDock = new QDockWidget(tr("Variables"), this);
@@ -249,11 +274,19 @@ void MainWindow::setupUi() {
 	// Select a breakpoint → jump to editor
 	connect(m_breakView, &BreakpointsView::breakpointSelected, this,
 	        [&](QString loc) {
-		        auto parts = loc.split(':');
-		        if (parts.size() == 2) {
-			        showSourceLocation(parts[0], parts[1].toInt());
-		        }
+		        const int separator = loc.lastIndexOf(':');
+		        if (separator <= 0)
+			        return;
+		        bool ok = false;
+		        const int line = loc.mid(separator + 1).toInt(&ok);
+		        if (ok && line > 0)
+			        showSourceLocation(loc.left(separator), line);
 	        });
+
+	QTimer::singleShot(0, this, [this] {
+		if (m_consoleDock)
+			resizeDocks({m_consoleDock}, {qBound(140, height() / 4, 260)}, Qt::Vertical);
+	});
 }
 
 SourceEditor* MainWindow::currentSourceEditor() const

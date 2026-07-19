@@ -352,6 +352,7 @@ QString DebuggerSession::remoteSpec() const
 
 void DebuggerSession::startSession(const QString& executablePath)
 {
+	m_reverseRecordingRequested = false;
     QFileInfo fi(executablePath);
     if (!fi.exists()) {
         qWarning() << "Executable not found:" << executablePath;
@@ -465,9 +466,27 @@ void DebuggerSession::stepInto()            { enqueueCommand("-exec-step"); }
 void DebuggerSession::stepOver()            { enqueueCommand("-exec-next"); }
 void DebuggerSession::stepOut()             { enqueueCommand("-exec-finish"); }
 void DebuggerSession::interruptExecution()  { enqueueCommand("-exec-interrupt"); }
-void DebuggerSession::reverseContinueExecution() { enqueueCommand("-exec-reverse-continue"); }
-void DebuggerSession::reverseStepInto()          { enqueueCommand("-exec-reverse-step"); }
-void DebuggerSession::reverseStepOver()          { enqueueCommand("-exec-reverse-next"); }
+void DebuggerSession::reverseContinueExecution() { executeReverseCommand("-exec-continue --reverse"); }
+void DebuggerSession::reverseStepInto()          { executeReverseCommand("-exec-step --reverse"); }
+void DebuggerSession::reverseStepOver()          { executeReverseCommand("-exec-next --reverse"); }
+
+void DebuggerSession::executeReverseCommand(const QString& command)
+{
+	if (!supportsReverseExecution() || command.isEmpty())
+		return;
+
+	if (m_reverseRecordingRequested) {
+		enqueueCommand(command);
+		return;
+	}
+
+	// Reverse execution requires a GDB process record. Starting it lazily keeps
+	// normal debugging lightweight; the callback also runs when recording was
+	// already enabled manually, in which case GDB returns an innocuous error.
+	m_reverseRecordingRequested = true;
+	enqueueCommand("-interpreter-exec console \"record full\"",
+	               [this, command](const QString&) { enqueueCommand(command); });
+}
 
 bool DebuggerSession::supportsReverseExecution() const
 {
