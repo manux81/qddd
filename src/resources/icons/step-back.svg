@@ -1,6 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <g fill="none" stroke="#00a3ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M26 16v32"/>
-    <path d="M52 16L28 32l24 16V16z"/>
-  </g>
+<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="#0099dd">
+  <!-- Reverse step into: move to the previous statement, away from the call. -->
+  <path d="M10 13a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z"/>
+  <path d="M8 1a.75.75 0 0 1 .53.22l3.5 3.5a.75.75 0 1 1-1.06 1.06L8.75 3.56v5.69a.75.75 0 0 1-1.5 0V3.56L5.03 5.78a.75.75 0 0 1-1.06-1.06l3.5-3.5A.75.75 0 0 1 8 1Z"/>
 </svg>

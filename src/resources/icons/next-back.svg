@@ -1,6 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <g fill="none" stroke="#00a3ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M54 16L30 32l24 16V16z"/>
-    <path d="M28 16L4 32l24 16V16z"/>
-  </g>
+<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="#0099dd">
+  <!-- Reverse step over: counter-clockwise counterpart of step-over. -->
+  <path d="M10 13a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z"/>
+  <path d="M2.75 2a.75.75 0 0 1 .75.75v1.277A5.99 5.99 0 0 1 8 2a6.01 6.01 0 0 1 5.94 5.144.75.75 0 0 1-1.486.213A4.508 4.508 0 0 0 8 3.5a4.49 4.49 0 0 0-3.743 2H6.25a.75.75 0 0 1 0 1.5h-3.5A.75.75 0 0 1 2 6.25v-3.5A.75.75 0 0 1 2.75 2Z"/>
 </svg>

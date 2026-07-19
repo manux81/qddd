@@ -1,8 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <g fill="none" stroke="#00a3ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M54 16L30 32l24 16V16z"/>
-    <path d="M10 20c-6 6-6 18 0 24"/>
-    <path d="M10 20v10"/>
-    <path d="M10 20h10"/>
-  </g>
+<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="#0099dd">
+  <!-- Reverse continue: mirrored continue glyph. -->
+  <path d="M13 2.5a.75.75 0 0 1 .75.75v9.5a.75.75 0 0 1-1.5 0v-9.5A.75.75 0 0 1 13 2.5Z"/>
+  <path d="M10.5 3.25a.75.75 0 0 1 .75.75v8a.75.75 0 0 1-1.2.6l-5.333-4a.75.75 0 0 1 0-1.2l5.333-4a.75.75 0 0 1 .45-.15Z"/>
 </svg>
