@@ -361,6 +361,10 @@ void DebuggerSession::startSession(const QString& executablePath)
 	m_reverseRecordingRequested = false;
 	m_reverseRecordingFailed = false;
 	m_reverseRecordingReady = false;
+	m_replayDirection = ReplayDirection::None;
+	m_historyCursor = -1;
+	m_restoredHistoricalVariables = false;
+	m_executionHistory.clear();
 	emit reverseExecutionAvailabilityChanged();
     QFileInfo fi(executablePath);
     if (!fi.exists()) {
@@ -474,16 +478,33 @@ bool DebuggerSession::isRunning() const
 
 void DebuggerSession::run()
 {
+	m_replayDirection = ReplayDirection::None;
 	// For remote targets, "-exec-run" is often unsupported/undesired; continue instead.
 	if (m_backend == Backend::GdbMi && isRemoteTarget())
 		enqueueCommand("-exec-continue");
 	else
 		enqueueCommand("-exec-run");
 }
-void DebuggerSession::continueExecution()   { enqueueCommand("-exec-continue"); }
-void DebuggerSession::stepInto()            { enqueueCommand("-exec-step"); }
-void DebuggerSession::stepOver()            { enqueueCommand("-exec-next"); }
-void DebuggerSession::stepOut()             { enqueueCommand("-exec-finish"); }
+void DebuggerSession::continueExecution()   {
+	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
+		? ReplayDirection::Forward : ReplayDirection::None;
+	enqueueCommand("-exec-continue");
+}
+void DebuggerSession::stepInto()            {
+	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
+		? ReplayDirection::Forward : ReplayDirection::None;
+	enqueueCommand("-exec-step");
+}
+void DebuggerSession::stepOver()            {
+	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
+		? ReplayDirection::Forward : ReplayDirection::None;
+	enqueueCommand("-exec-next");
+}
+void DebuggerSession::stepOut()             {
+	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
+		? ReplayDirection::Forward : ReplayDirection::None;
+	enqueueCommand("-exec-finish");
+}
 void DebuggerSession::interruptExecution()  { enqueueCommand("-exec-interrupt"); }
 void DebuggerSession::reverseContinueExecution() { executeReverseCommand("-exec-continue --reverse"); }
 void DebuggerSession::reverseStepInto()          { executeReverseCommand("-exec-step --reverse"); }
@@ -494,6 +515,7 @@ void DebuggerSession::executeReverseCommand(const QString& command)
 	if (!supportsReverseExecution() || command.isEmpty())
 		return;
 
+	m_replayDirection = ReplayDirection::Backward;
 	enqueueCommand(command);
 }
 
@@ -1295,6 +1317,7 @@ void DebuggerSession::parseStackFromReply(const QString& replyBlob)
 void DebuggerSession::parseVarsFromReply(const QString& replyBlob)
 {
     m_variables.clear();
+	m_restoredHistoricalVariables = false;
 	m_pendingPointerExpansions = 0;
 
     int idx = replyBlob.indexOf("variables=[");
@@ -1361,6 +1384,14 @@ void DebuggerSession::parseVarsFromReply(const QString& replyBlob)
 			               });
 		}
     }
+
+	const bool unavailable = std::any_of(
+		m_variables.cbegin(), m_variables.cend(),
+		[](const std::unique_ptr<DebugVariable>& variable) {
+			return variable && variable->value.trimmed() == "<unavailable>";
+		});
+	if (unavailable)
+		m_restoredHistoricalVariables = restoreHistoricalVariables();
 }
 
 // ============================================================================
@@ -1372,18 +1403,28 @@ void DebuggerSession::finalizeSnapshotIfReady()
     if (m_pendingStack || m_pendingVariables)
         return;
 
-    captureExecutionSnapshot();
+	if (m_restoredHistoricalVariables) {
+		m_restoredHistoricalVariables = false;
+		emit variablesUpdated();
+		return;
+	}
+	captureExecutionSnapshot();
 }
 
 void DebuggerSession::captureExecutionSnapshot()
 {
     ExecutionSnapshot snapshot;
     snapshot.stepIndex = m_stepCounter;
+	snapshot.file = m_lastStopFile;
+	snapshot.line = m_lastStopLine;
+	snapshot.function = m_lastStopFunction;
 
     for (const auto& var : m_variables)
         snapshot.variableValues.insert(var->fullPath(), var->value);
 
     m_executionHistory.push_back(snapshot);
+	m_historyCursor = m_executionHistory.size() - 1;
+	m_replayDirection = ReplayDirection::None;
 
     if (m_executionHistory.size() >= 2) {
         computeVariableChanges(
@@ -1394,6 +1435,38 @@ void DebuggerSession::captureExecutionSnapshot()
 
     emit snapshotCaptured(snapshot);
 	emit variablesUpdated();
+}
+
+bool DebuggerSession::restoreHistoricalVariables()
+{
+	if (m_replayDirection == ReplayDirection::None || m_executionHistory.isEmpty())
+		return false;
+
+	const int delta = m_replayDirection == ReplayDirection::Backward ? -1 : 1;
+	int index = m_historyCursor < 0
+		? (delta < 0 ? m_executionHistory.size() - 1 : 0)
+		: m_historyCursor + delta;
+	for (; index >= 0 && index < m_executionHistory.size(); index += delta) {
+		const ExecutionSnapshot& snapshot = m_executionHistory[index];
+		if (snapshot.file != m_lastStopFile || snapshot.line != m_lastStopLine)
+			continue;
+
+		for (const auto& variable : m_variables) {
+			if (!variable)
+				continue;
+			const auto value = snapshot.variableValues.constFind(variable->fullPath());
+			if (value != snapshot.variableValues.constEnd()) {
+				variable->value = value.value();
+				variable->isPointer = looksLikePointer(variable->value);
+				variable->hasChildren = looksLikeStruct(variable->value);
+				variable->children.clear();
+				expandInlineStructIntoChildren(variable.get(), variable->value, 0, 2);
+			}
+		}
+		m_historyCursor = index;
+		return true;
+	}
+	return false;
 }
 
 void DebuggerSession::computeVariableChanges(const ExecutionSnapshot& previous,

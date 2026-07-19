@@ -303,6 +303,7 @@ private:
 	// snapshot
 	void finalizeSnapshotIfReady();
 	void captureExecutionSnapshot();
+	bool restoreHistoricalVariables();
 	void computeVariableChanges(const ExecutionSnapshot& previous,
 								const ExecutionSnapshot& current);
 
@@ -347,6 +348,10 @@ private:
 	std::vector<std::unique_ptr<DebugVariable>> m_variables;
 
 	QVector<ExecutionSnapshot> m_executionHistory;
+	enum class ReplayDirection { None, Backward, Forward };
+	ReplayDirection m_replayDirection = ReplayDirection::None;
+	int m_historyCursor = -1;
+	bool m_restoredHistoricalVariables = false;
 	QVector<BreakpointInfo> m_breakpoints;
 	QSet<QString> m_changedPaths;
 	bool m_reverseRecordingRequested = false;
