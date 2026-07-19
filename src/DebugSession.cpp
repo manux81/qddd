@@ -310,6 +310,12 @@ void DebuggerSession::setTargetType(TargetType type)
 	m_targetType = type;
 }
 
+void DebuggerSession::setReverseMode(ReverseMode mode)
+{
+	m_reverseMode = mode;
+	emit reverseExecutionAvailabilityChanged();
+}
+
 void DebuggerSession::setRemoteEndpoint(const QString& host, int port)
 {
 	const QString h = host.trimmed();
@@ -354,6 +360,8 @@ void DebuggerSession::startSession(const QString& executablePath)
 {
 	m_reverseRecordingRequested = false;
 	m_reverseRecordingFailed = false;
+	m_reverseRecordingReady = false;
+	emit reverseExecutionAvailabilityChanged();
     QFileInfo fi(executablePath);
     if (!fi.exists()) {
         qWarning() << "Executable not found:" << executablePath;
@@ -432,13 +440,15 @@ void DebuggerSession::startSession(const QString& executablePath)
 			               return;
 		               }
 
-		               if (m_backend == Backend::GdbMi) {
+		               if (m_backend == Backend::GdbMi
+		                   && m_reverseMode == ReverseMode::FullRecord) {
 			               // GDB 12's full recorder cannot decode AVX instructions
 			               // selected by glibc on modern x86_64 processors. Disabling
 			               // tcache also avoids its getrandom syscall, which record
-			               // full in GDB 12 cannot replay.
+			               // full in GDB 12 cannot replay. Keep cpu.hwcaps last: glibc
+			               // 2.35 does not reliably stop parsing it at the next ':'.
 			               enqueueCommand(
-			                   "-gdb-set environment GLIBC_TUNABLES=glibc.cpu.hwcaps=-AVX,-AVX2,-AVX512F:glibc.malloc.tcache_count=0");
+			                   "-gdb-set environment GLIBC_TUNABLES=glibc.malloc.tcache_count=0:glibc.cpu.hwcaps=-AVX_Usable,-AVX2_Usable,-AVX512F_Usable,-AVX_Fast_Unaligned_Load");
 		               }
 		               emit targetStarted();
 	               });
@@ -484,46 +494,53 @@ void DebuggerSession::executeReverseCommand(const QString& command)
 	if (!supportsReverseExecution() || command.isEmpty())
 		return;
 
-	ensureReverseRecording();
 	enqueueCommand(command);
 }
 
 void DebuggerSession::ensureReverseRecording()
 {
-	if (!supportsReverseExecution() || m_reverseRecordingRequested || m_reverseRecordingFailed)
+	if (m_backend != Backend::GdbMi || m_reverseMode == ReverseMode::Disabled
+	    || m_reverseRecordingRequested || m_reverseRecordingFailed)
 		return;
 
-	// Prefer processor branch tracing: unlike record full it can cross libc,
-	// syscalls and instructions unknown to GDB's software recorder.
 	m_reverseRecordingRequested = true;
-	enqueueCommand("-interpreter-exec console \"record btrace\"",
-	               [this](const QString& reply) {
-		               if (reply.contains("^done"))
-			               return;
+	const bool fullRecord = m_reverseMode == ReverseMode::FullRecord;
+	if (fullRecord) {
+		emit debuggerOutput(tr(
+		    "Starting experimental GDB full recording. Library calls, syscalls or unsupported instructions may stop recording.\n"));
+	}
 
-		               // perf_event_paranoid commonly blocks btrace. Before the
-		               // software fallback starts, initialise glibc's allocator;
-		               // otherwise its first lazy allocation invokes getrandom,
-		               // which GDB 12 record full cannot replay.
-		               enqueueCommand("-interpreter-exec console \"call (void) malloc(1)\"",
-		                              [this](const QString&) {
-			                              enqueueCommand(
-			                                  "-interpreter-exec console \"record full\"",
-			                                  [this](const QString& recordReply) {
-				                                  if (!recordReply.contains("^done")) {
-					                                  m_reverseRecordingRequested = false;
-					                                  m_reverseRecordingFailed = true;
-				                                  }
-			                                  });
-		                              });
-	               });
+	const QString recordCommand = fullRecord
+		? QStringLiteral("-interpreter-exec console \"record full\"")
+		: QStringLiteral("-interpreter-exec console \"record btrace\"");
+	enqueueCommand(recordCommand, [this, fullRecord](const QString& reply) {
+		if (reply.contains("^done")) {
+			m_reverseRecordingReady = true;
+			emit reverseExecutionAvailabilityChanged();
+			return;
+		}
+
+		m_reverseRecordingRequested = false;
+		m_reverseRecordingFailed = true;
+		m_reverseRecordingReady = false;
+		if (!fullRecord) {
+			emit debuggerOutput(tr(
+			    "Reverse execution is unavailable: GDB could not enable branch tracing. "
+			    "On Linux, set kernel.perf_event_paranoid to 2 or less. Normal debugging remains enabled.\n"));
+		} else {
+			emit debuggerOutput(tr(
+			    "GDB full recording could not be started. Normal debugging remains enabled.\n"));
+		}
+		emit reverseExecutionAvailabilityChanged();
+	});
 }
 
 bool DebuggerSession::supportsReverseExecution() const
 {
 	// Conservative: GDB MI supports reverse-* when process recording is enabled.
 	// LLDB MI support varies; keep disabled by default.
-	return m_backend == Backend::GdbMi && !m_reverseRecordingFailed;
+	return m_backend == Backend::GdbMi && m_reverseRecordingReady
+		&& !m_reverseRecordingFailed;
 }
 void DebuggerSession::runToCursor(const QString& location)
 {
@@ -901,8 +918,11 @@ void DebuggerSession::dispatchDebuggerMessage(const QString& rawLine)
 		if (decoded.contains("Process record: failed to record execution log")) {
 			m_reverseRecordingRequested = false;
 			m_reverseRecordingFailed = true;
+			m_reverseRecordingReady = false;
+			enqueueCommand("-interpreter-exec console \"record stop\"");
 			emit debuggerOutput(tr(
-			    "Reverse recording failed in this function; disabling reverse execution for this session.\n"));
+			    "Reverse recording failed in this function and was stopped. Reverse execution is disabled for this session; normal debugging remains enabled.\n"));
+			emit reverseExecutionAvailabilityChanged();
 		}
 		if (m_captureDisassembly)
 			m_disassemblyBuffer += decoded;

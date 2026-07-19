@@ -52,6 +52,7 @@ namespace {
 constexpr const char* kKeyBackend      = "debugger/backend";
 constexpr const char* kKeyGdbPath      = "debugger/gdbPath";
 constexpr const char* kKeyLldbMiPath   = "debugger/lldbMiPath";
+constexpr const char* kKeyReverseMode  = "debugger/reverseMode";
 constexpr const char* kKeyTargetType         = "target/type";
 constexpr const char* kKeyRemoteHost         = "target/remoteHost";
 constexpr const char* kKeyRemotePort         = "target/remotePort";
@@ -121,6 +122,20 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 	lldbRowLayout->addWidget(m_lldbMiPathEdit, 1);
 	lldbRowLayout->addWidget(lldbBrowse);
 	dbgForm->addRow(tr("LLDB-MI path:"), lldbRow);
+
+	m_reverseModeCombo = new QComboBox(dbgBox);
+	m_reverseModeCombo->addItem(tr("Auto (safe branch tracing)"), "auto");
+	m_reverseModeCombo->addItem(tr("Branch trace (recommended)"), "btrace");
+	m_reverseModeCombo->addItem(tr("Full record (experimental)"), "full");
+	m_reverseModeCombo->addItem(tr("Disabled"), "disabled");
+	dbgForm->addRow(tr("Reverse execution:"), m_reverseModeCombo);
+
+	auto* reverseHint = new QLabel(
+		tr("Auto and Branch trace never fall back to software recording. Full record is experimental and can fail in system libraries or on unsupported syscalls."),
+		dbgBox);
+	reverseHint->setWordWrap(true);
+	reverseHint->setStyleSheet("color: #d8a657;");
+	dbgForm->addRow(QString(), reverseHint);
 
 	auto* hint = new QLabel(
 		tr("Note: changing backend/path applies the next time a debugging session is started."),
@@ -263,6 +278,9 @@ void SettingsDialog::load()
 
 	m_gdbPathEdit->setText(s.value(kKeyGdbPath, "gdb").toString());
 	m_lldbMiPathEdit->setText(s.value(kKeyLldbMiPath, "/usr/local/bin/lldb-mi").toString());
+	const QString reverseMode = s.value(kKeyReverseMode, "auto").toString();
+	const int reverseIdx = m_reverseModeCombo->findData(reverseMode);
+	m_reverseModeCombo->setCurrentIndex(reverseIdx >= 0 ? reverseIdx : 0);
 
 	const QString tgt = s.value(kKeyTargetType, "local").toString();
 	const int tgtIdx = m_targetTypeCombo->findData(tgt);
@@ -304,6 +322,7 @@ void SettingsDialog::save()
 	s.setValue(kKeyBackend, m_backendCombo->currentData().toString());
 	s.setValue(kKeyGdbPath, m_gdbPathEdit->text().trimmed());
 	s.setValue(kKeyLldbMiPath, m_lldbMiPathEdit->text().trimmed());
+	s.setValue(kKeyReverseMode, m_reverseModeCombo->currentData().toString());
 
 	s.setValue(kKeyTargetType, m_targetTypeCombo->currentData().toString());
 	s.setValue(kKeyRemoteHost, m_remoteHostEdit->text().trimmed());
