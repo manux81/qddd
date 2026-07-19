@@ -282,6 +282,7 @@ private:
 	void onTargetStoppedInternal(const QString& stopMessage);
 	void handleBreakpointDeleted(const QString& resultLine);
 	void handleBreakpointEvent(const QString& resultLine);
+	void ensureReverseRecording();
 	void executeReverseCommand(const QString& command);
 
 	// state requests
