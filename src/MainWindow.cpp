@@ -312,9 +312,13 @@ SourceEditor* MainWindow::ensureSourceTabForFile(const QString& file)
 	if (!m_sourceTabs)
 		return currentSourceEditor();
 
-	const QFileInfo fi(file);
+	const QString resolvedFile = resolveSourceFile(file);
+	if (resolvedFile.isEmpty())
+		return nullptr;
+
+	const QFileInfo fi(resolvedFile);
 	const QString canonical = fi.exists() ? fi.canonicalFilePath() : QString();
-	const QString key = canonical.isEmpty() ? file : canonical;
+	const QString key = canonical.isEmpty() ? resolvedFile : canonical;
 
 	auto it = m_sourceEditorByFile.constFind(key);
 	if (it != m_sourceEditorByFile.constEnd()) {
@@ -342,9 +346,45 @@ SourceEditor* MainWindow::ensureSourceTabForFile(const QString& file)
 	return editor;
 }
 
+QString MainWindow::resolveSourceFile(const QString& file) const
+{
+	const QString cleaned = QDir::cleanPath(file.trimmed());
+	if (cleaned.isEmpty() || cleaned == QStringLiteral("??"))
+		return {};
+
+	const QFileInfo direct(cleaned);
+	if (direct.exists() && direct.isFile())
+		return direct.canonicalFilePath().isEmpty()
+			? direct.absoluteFilePath() : direct.canonicalFilePath();
+
+	if (!m_currentProgram.isEmpty()) {
+		const QDir programDir(QFileInfo(m_currentProgram).absoluteDir());
+		const QFileInfo relativeToProgram(programDir.filePath(cleaned));
+		if (relativeToProgram.exists() && relativeToProgram.isFile())
+			return relativeToProgram.canonicalFilePath().isEmpty()
+				? relativeToProgram.absoluteFilePath()
+				: relativeToProgram.canonicalFilePath();
+
+		// Some GDB builds report only file="name.c" when fullname is not
+		// available. Try the executable directory without inventing a tab for
+		// a path that still cannot be resolved.
+		const QFileInfo besideProgram(programDir.filePath(direct.fileName()));
+		if (besideProgram.exists() && besideProgram.isFile())
+			return besideProgram.canonicalFilePath().isEmpty()
+				? besideProgram.absoluteFilePath()
+				: besideProgram.canonicalFilePath();
+	}
+
+	return {};
+}
+
 void MainWindow::showSourceLocation(const QString& file, int line)
 {
-	SourceEditor* editor = ensureSourceTabForFile(file);
+	const QString resolvedFile = resolveSourceFile(file);
+	if (resolvedFile.isEmpty())
+		return;
+
+	SourceEditor* editor = ensureSourceTabForFile(resolvedFile);
 	if (!editor)
 		return;
 
@@ -353,13 +393,13 @@ void MainWindow::showSourceLocation(const QString& file, int line)
 		if (idx >= 0)
 			m_sourceTabs->setCurrentIndex(idx);
 
-		const QFileInfo fi(file);
+		const QFileInfo fi(resolvedFile);
 		const QString title = fi.fileName().isEmpty() ? tr("Source") : fi.fileName();
 		m_sourceTabs->setTabText(m_sourceTabs->currentIndex(), title);
 		m_sourceTabs->setTabToolTip(m_sourceTabs->currentIndex(), fi.absoluteFilePath());
 	}
 
-	editor->showLocation(file, line);
+	editor->showLocation(resolvedFile, line);
 	editor->setCurrentPC(line);
 }
 
