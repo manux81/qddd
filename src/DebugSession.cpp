@@ -431,6 +431,12 @@ void DebuggerSession::startSession(const QString& executablePath)
 			               return;
 		               }
 
+		               if (m_backend == Backend::GdbMi) {
+			               // GDB 12's full recorder cannot decode AVX instructions
+			               // selected by glibc on modern x86_64 processors.
+			               enqueueCommand(
+			                   "-gdb-set environment GLIBC_TUNABLES=glibc.cpu.hwcaps=-AVX,-AVX2,-AVX512F");
+		               }
 		               emit targetStarted();
 	               });
 }
@@ -475,17 +481,19 @@ void DebuggerSession::executeReverseCommand(const QString& command)
 	if (!supportsReverseExecution() || command.isEmpty())
 		return;
 
-	if (m_reverseRecordingRequested) {
-		enqueueCommand(command);
-		return;
-	}
+	ensureReverseRecording();
+	enqueueCommand(command);
+}
 
-	// Reverse execution requires a GDB process record. Starting it lazily keeps
-	// normal debugging lightweight; the callback also runs when recording was
-	// already enabled manually, in which case GDB returns an innocuous error.
+void DebuggerSession::ensureReverseRecording()
+{
+	if (!supportsReverseExecution() || m_reverseRecordingRequested)
+		return;
+
+	// Start at the first stop (normally main), before forward stepping creates
+	// the history that the reverse controls need.
 	m_reverseRecordingRequested = true;
-	enqueueCommand("-interpreter-exec console \"record full\"",
-	               [this, command](const QString&) { enqueueCommand(command); });
+	enqueueCommand("-interpreter-exec console \"record full\"");
 }
 
 bool DebuggerSession::supportsReverseExecution() const
@@ -562,8 +570,8 @@ void DebuggerSession::runToCursor(const QString& location)
 void DebuggerSession::insertBreakpoint(const QString& location)
 {
     enqueueCommand(QString("-break-insert %1").arg(location),
-        [this](const QString&) {
-            emit breakpointsUpdated();
+        [this](const QString& reply) {
+			handleBreakpointEvent(reply);
         });
 }
 
@@ -616,12 +624,12 @@ void DebuggerSession::toggleBreakpoint(const QString& location)
 	QString file;
 	QString func;
 
-	const auto parts = location.split(":");
-	if (parts.size() == 1) {
-		func = parts[0];
+	const int separator = location.lastIndexOf(':');
+	if (separator < 0) {
+		func = location;
 	} else {
-		file = parts[0];
-		line = parts[1].toInt();
+		file = location.left(separator);
+		line = location.mid(separator + 1).toInt();
 	}
 
 	auto it = std::find_if(
@@ -630,7 +638,15 @@ void DebuggerSession::toggleBreakpoint(const QString& location)
 		[&](const BreakpointInfo& bp) {
 			if (!func.isEmpty())
 				return bp.function == func;
-			return bp.file == file && bp.line == line;
+			if (bp.line != line)
+				return false;
+			const QFileInfo requested(file);
+			const QFileInfo existing(bp.file);
+			const QString requestedPath = requested.canonicalFilePath().isEmpty()
+				? requested.absoluteFilePath() : requested.canonicalFilePath();
+			const QString existingPath = existing.canonicalFilePath().isEmpty()
+				? existing.absoluteFilePath() : existing.canonicalFilePath();
+			return requestedPath == existingPath;
 		}
 	);
 
@@ -1002,6 +1018,7 @@ void DebuggerSession::onTargetStoppedInternal(const QString& stopMsg)
         }
     }
 
+	ensureReverseRecording();
     requestStopState();
     emit targetStopped();
 }
