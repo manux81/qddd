@@ -353,6 +353,7 @@ QString DebuggerSession::remoteSpec() const
 void DebuggerSession::startSession(const QString& executablePath)
 {
 	m_reverseRecordingRequested = false;
+	m_reverseRecordingFailed = false;
     QFileInfo fi(executablePath);
     if (!fi.exists()) {
         qWarning() << "Executable not found:" << executablePath;
@@ -489,20 +490,40 @@ void DebuggerSession::executeReverseCommand(const QString& command)
 
 void DebuggerSession::ensureReverseRecording()
 {
-	if (!supportsReverseExecution() || m_reverseRecordingRequested)
+	if (!supportsReverseExecution() || m_reverseRecordingRequested || m_reverseRecordingFailed)
 		return;
 
-	// Start at the first stop (normally main), before forward stepping creates
-	// the history that the reverse controls need.
+	// Prefer processor branch tracing: unlike record full it can cross libc,
+	// syscalls and instructions unknown to GDB's software recorder.
 	m_reverseRecordingRequested = true;
-	enqueueCommand("-interpreter-exec console \"record full\"");
+	enqueueCommand("-interpreter-exec console \"record btrace\"",
+	               [this](const QString& reply) {
+		               if (reply.contains("^done"))
+			               return;
+
+		               // perf_event_paranoid commonly blocks btrace. Before the
+		               // software fallback starts, initialise glibc's allocator;
+		               // otherwise its first lazy allocation invokes getrandom,
+		               // which GDB 12 record full cannot replay.
+		               enqueueCommand("-interpreter-exec console \"call (void) malloc(1)\"",
+		                              [this](const QString&) {
+			                              enqueueCommand(
+			                                  "-interpreter-exec console \"record full\"",
+			                                  [this](const QString& recordReply) {
+				                                  if (!recordReply.contains("^done")) {
+					                                  m_reverseRecordingRequested = false;
+					                                  m_reverseRecordingFailed = true;
+				                                  }
+			                                  });
+		                              });
+	               });
 }
 
 bool DebuggerSession::supportsReverseExecution() const
 {
 	// Conservative: GDB MI supports reverse-* when process recording is enabled.
 	// LLDB MI support varies; keep disabled by default.
-	return m_backend == Backend::GdbMi;
+	return m_backend == Backend::GdbMi && !m_reverseRecordingFailed;
 }
 void DebuggerSession::runToCursor(const QString& location)
 {
@@ -877,6 +898,12 @@ void DebuggerSession::dispatchDebuggerMessage(const QString& rawLine)
 	// ------------------------------------------------------------
 	if (line.startsWith("~\"") || line.startsWith("@\"") || line.startsWith("&\"")) {
 		const QString decoded = decodeCString(line.mid(2));
+		if (decoded.contains("Process record: failed to record execution log")) {
+			m_reverseRecordingRequested = false;
+			m_reverseRecordingFailed = true;
+			emit debuggerOutput(tr(
+			    "Reverse recording failed in this function; disabling reverse execution for this session.\n"));
+		}
 		if (m_captureDisassembly)
 			m_disassemblyBuffer += decoded;
 		emit debuggerOutput(decoded);

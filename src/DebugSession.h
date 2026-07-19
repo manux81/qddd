@@ -341,6 +341,7 @@ private:
 	QVector<BreakpointInfo> m_breakpoints;
 	QSet<QString> m_changedPaths;
 	bool m_reverseRecordingRequested = false;
+	bool m_reverseRecordingFailed = false;
 
 	int m_stepCounter = 0;
 	bool m_pendingStack = false;
