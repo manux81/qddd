@@ -440,7 +440,15 @@ void DebuggerSession::startSession(const QString& executablePath)
 				               ? QStringLiteral("extended-remote")
 				               : QStringLiteral("remote");
 			               enqueueCommand(QString("-target-select %1 %2:%3").arg(mode, host).arg(port),
-			                              [this](const QString&) { emit targetStarted(); });
+			                              [this](const QString& reply) {
+				                              if (reply.contains(QStringLiteral("^done"))) {
+					                              emit targetStarted();
+				                              } else {
+					                              emit targetStartFailed(
+					                                  tr("GDB could not connect to the remote target: %1")
+					                                      .arg(reply.trimmed()));
+				                              }
+			                              });
 			               return;
 		               }
 
