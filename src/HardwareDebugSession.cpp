@@ -350,20 +350,25 @@ void HardwareDebugSession::executeGdbSequence()
             emit debugOutput(
                 QStringLiteral("[HARDWARE DEBUG] Resetting target via monitor\n"));
 
-            if (m_config.serverType == HardwareServerType::JLink) {
-                // J-Link uses "monitor reset" followed by "monitor halt"
+            if (m_config.serverType == HardwareServerType::JLink ||
+                m_config.serverType == HardwareServerType::STLink) {
+                // ST-LINK and J-Link accept reset and halt as separate monitor
+                // commands. "reset halt" is OpenOCD syntax.
                 sendCommand(
                     QStringLiteral("-interpreter-exec console \"monitor reset\""));
                 // Halt will be handled separately below
             } else {
-                // ST-LINK uses "monitor reset halt"
+                // Preserve the conventional combined command for generic
+                // OpenOCD-style server profiles.
                 sendCommand(
                     QStringLiteral("-interpreter-exec console \"monitor reset halt\""));
             }
         });
     }
 
-    if (m_config.haltAfterReset && m_config.serverType == HardwareServerType::JLink) {
+    if (m_config.haltAfterReset &&
+        (m_config.serverType == HardwareServerType::JLink ||
+         m_config.serverType == HardwareServerType::STLink)) {
         m_sequenceSteps.append([this](const QString&) {
             emit debugOutput(
                 QStringLiteral("[HARDWARE DEBUG] Halting target via monitor\n"));
