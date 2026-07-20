@@ -548,6 +548,10 @@ void DebuggerSession::ensureReverseRecording()
 	if (m_backend != Backend::GdbMi || m_reverseMode == ReverseMode::Disabled
 	    || m_reverseRecordingRequested || m_reverseRecordingFailed)
 		return;
+	// Embedded/remote stubs such as ST-LINK do not expose CPU branch tracing.
+	// Probing it on every initial stop only adds an expected MI error.
+	if (isRemoteTarget())
+		return;
 
 	m_reverseRecordingRequested = true;
 	const bool fullRecord = m_reverseMode == ReverseMode::FullRecord;
