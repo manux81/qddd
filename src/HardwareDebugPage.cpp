@@ -844,8 +844,8 @@ void HardwareDebugPage::onTestConfig()
     // Reset any previous test server
     if (m_testServer) {
         m_testServer->disconnect();
-        m_testServer->deleteLater();
-        m_testServer.release();
+        m_testServer->kill();
+        m_testServer.reset();
     }
 
     // Create a temporary server process for testing
@@ -854,28 +854,20 @@ void HardwareDebugPage::onTestConfig()
     connect(m_testServer.get(), &GdbServerProcess::ready, this, [this]() {
         m_testStatusLabel->setText(
             QStringLiteral("<span style='color:green'>Server is ready! Connection OK.</span>"));
-        QTimer::singleShot(0, this, [this]() {
-            m_testBtn->setEnabled(true);
-            if (m_testServer) {
-                m_testServer->stop();
-                m_testServer->disconnect();
-                m_testServer->deleteLater();
-                m_testServer.release();
-            }
-        });
+        // Keep the wrapper alive until the child has actually exited.
+        if (m_testServer)
+            m_testServer->stop();
     });
 
     connect(m_testServer.get(), &GdbServerProcess::errorOccurred, this, [this](const QString& msg) {
         m_testStatusLabel->setText(
             QStringLiteral("<span style='color:red'>%1</span>").arg(msg));
-        QTimer::singleShot(0, this, [this]() {
-            m_testBtn->setEnabled(true);
-            if (m_testServer) {
-                m_testServer->disconnect();
-                m_testServer->deleteLater();
-                m_testServer.release();
-            }
-        });
+        if (m_testServer && m_testServer->state() == GdbServerState::Failed) {
+            QTimer::singleShot(0, this, [this]() {
+                m_testBtn->setEnabled(true);
+                m_testServer.reset();
+            });
+        }
     });
 
     connect(m_testServer.get(), &GdbServerProcess::finished, this, [this](int exitCode, QProcess::ExitStatus status) {
@@ -886,11 +878,7 @@ void HardwareDebugPage::onTestConfig()
         }
         QTimer::singleShot(0, this, [this]() {
             m_testBtn->setEnabled(true);
-            if (m_testServer) {
-                m_testServer->disconnect();
-                m_testServer->deleteLater();
-                m_testServer.release();
-            }
+            m_testServer.reset();
         });
     });
 
