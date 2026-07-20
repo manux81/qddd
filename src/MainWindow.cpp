@@ -754,7 +754,10 @@ void MainWindow::startDebugger(const QString &programPath) {
 	m_breakOnMainInserted = false;
 	if (m_hardwareSession)
 		m_hardwareSession->stopSession();
-	else if (m_session->isRunning())
+	// HardwareDebugSession may not own the currently running debugger (for
+	// example after an Automatic/Local launch).  Always stop that process too
+	// before switching executable/backend.
+	if (m_session->isRunning())
 		m_session->terminateSession();
 
 	const int configIndex = m_targetSelector

@@ -358,6 +358,12 @@ QString DebuggerSession::remoteSpec() const
 
 void DebuggerSession::startSession(const QString& executablePath)
 {
+	// QProcess::start() is ignored when a previous debugger is still alive.
+	// Make target/profile switches deterministic and prevent commands intended
+	// for an ARM GDB from being sent to an earlier host GDB instance.
+	if (m_debuggerProcess.state() != QProcess::NotRunning)
+		terminateSession();
+
 	m_reverseRecordingRequested = false;
 	m_reverseRecordingFailed = false;
 	m_reverseRecordingReady = false;
@@ -468,11 +474,20 @@ void DebuggerSession::startSession(const QString& executablePath)
 
 void DebuggerSession::terminateSession()
 {
-    if (m_debuggerProcess.state() != QProcess::NotRunning)
-        m_debuggerProcess.kill();
+	m_commandQueue.clear();
+	m_commandInFlight = false;
+	m_inFlightReply.clear();
+	m_inFlight.cb = nullptr;
 
-    if (m_stlinkProcess.state() != QProcess::NotRunning)
+    if (m_debuggerProcess.state() != QProcess::NotRunning) {
+        m_debuggerProcess.kill();
+        m_debuggerProcess.waitForFinished(1000);
+    }
+
+    if (m_stlinkProcess.state() != QProcess::NotRunning) {
         m_stlinkProcess.kill();
+        m_stlinkProcess.waitForFinished(1000);
+    }
 }
 
 bool DebuggerSession::isRunning() const
