@@ -285,14 +285,6 @@ DebuggerSession::DebuggerSession(QObject* parent)
             this,
             &DebuggerSession::onDebuggerFinished);
 
-	m_stepWatchdog.setSingleShot(true);
-	connect(&m_stepWatchdog, &QTimer::timeout, this, [this] {
-		if (!m_targetExecuting)
-			return;
-		emit debuggerOutput(tr(
-		    "Step did not stop within 5 seconds; interrupting the target.\n"));
-		enqueueCommand(QStringLiteral("-exec-interrupt --all"));
-	});
 }
 
 DebuggerSession::~DebuggerSession() = default;
@@ -488,7 +480,6 @@ void DebuggerSession::startSession(const QString& executablePath)
 
 void DebuggerSession::terminateSession()
 {
-	m_stepWatchdog.stop();
 	m_targetExecuting = false;
 	m_commandQueue.clear();
 	m_commandInFlight = false;
@@ -558,7 +549,6 @@ void DebuggerSession::interruptExecution()
 {
 	if (!m_targetExecuting)
 		return;
-	m_stepWatchdog.stop();
 	enqueueCommand("-exec-interrupt --all");
 }
 
@@ -979,7 +969,6 @@ void DebuggerSession::onDebuggerOutputReady()
 void DebuggerSession::onDebuggerFinished(int exitCode,
                                          QProcess::ExitStatus)
 {
-	m_stepWatchdog.stop();
 	m_targetExecuting = false;
     emit targetExited(exitCode);
 }
@@ -1117,15 +1106,11 @@ void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
 				emit downloadFinished(!resultLine.startsWith("^error"));
 			if (resultLine.startsWith("^running")) {
 				m_targetExecuting = true;
-				if (m_inFlight.command == QStringLiteral("-exec-step") ||
-				    m_inFlight.command == QStringLiteral("-exec-next"))
-					m_stepWatchdog.start(5000);
-				else if (m_inFlight.command == QStringLiteral("-exec-finish"))
+				if (m_inFlight.command == QStringLiteral("-exec-finish"))
 					emit debuggerOutput(tr(
 					    "Step Out is running until the current frame returns; use Interrupt to stop it.\n"));
 			} else if (resultLine.startsWith("^error") &&
 			           m_inFlight.command.startsWith(QStringLiteral("-exec-"))) {
-				m_stepWatchdog.stop();
 				m_targetExecuting = false;
 			}
 
@@ -1156,7 +1141,6 @@ void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
 
 void DebuggerSession::onTargetStoppedInternal(const QString& stopMsg)
 {
-	m_stepWatchdog.stop();
 	m_targetExecuting = false;
     ++m_stepCounter;
 
