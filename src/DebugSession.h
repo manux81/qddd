@@ -40,7 +40,6 @@
 #include <QString>
 #include <QQueue>
 #include <QRegularExpression>
-#include <QTimer>
 #include <memory>
 #include <vector>
 #include <functional>
@@ -343,7 +342,6 @@ private:
 
 	QProcess m_debuggerProcess;
 	QProcess m_stlinkProcess;
-	QTimer m_stepWatchdog;
 	bool m_targetExecuting = false;
 
 	bool m_commandInFlight = false;
