@@ -656,8 +656,8 @@ void MainWindow::setupMenusAndToolbars() {
 	downAct->setToolTip(tr("Down Stack Frame"));
 	toggleBpAct->setToolTip(tr("Toggle Breakpoint"));
 
-	auto* targetState = new QLabel(commandPill);
-	targetState->setObjectName("targetState");
+	m_targetState = new QLabel(commandPill);
+	m_targetState->setObjectName("targetState");
 	m_targetSelector = new QComboBox(commandPill);
 	m_targetSelector->setObjectName("targetSelector");
 	m_targetSelector->setMinimumWidth(105);
@@ -668,9 +668,15 @@ void MainWindow::setupMenusAndToolbars() {
 		        QSettings settings;
 		        settings.setValue("hardwareDebug/selectedIndex",
 		                          m_targetSelector->currentData().toInt());
+		        if (m_currentProgram.isEmpty()) {
+			        const QString configuredProgram = selectedHardwareProgram();
+			        if (!configuredProgram.isEmpty())
+				        m_currentProgram = configuredProgram;
+		        }
+		        updateTargetChip(m_currentProgram.isEmpty() ? tr("Select firmware") : tr("Ready"));
 	        });
 	pillLayout->addWidget(m_targetSelector);
-	pillLayout->addWidget(targetState);
+	pillLayout->addWidget(m_targetState);
 	addSeparator();
 	addButton(runAct, "primaryCommand");
 	addButton(contAct);
@@ -688,20 +694,15 @@ void MainWindow::setupMenusAndToolbars() {
 	wrapLayout->addWidget(commandPill, 0, Qt::AlignCenter);
 	wrapLayout->addStretch(1);
 
-	auto updateTargetChip = [this, targetState](const QString& state) {
-		const QFileInfo fi(m_currentProgram);
-		const QString program = fi.exists() ? fi.fileName() : tr("No firmware");
-		targetState->setText(QStringLiteral("%1 · %2").arg(program, state));
-	};
 	updateTargetChip(m_currentProgram.isEmpty() ? tr("Select firmware") : tr("Ready"));
 	connect(m_session.get(), &DebuggerSession::targetStarted, this,
-	        [updateTargetChip] { updateTargetChip(QObject::tr("Session started")); });
+	        [this] { updateTargetChip(tr("Session started")); });
 	connect(m_session.get(), &DebuggerSession::targetRunning, this,
-	        [updateTargetChip] { updateTargetChip(QObject::tr("Running")); });
+	        [this] { updateTargetChip(tr("Running")); });
 	connect(m_session.get(), &DebuggerSession::targetStopped, this,
-	        [updateTargetChip] { updateTargetChip(QObject::tr("Stopped")); });
+	        [this] { updateTargetChip(tr("Stopped")); });
 	connect(m_session.get(), &DebuggerSession::targetExited, this,
-	        [updateTargetChip](int code) { updateTargetChip(QObject::tr("Exited (%1)").arg(code)); });
+	        [this](int code) { updateTargetChip(tr("Exited (%1)").arg(code)); });
 
 	// Reverse flow control (best-effort)
 	auto* stepBackAct = new QAction(tr("Step Back"), this);
@@ -749,6 +750,7 @@ void MainWindow::setupMenusAndToolbars() {
 
 void MainWindow::startDebugger(const QString &programPath) {
 	m_currentProgram = programPath;
+	updateTargetChip(tr("Starting"));
 	m_breakOnMainInserted = false;
 	if (m_hardwareSession)
 		m_hardwareSession->stopSession();
@@ -800,6 +802,29 @@ void MainWindow::openProgram() {
 	}
 }
 
+QString MainWindow::selectedHardwareProgram() const
+{
+	if (!m_targetSelector || m_targetSelector->currentData().toInt() < 0)
+		return {};
+
+	QSettings settings;
+	HardwareDebugConfigManager manager;
+	manager.load(settings);
+	const int index = m_targetSelector->currentData().toInt();
+	if (index >= manager.configurations.size())
+		return {};
+	return manager.configurations[index].programImage;
+}
+
+void MainWindow::updateTargetChip(const QString& state)
+{
+	if (!m_targetState)
+		return;
+	const QFileInfo fi(m_currentProgram);
+	const QString program = fi.exists() && fi.isFile() ? fi.fileName() : tr("No firmware");
+	m_targetState->setText(QStringLiteral("%1 · %2").arg(program, state));
+}
+
 void MainWindow::openSettings()
 {
 	SettingsDialog dlg(this);
@@ -840,6 +865,12 @@ void MainWindow::refreshHardwareTargetSelector()
 		selected = m_targetSelector->findData(manager.activeIndex);
 	m_targetSelector->setCurrentIndex(selected >= 0 ? selected : 0);
 	m_targetSelector->blockSignals(false);
+	if (m_currentProgram.isEmpty()) {
+		const QString configuredProgram = selectedHardwareProgram();
+		if (!configuredProgram.isEmpty())
+			m_currentProgram = configuredProgram;
+	}
+	updateTargetChip(m_currentProgram.isEmpty() ? tr("Select firmware") : tr("Ready"));
 }
 
 void MainWindow::selectGdbExecutable()
@@ -895,7 +926,14 @@ void MainWindow::applySettingsToSession()
 
 void MainWindow::runProgram() {
 	if (m_currentProgram.isEmpty())
+		m_currentProgram = selectedHardwareProgram();
+	if (m_currentProgram.isEmpty() || !QFileInfo(m_currentProgram).isFile()) {
+		updateTargetChip(tr("Select firmware"));
+		QMessageBox::warning(this, tr("Run"),
+		                     tr("No valid firmware is selected. Choose Open Program or set the Program image in the selected hardware profile."));
 		return;
+	}
+	updateTargetChip(tr("Ready"));
 
 	const int selectedTarget = m_targetSelector
 		? m_targetSelector->currentData().toInt()

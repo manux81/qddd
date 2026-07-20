@@ -55,6 +55,7 @@ class QTabWidget;
 class QWidget;
 class DebugAssistantDock;
 class QComboBox;
+class QLabel;
 class HardwareDebugSession;
 
 class MainWindow : public QMainWindow {
@@ -91,6 +92,8 @@ class MainWindow : public QMainWindow {
 	void startDebugger(const QString &programPath);
 	void applySettingsToSession();
 	void refreshHardwareTargetSelector();
+	void updateTargetChip(const QString& state);
+	QString selectedHardwareProgram() const;
 	SourceEditor* currentSourceEditor() const;
 	SourceEditor* ensureSourceTabForFile(const QString& file);
 	QString resolveSourceFile(const QString& file) const;
@@ -101,6 +104,7 @@ class MainWindow : public QMainWindow {
 	std::unique_ptr<DebuggerSession> m_session;
 	std::unique_ptr<HardwareDebugSession> m_hardwareSession;
 	QComboBox* m_targetSelector = nullptr;
+	QLabel* m_targetState = nullptr;
 
 	QTabWidget *m_sourceTabs = nullptr;
 	SourceEditor *m_sourceEditor = nullptr;
