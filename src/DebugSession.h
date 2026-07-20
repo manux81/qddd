@@ -264,6 +264,10 @@ signals:
 								 int toStep);
 
 	void debuggerOutput(const QString& text);
+	void downloadStarted();
+	void downloadProgress(int percentage, qint64 bytesSent, qint64 totalBytes,
+	                      const QString& section);
+	void downloadFinished(bool success);
 	void disassemblyUpdated(const QString& text);
 	void reverseExecutionAvailabilityChanged();
 
