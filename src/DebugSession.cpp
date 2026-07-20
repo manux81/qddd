@@ -284,6 +284,15 @@ DebuggerSession::DebuggerSession(QObject* parent)
             QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             this,
             &DebuggerSession::onDebuggerFinished);
+
+	m_stepWatchdog.setSingleShot(true);
+	connect(&m_stepWatchdog, &QTimer::timeout, this, [this] {
+		if (!m_targetExecuting)
+			return;
+		emit debuggerOutput(tr(
+		    "Step did not stop within 5 seconds; interrupting the target.\n"));
+		enqueueCommand(QStringLiteral("-exec-interrupt"));
+	});
 }
 
 DebuggerSession::~DebuggerSession() = default;
@@ -475,6 +484,8 @@ void DebuggerSession::startSession(const QString& executablePath)
 
 void DebuggerSession::terminateSession()
 {
+	m_stepWatchdog.stop();
+	m_targetExecuting = false;
 	m_commandQueue.clear();
 	m_commandInFlight = false;
 	m_inFlightReply.clear();
@@ -502,6 +513,8 @@ bool DebuggerSession::isRunning() const
 
 void DebuggerSession::run()
 {
+	if (!canStartExecutionCommand(QStringLiteral("Run")))
+		return;
 	m_replayDirection = ReplayDirection::None;
 	// For remote targets, "-exec-run" is often unsupported/undesired; continue instead.
 	if (m_backend == Backend::GdbMi && isRemoteTarget())
@@ -510,26 +523,48 @@ void DebuggerSession::run()
 		enqueueCommand("-exec-run");
 }
 void DebuggerSession::continueExecution()   {
+	if (!canStartExecutionCommand(QStringLiteral("Continue")))
+		return;
 	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
 		? ReplayDirection::Forward : ReplayDirection::None;
 	enqueueCommand("-exec-continue");
 }
 void DebuggerSession::stepInto()            {
+	if (!canStartExecutionCommand(QStringLiteral("Step Into")))
+		return;
 	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
 		? ReplayDirection::Forward : ReplayDirection::None;
 	enqueueCommand("-exec-step");
 }
 void DebuggerSession::stepOver()            {
+	if (!canStartExecutionCommand(QStringLiteral("Next")))
+		return;
 	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
 		? ReplayDirection::Forward : ReplayDirection::None;
 	enqueueCommand("-exec-next");
 }
 void DebuggerSession::stepOut()             {
+	if (!canStartExecutionCommand(QStringLiteral("Step Out")))
+		return;
 	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
 		? ReplayDirection::Forward : ReplayDirection::None;
 	enqueueCommand("-exec-finish");
 }
-void DebuggerSession::interruptExecution()  { enqueueCommand("-exec-interrupt"); }
+void DebuggerSession::interruptExecution()
+{
+	if (!m_targetExecuting)
+		return;
+	m_stepWatchdog.stop();
+	enqueueCommand("-exec-interrupt");
+}
+
+bool DebuggerSession::canStartExecutionCommand(const QString& command)
+{
+	if (!m_targetExecuting)
+		return true;
+	emit debuggerOutput(tr("%1 ignored: the target is already running.\n").arg(command));
+	return false;
+}
 void DebuggerSession::reverseContinueExecution() { executeReverseCommand("-exec-continue --reverse"); }
 void DebuggerSession::reverseStepInto()          { executeReverseCommand("-exec-step --reverse"); }
 void DebuggerSession::reverseStepOver()          { executeReverseCommand("-exec-next --reverse"); }
@@ -932,6 +967,8 @@ void DebuggerSession::onDebuggerOutputReady()
 void DebuggerSession::onDebuggerFinished(int exitCode,
                                          QProcess::ExitStatus)
 {
+	m_stepWatchdog.stop();
+	m_targetExecuting = false;
     emit targetExited(exitCode);
 }
 
@@ -1048,6 +1085,17 @@ void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
 			resultLine.startsWith("^error") ||
 			resultLine.startsWith("^running") ||
 			resultLine.startsWith("^connected")) {
+			if (resultLine.startsWith("^running")) {
+				m_targetExecuting = true;
+				if (m_inFlight.command == QStringLiteral("-exec-step") ||
+				    m_inFlight.command == QStringLiteral("-exec-next") ||
+				    m_inFlight.command == QStringLiteral("-exec-finish"))
+					m_stepWatchdog.start(5000);
+			} else if (resultLine.startsWith("^error") &&
+			           m_inFlight.command.startsWith(QStringLiteral("-exec-"))) {
+				m_stepWatchdog.stop();
+				m_targetExecuting = false;
+			}
 
 			// esegui callback del comando (se presente)
 			if (m_inFlight.cb)
@@ -1076,6 +1124,8 @@ void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
 
 void DebuggerSession::onTargetStoppedInternal(const QString& stopMsg)
 {
+	m_stepWatchdog.stop();
+	m_targetExecuting = false;
     ++m_stepCounter;
 
     // frame={...} dentro *stopped,...
