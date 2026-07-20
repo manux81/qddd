@@ -129,8 +129,6 @@ void HardwareDebugSession::startSession(const HardwareDebugConfiguration& config
             this, &HardwareDebugSession::onGdbTargetStopped, Qt::UniqueConnection);
     connect(m_gdbSession, &DebuggerSession::targetExited,
             this, &HardwareDebugSession::onGdbTargetExited, Qt::UniqueConnection);
-    connect(m_gdbSession, &DebuggerSession::debuggerOutput,
-            this, &HardwareDebugSession::onGdbOutput, Qt::UniqueConnection);
 
     // Step 1: Start the GDB server
     setSessionState(SessionState::ServerStarting);
@@ -160,8 +158,6 @@ void HardwareDebugSession::stopSession()
                    this, &HardwareDebugSession::onGdbTargetStopped);
         disconnect(m_gdbSession, &DebuggerSession::targetExited,
                    this, &HardwareDebugSession::onGdbTargetExited);
-        disconnect(m_gdbSession, &DebuggerSession::debuggerOutput,
-                   this, &HardwareDebugSession::onGdbOutput);
     }
 
     // Stop GDB first
@@ -310,11 +306,6 @@ void HardwareDebugSession::onGdbTargetExited(int exitCode)
     emit debugOutput(QStringLiteral("[HARDWARE DEBUG] GDB target exited (%1)\n")
                      .arg(exitCode));
     setSessionState(SessionState::Idle);
-}
-
-void HardwareDebugSession::onGdbOutput(const QString& text)
-{
-    emit debugOutput(text);
 }
 
 // ============================================================================
