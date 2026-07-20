@@ -957,6 +957,8 @@ void DebuggerSession::processCommandQueue()
     m_inFlightReply.clear();
 
     const QString wire = QString::number(m_inFlight.token) + m_inFlight.command;
+	if (m_inFlight.command == QStringLiteral("-target-download"))
+		emit downloadStarted();
 
     qDebug().noquote() << "[MI SEND]" << wire;
     m_debuggerProcess.write((wire + "\n").toUtf8());
@@ -1040,6 +1042,22 @@ void DebuggerSession::dispatchDebuggerMessage(const QString& rawLine)
 		return;
 	}
 
+	// Status records emitted periodically by -target-download.
+	if (line.startsWith(QStringLiteral("+download"))) {
+		bool sentOk = false;
+		bool totalOk = false;
+		const qint64 sent = miGet(line, QStringLiteral("total-sent")).toLongLong(&sentOk);
+		const qint64 total = miGet(line, QStringLiteral("total-size")).toLongLong(&totalOk);
+		if (totalOk && total > 0) {
+			const int percentage = sentOk
+				? qBound(0, static_cast<int>((sent * 100) / total), 100)
+				: 0;
+			emit downloadProgress(percentage, sentOk ? sent : 0, total,
+			                      miGet(line, QStringLiteral("section")));
+		}
+		return;
+	}
+
 	// ------------------------------------------------------------
 	// 4) Async notifications (=...)
 	// ------------------------------------------------------------
@@ -1095,6 +1113,8 @@ void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
 			resultLine.startsWith("^error") ||
 			resultLine.startsWith("^running") ||
 			resultLine.startsWith("^connected")) {
+			if (m_inFlight.command == QStringLiteral("-target-download"))
+				emit downloadFinished(!resultLine.startsWith("^error"));
 			if (resultLine.startsWith("^running")) {
 				m_targetExecuting = true;
 				if (m_inFlight.command == QStringLiteral("-exec-step") ||

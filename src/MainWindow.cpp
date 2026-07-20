@@ -50,6 +50,8 @@
 #include <QSettings>
 #include <QComboBox>
 #include <QTimer>
+#include <QProgressBar>
+#include <QStatusBar>
 
 #include "SettingsDialog.h"
 #include "DebugAssistantDock.h"
@@ -78,6 +80,41 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 	m_graphicalView->setSession(m_session.get());
 	if (m_disasmView)
 		m_disasmView->setSession(m_session.get());
+
+	m_downloadStatus = new QLabel(this);
+	m_downloadProgress = new QProgressBar(this);
+	m_downloadProgress->setRange(0, 100);
+	m_downloadProgress->setFixedWidth(260);
+	m_downloadProgress->setTextVisible(true);
+	m_downloadStatus->hide();
+	m_downloadProgress->hide();
+	statusBar()->addPermanentWidget(m_downloadStatus);
+	statusBar()->addPermanentWidget(m_downloadProgress);
+	connect(m_session.get(), &DebuggerSession::downloadStarted, this, [this] {
+		m_downloadStatus->setText(tr("Uploading firmware…"));
+		m_downloadProgress->setValue(0);
+		m_downloadStatus->show();
+		m_downloadProgress->show();
+	});
+	connect(m_session.get(), &DebuggerSession::downloadProgress, this,
+	        [this](int percentage, qint64 sent, qint64 total, const QString& section) {
+		        m_downloadProgress->setValue(percentage);
+		        m_downloadStatus->setText(
+		            tr("Uploading %1 · %2 / %3 KiB")
+		                .arg(section.isEmpty() ? tr("firmware") : section)
+		                .arg(sent / 1024)
+		                .arg(total / 1024));
+	        });
+	connect(m_session.get(), &DebuggerSession::downloadFinished, this,
+	        [this](bool success) {
+		        m_downloadProgress->setValue(success ? 100 : m_downloadProgress->value());
+		        m_downloadStatus->setText(success ? tr("Firmware upload complete")
+		                                          : tr("Firmware upload failed"));
+		        QTimer::singleShot(success ? 2000 : 5000, this, [this] {
+			        m_downloadStatus->hide();
+			        m_downloadProgress->hide();
+		        });
+	        });
 
 	connect(m_session.get(), &DebuggerSession::targetStopped, this,
 	        &MainWindow::onTargetStopped);

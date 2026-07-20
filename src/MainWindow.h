@@ -56,6 +56,7 @@ class QWidget;
 class DebugAssistantDock;
 class QComboBox;
 class QLabel;
+class QProgressBar;
 class HardwareDebugSession;
 
 class MainWindow : public QMainWindow {
@@ -105,6 +106,8 @@ class MainWindow : public QMainWindow {
 	std::unique_ptr<HardwareDebugSession> m_hardwareSession;
 	QComboBox* m_targetSelector = nullptr;
 	QLabel* m_targetState = nullptr;
+	QLabel* m_downloadStatus = nullptr;
+	QProgressBar* m_downloadProgress = nullptr;
 
 	QTabWidget *m_sourceTabs = nullptr;
 	SourceEditor *m_sourceEditor = nullptr;
