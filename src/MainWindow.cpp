@@ -52,6 +52,8 @@
 #include <QTimer>
 #include <QProgressBar>
 #include <QStatusBar>
+#include <QLineEdit>
+#include <QPushButton>
 
 #include "SettingsDialog.h"
 #include "DebugAssistantDock.h"
@@ -256,8 +258,31 @@ void MainWindow::setupUi() {
 	});
 
 	m_varsDock = new QDockWidget(tr("Variables"), this);
-	m_variablesView = new VariablesView(m_varsDock);
-	m_varsDock->setWidget(m_variablesView);
+	auto* variablesPanel = new QWidget(m_varsDock);
+	auto* variablesLayout = new QVBoxLayout(variablesPanel);
+	variablesLayout->setContentsMargins(4, 4, 4, 4);
+	variablesLayout->setSpacing(4);
+	auto* watchRow = new QHBoxLayout;
+	auto* watchEdit = new QLineEdit(variablesPanel);
+	watchEdit->setPlaceholderText(tr("Add variable or expression…"));
+	auto* addWatch = new QPushButton(tr("+"), variablesPanel);
+	addWatch->setToolTip(tr("Add watch expression"));
+	addWatch->setFixedWidth(30);
+	watchRow->addWidget(watchEdit, 1);
+	watchRow->addWidget(addWatch);
+	variablesLayout->addLayout(watchRow);
+	m_variablesView = new VariablesView(variablesPanel);
+	variablesLayout->addWidget(m_variablesView, 1);
+	m_varsDock->setWidget(variablesPanel);
+	auto submitWatch = [this, watchEdit] {
+		const QString expression = watchEdit->text().trimmed();
+		if (expression.isEmpty())
+			return;
+		m_session->addWatchExpression(expression);
+		watchEdit->clear();
+	};
+	connect(addWatch, &QPushButton::clicked, this, submitWatch);
+	connect(watchEdit, &QLineEdit::returnPressed, this, submitWatch);
 	addDockWidget(Qt::RightDockWidgetArea, m_varsDock);
 
 	m_stackDock = new QDockWidget(tr("Stack"), this);
@@ -570,7 +595,17 @@ void MainWindow::setupMenusAndToolbars() {
 	};
 	setTargetRunningUi(false);
 	connect(m_session.get(), &DebuggerSession::targetRunning, this,
-	        [setTargetRunningUi] { setTargetRunningUi(true); });
+	        [this, setTargetRunningUi] {
+		        setTargetRunningUi(true);
+		        // A stopped PC is no longer current once execution resumes. Leaving
+		        // its arrow visible makes a long-running Next look one line behind.
+		        if (m_sourceTabs) {
+			        for (int i = 0; i < m_sourceTabs->count(); ++i) {
+				        if (auto* editor = qobject_cast<SourceEditor*>(m_sourceTabs->widget(i)))
+					        editor->setCurrentPC(-1);
+			        }
+		        }
+	        });
 	connect(m_session.get(), &DebuggerSession::targetStopped, this,
 	        [setTargetRunningUi] { setTargetRunningUi(false); });
 	connect(m_session.get(), &DebuggerSession::targetExited, this,

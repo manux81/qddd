@@ -364,6 +364,7 @@ void DebuggerSession::startSession(const QString& executablePath)
 	// for an ARM GDB from being sent to an earlier host GDB instance.
 	if (m_debuggerProcess.state() != QProcess::NotRunning)
 		terminateSession();
+	m_currentThreadId.clear();
 
 	m_reverseRecordingRequested = false;
 	m_reverseRecordingFailed = false;
@@ -529,21 +530,27 @@ void DebuggerSession::stepInto()            {
 		return;
 	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
 		? ReplayDirection::Forward : ReplayDirection::None;
-	enqueueCommand("-exec-step");
+	const QString thread = m_currentThreadId.isEmpty()
+		? QString() : QStringLiteral(" --thread %1").arg(m_currentThreadId);
+	enqueueCommand(QStringLiteral("-exec-step%1").arg(thread));
 }
 void DebuggerSession::stepOver()            {
 	if (!canStartExecutionCommand(QStringLiteral("Next")))
 		return;
 	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
 		? ReplayDirection::Forward : ReplayDirection::None;
-	enqueueCommand("-exec-next");
+	const QString thread = m_currentThreadId.isEmpty()
+		? QString() : QStringLiteral(" --thread %1").arg(m_currentThreadId);
+	enqueueCommand(QStringLiteral("-exec-next%1").arg(thread));
 }
 void DebuggerSession::stepOut()             {
 	if (!canStartExecutionCommand(QStringLiteral("Step Out")))
 		return;
 	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
 		? ReplayDirection::Forward : ReplayDirection::None;
-	enqueueCommand("-exec-finish");
+	const QString context = m_currentThreadId.isEmpty()
+		? QString() : QStringLiteral(" --thread %1 --frame 0").arg(m_currentThreadId);
+	enqueueCommand(QStringLiteral("-exec-finish%1").arg(context));
 }
 void DebuggerSession::interruptExecution()
 {
@@ -1106,7 +1113,7 @@ void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
 				emit downloadFinished(!resultLine.startsWith("^error"));
 			if (resultLine.startsWith("^running")) {
 				m_targetExecuting = true;
-				if (m_inFlight.command == QStringLiteral("-exec-finish"))
+				if (m_inFlight.command.startsWith(QStringLiteral("-exec-finish")))
 					emit debuggerOutput(tr(
 					    "Step Out is running until the current frame returns; use Interrupt to stop it.\n"));
 			} else if (resultLine.startsWith("^error") &&
@@ -1142,6 +1149,9 @@ void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
 void DebuggerSession::onTargetStoppedInternal(const QString& stopMsg)
 {
 	m_targetExecuting = false;
+	const QString stoppedThread = miGet(stopMsg, QStringLiteral("thread-id"));
+	if (!stoppedThread.isEmpty() && stoppedThread != QStringLiteral("all"))
+		m_currentThreadId = stoppedThread;
     ++m_stepCounter;
 
     // frame={...} dentro *stopped,...
@@ -1374,10 +1384,48 @@ void DebuggerSession::requestStopState()
     enqueueCommand("-stack-list-variables --all-values",
         [this](const QString& reply) {
             parseVarsFromReply(reply);
+			requestWatchValues();
             m_pendingVariables = false;
             //emit variablesUpdated();
             finalizeSnapshotIfReady();
         });
+}
+
+void DebuggerSession::requestWatchValues()
+{
+	for (const QString& expression : std::as_const(m_watchExpressions)) {
+		enqueueCommand(
+			QStringLiteral("-data-evaluate-expression %1").arg(miQuote(expression)),
+			[this, expression](const QString& reply) {
+				if (!m_watchExpressions.contains(expression))
+					return;
+
+				auto existing = std::find_if(
+					m_variables.begin(), m_variables.end(),
+					[&expression](const std::unique_ptr<DebugVariable>& variable) {
+						return variable && variable->isWatch && variable->name == expression;
+					});
+
+				auto watch = std::make_unique<DebugVariable>();
+				watch->name = expression;
+				watch->value = miGet(reply, QStringLiteral("value"));
+				if (watch->value.isEmpty()) {
+					const QString error = miGet(reply, QStringLiteral("msg"));
+					watch->value = error.isEmpty() ? tr("<unavailable>")
+					                               : QStringLiteral("<%1>").arg(error);
+				}
+				watch->isWatch = true;
+				watch->isPointer = looksLikePointer(watch->value);
+				watch->hasChildren = looksLikeStruct(watch->value);
+				expandInlineStructIntoChildren(watch.get(), watch->value, 0, 2);
+
+				if (existing == m_variables.end())
+					m_variables.push_back(std::move(watch));
+				else
+					*existing = std::move(watch);
+				emit variablesUpdated();
+			});
+	}
 }
 
 void DebuggerSession::parseStackFromReply(const QString& replyBlob)
@@ -1599,6 +1647,33 @@ void DebuggerSession::evaluateExpression(const QString& expression)
         [this](const QString& reply) {
             emit debuggerOutput(reply);
         });
+}
+
+void DebuggerSession::addWatchExpression(const QString& expression)
+{
+	const QString trimmed = expression.trimmed();
+	if (trimmed.isEmpty() || m_watchExpressions.contains(trimmed))
+		return;
+	m_watchExpressions.push_back(trimmed);
+	if (!m_targetExecuting)
+		requestWatchValues();
+}
+
+void DebuggerSession::removeWatchExpression(const QString& expression)
+{
+	m_watchExpressions.removeAll(expression);
+	m_variables.erase(
+		std::remove_if(m_variables.begin(), m_variables.end(),
+			[&expression](const std::unique_ptr<DebugVariable>& variable) {
+				return variable && variable->isWatch && variable->name == expression;
+			}),
+		m_variables.end());
+	emit variablesUpdated();
+}
+
+const QStringList& DebuggerSession::watchExpressions() const
+{
+	return m_watchExpressions;
 }
 
 void DebuggerSession::sendRawCommand(const QString& cmd,

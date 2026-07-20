@@ -398,6 +398,20 @@ void HardwareDebugSession::executeGdbSequence()
         }
     }
 
+    if (m_config.serverType == HardwareServerType::STLink) {
+        m_sequenceSteps.append([this](const QString&) {
+            // STM32F4 independent/window watchdogs keep running while the core
+            // is halted unless DBGMCU explicitly freezes them. Without this,
+            // slow source stepping can reset the MCU and leave GDB waiting for
+            // a temporary step breakpoint that can no longer be reached.
+            emit debugOutput(QStringLiteral(
+                "[HARDWARE DEBUG] Freezing STM32 watchdogs while halted\n"));
+            sendCommand(QStringLiteral(
+                "-interpreter-exec console \"set *(unsigned int *)0xE0042008 = "
+                "*(unsigned int *)0xE0042008 | 0x00001800\""));
+        });
+    }
+
     // Insert initial breakpoint
     if (!m_config.initialBreakpoint.isEmpty()) {
         m_sequenceSteps.append([this](const QString&) {

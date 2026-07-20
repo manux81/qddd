@@ -40,8 +40,10 @@
 #include <QStyledItemDelegate>
 #include <QSet>
 #include <QHash>
+#include <QMenu>
 
 static constexpr int ChangedRole = Qt::UserRole + 1;
+static constexpr int WatchRole = Qt::UserRole + 2;
 
 namespace {
 
@@ -239,6 +241,19 @@ VariablesView::VariablesView(QWidget *parent)
 	              "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }");
 
 	setItemDelegateForColumn(1, new ValueDelegate(this));
+	setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(this, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+		const QModelIndex index = indexAt(pos);
+		if (!index.isValid())
+			return;
+		const QModelIndex nameIndex = index.siblingAtColumn(0);
+		if (!nameIndex.data(WatchRole).toBool() || !m_session)
+			return;
+		QMenu menu(this);
+		QAction* remove = menu.addAction(tr("Remove watch"));
+		if (menu.exec(viewport()->mapToGlobal(pos)) == remove)
+			m_session->removeWatchExpression(nameIndex.data(Qt::DisplayRole).toString());
+	});
 }
 
 void VariablesView::setSession(DebuggerSession *session) {
@@ -313,6 +328,7 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 
 	auto *nameItem  = new QStandardItem(node->name);
 	auto *valueItem = new QStandardItem(node->value);
+	nameItem->setData(node->isWatch, WatchRole);
 
 	const VarVisualType vt = visualType(node);
 	nameItem->setIcon(iconForType(vt));

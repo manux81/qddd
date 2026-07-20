@@ -116,6 +116,7 @@ struct DebugVariable
 
 	bool isPointer   = false;
 	bool hasChildren = false;
+	bool isWatch     = false;
 
 	DebugVariable* parent = nullptr;
 	std::vector<std::unique_ptr<DebugVariable>> children;
@@ -231,6 +232,9 @@ public:
 
 	// Expression evaluation / raw MI
 	void evaluateExpression(const QString& expression);
+	void addWatchExpression(const QString& expression);
+	void removeWatchExpression(const QString& expression);
+	[[nodiscard]] const QStringList& watchExpressions() const;
 	void sendRawCommand(const QString& cmd,
 	                    std::function<void(const QString&)> cb = nullptr);
 	void setVariable(const QString& fullPath, const QString& newValue);
@@ -305,6 +309,7 @@ private:
 	// parsing helpers
 	void parseStackFromReply(const QString& replyBlob);
 	void parseVarsFromReply(const QString& replyBlob);
+	void requestWatchValues();
 
 	// snapshot
 	void finalizeSnapshotIfReady();
@@ -323,6 +328,7 @@ private:
 	QString m_lastStopFunction;
 	int m_lastStopLine = 0;
 	QString m_lastStopAddr;
+	QString m_currentThreadId;
 
 	bool m_captureDisassembly = false;
 	QString m_disassemblyBuffer;
@@ -353,6 +359,7 @@ private:
 
 	QVector<StackFrame> m_stackFrames;
 	std::vector<std::unique_ptr<DebugVariable>> m_variables;
+	QStringList m_watchExpressions;
 
 	QVector<ExecutionSnapshot> m_executionHistory;
 	enum class ReplayDirection { None, Backward, Forward };
