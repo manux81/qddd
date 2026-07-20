@@ -1092,9 +1092,11 @@ void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
 			if (resultLine.startsWith("^running")) {
 				m_targetExecuting = true;
 				if (m_inFlight.command == QStringLiteral("-exec-step") ||
-				    m_inFlight.command == QStringLiteral("-exec-next") ||
-				    m_inFlight.command == QStringLiteral("-exec-finish"))
+				    m_inFlight.command == QStringLiteral("-exec-next"))
 					m_stepWatchdog.start(5000);
+				else if (m_inFlight.command == QStringLiteral("-exec-finish"))
+					emit debuggerOutput(tr(
+					    "Step Out is running until the current frame returns; use Interrupt to stop it.\n"));
 			} else if (resultLine.startsWith("^error") &&
 			           m_inFlight.command.startsWith(QStringLiteral("-exec-"))) {
 				m_stepWatchdog.stop();
