@@ -291,7 +291,7 @@ DebuggerSession::DebuggerSession(QObject* parent)
 			return;
 		emit debuggerOutput(tr(
 		    "Step did not stop within 5 seconds; interrupting the target.\n"));
-		enqueueCommand(QStringLiteral("-exec-interrupt"));
+		enqueueCommand(QStringLiteral("-exec-interrupt --all"));
 	});
 }
 
@@ -437,8 +437,12 @@ void DebuggerSession::startSession(const QString& executablePath)
 	// 1) Load local symbols
 	enqueueCommand(QString("-file-exec-and-symbols \"%1\"").arg(executablePath),
 	               [this](const QString&) {
-		               // 2) Optionally connect to a remote target
-		               if (m_backend == Backend::GdbMi && isRemoteTarget()) {
+			               // 2) Optionally connect to a remote target
+			               if (m_backend == Backend::GdbMi && isRemoteTarget()) {
+				               // Keep the MI command channel responsive while the
+				               // remote inferior is running. This is required for
+				               // pause and watchdog interrupts.
+				               enqueueCommand(QStringLiteral("-gdb-set mi-async on"));
 						   // For ST-Link we connect to localhost:stlinkGdbPort
 						   const QString host = (m_targetType == TargetType::Stlink)
 							   ? QString("localhost")
@@ -555,7 +559,7 @@ void DebuggerSession::interruptExecution()
 	if (!m_targetExecuting)
 		return;
 	m_stepWatchdog.stop();
-	enqueueCommand("-exec-interrupt");
+	enqueueCommand("-exec-interrupt --all");
 }
 
 bool DebuggerSession::canStartExecutionCommand(const QString& command)
