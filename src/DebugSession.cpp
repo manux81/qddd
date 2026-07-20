@@ -447,7 +447,8 @@ void DebuggerSession::startSession(const QString& executablePath)
 				               : QStringLiteral("remote");
 			               enqueueCommand(QString("-target-select %1 %2:%3").arg(mode, host).arg(port),
 			                              [this](const QString& reply) {
-				                              if (reply.contains(QStringLiteral("^done"))) {
+				                              if (reply.contains(QStringLiteral("^done")) ||
+				                                  reply.contains(QStringLiteral("^connected"))) {
 					                              emit targetStarted();
 				                              } else {
 					                              emit targetStartFailed(
@@ -1041,7 +1042,8 @@ void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
 
 		if (resultLine.startsWith("^done") ||
 			resultLine.startsWith("^error") ||
-			resultLine.startsWith("^running")) {
+			resultLine.startsWith("^running") ||
+			resultLine.startsWith("^connected")) {
 
 			// esegui callback del comando (se presente)
 			if (m_inFlight.cb)
