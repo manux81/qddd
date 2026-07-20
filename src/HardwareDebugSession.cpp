@@ -123,6 +123,8 @@ void HardwareDebugSession::startSession(const HardwareDebugConfiguration& config
     // Connect GDB session signals
     connect(m_gdbSession, &DebuggerSession::targetStarted,
             this, &HardwareDebugSession::onGdbTargetStarted, Qt::UniqueConnection);
+    connect(m_gdbSession, &DebuggerSession::targetStartFailed,
+            this, &HardwareDebugSession::onGdbTargetStartFailed, Qt::UniqueConnection);
     connect(m_gdbSession, &DebuggerSession::targetStopped,
             this, &HardwareDebugSession::onGdbTargetStopped, Qt::UniqueConnection);
     connect(m_gdbSession, &DebuggerSession::targetExited,
@@ -152,6 +154,8 @@ void HardwareDebugSession::stopSession()
     if (m_gdbSession) {
         disconnect(m_gdbSession, &DebuggerSession::targetStarted,
                    this, &HardwareDebugSession::onGdbTargetStarted);
+        disconnect(m_gdbSession, &DebuggerSession::targetStartFailed,
+                   this, &HardwareDebugSession::onGdbTargetStartFailed);
         disconnect(m_gdbSession, &DebuggerSession::targetStopped,
                    this, &HardwareDebugSession::onGdbTargetStopped);
         disconnect(m_gdbSession, &DebuggerSession::targetExited,
@@ -288,6 +292,11 @@ void HardwareDebugSession::onGdbTargetStarted()
     emit debugOutput(QStringLiteral("[HARDWARE DEBUG] GDB target started\n"));
     setSessionState(SessionState::GdbConnected);
     executeGdbSequence();
+}
+
+void HardwareDebugSession::onGdbTargetStartFailed(const QString& message)
+{
+    abortSession(message);
 }
 
 void HardwareDebugSession::onGdbTargetStopped()
@@ -442,7 +451,12 @@ void HardwareDebugSession::sendCommand(const QString& cmd,
 
     // Use the existing command queue from DebuggerSession
     // The callback chains into the next sequence step
-    m_gdbSession->sendRawCommand(cmd, [this, cb = std::move(cb)](const QString& reply) {
+    m_gdbSession->sendRawCommand(cmd, [this, cmd, cb = std::move(cb)](const QString& reply) {
+        if (reply.contains(QStringLiteral("^error"))) {
+            abortSession(QStringLiteral("GDB command failed: %1\n%2")
+                         .arg(cmd, reply.trimmed()));
+            return;
+        }
         if (cb)
             cb(reply);
         advanceSequence(reply);

@@ -104,15 +104,23 @@ void GdbServerProcess::start(const HardwareDebugConfiguration& config)
         return;
     }
 
+    // A TCP connect is destructive for single-client probe servers: ST-LINK
+    // accepts it as the debugger and exits when the probe socket closes.  Use
+    // the server's startup banner unless the user supplied another pattern.
+    QString readyPattern = config.readyPattern;
+    if (readyPattern.isEmpty() && config.serverType == HardwareServerType::STLink) {
+        readyPattern = QStringLiteral("Waiting for debugger connection");
+    }
+
     // Prepare ready detection
-    m_usePattern = !config.readyPattern.isEmpty();
+    m_usePattern = !readyPattern.isEmpty();
     m_useTcpProbe = false;
 
     if (m_usePattern) {
-        m_readyRegex = QRegularExpression(config.readyPattern);
+        m_readyRegex = QRegularExpression(readyPattern);
         if (!m_readyRegex.isValid()) {
             qWarning().noquote()
-                << "[GDB SERVER] Invalid ready pattern:" << config.readyPattern
+                << "[GDB SERVER] Invalid ready pattern:" << readyPattern
                 << "- falling back to TCP probe";
             m_usePattern = false;
             m_useTcpProbe = true;

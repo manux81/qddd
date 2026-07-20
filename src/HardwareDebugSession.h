@@ -106,6 +106,7 @@ private slots:
     void onServerFinished(int exitCode, QProcess::ExitStatus status);
 
     void onGdbTargetStarted();
+    void onGdbTargetStartFailed(const QString& message);
     void onGdbTargetStopped();
     void onGdbTargetExited(int exitCode);
 

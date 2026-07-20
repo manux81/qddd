@@ -246,6 +246,7 @@ public:
 signals:
 	void targetRunning();
 	void targetStarted();
+	void targetStartFailed(const QString& message);
 	void targetStopped();
 	void targetExited(int exitCode);
 	void stoppedAt(const QString& file, int line, const QString& function);
