@@ -125,7 +125,7 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 			        m_aiAssistant->setLastStopLocation(file, line, function);
 	        });
 
-	if (!m_currentProgram.isEmpty()) {
+	if (!initialProgram.isEmpty()) {
 		// A program supplied on the command line must retain the pre-selector
 		// launch semantics, regardless of the last manual hardware choice.
 		const int automaticIndex = m_targetSelector->findData(kAutomaticTarget);
