@@ -564,10 +564,14 @@ void DebuggerSession::interruptExecution()
 
 bool DebuggerSession::canStartExecutionCommand(const QString& command)
 {
-	if (!m_targetExecuting)
-		return true;
-	emit debuggerOutput(tr("%1 ignored: the target is already running.\n").arg(command));
-	return false;
+	if (m_targetExecuting) {
+		emit debuggerOutput(tr("%1 ignored: the target is already running.\n").arg(command));
+		return false;
+	}
+	// Reserve the execution state before queuing the MI command. Waiting for
+	// ^running leaves a window where rapid clicks can enqueue multiple steps.
+	m_targetExecuting = true;
+	return true;
 }
 void DebuggerSession::reverseContinueExecution() { executeReverseCommand("-exec-continue --reverse"); }
 void DebuggerSession::reverseStepInto()          { executeReverseCommand("-exec-step --reverse"); }
@@ -576,6 +580,8 @@ void DebuggerSession::reverseStepOver()          { executeReverseCommand("-exec-
 void DebuggerSession::executeReverseCommand(const QString& command)
 {
 	if (!supportsReverseExecution() || command.isEmpty())
+		return;
+	if (!canStartExecutionCommand(tr("Reverse execution")))
 		return;
 
 	m_replayDirection = ReplayDirection::Backward;
