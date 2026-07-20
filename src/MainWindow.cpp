@@ -555,6 +555,27 @@ void MainWindow::setupMenusAndToolbars() {
 	connect(downAct, &QAction::triggered, this, &MainWindow::down);
 	connect(toggleBpAct, &QAction::triggered, this, &MainWindow::toggleBp);
 
+	// Mirror the target state in the command UI, as mature MI frontends do:
+	// execution controls are available only while stopped, and Interrupt only
+	// while running. The backend guard remains as protection against races.
+	auto setTargetRunningUi = [runAct, contAct, stepInAct, stepOverAct,
+	                           stepOutAct, untilAct, interruptAct](bool running) {
+		runAct->setEnabled(!running);
+		contAct->setEnabled(!running);
+		stepInAct->setEnabled(!running);
+		stepOverAct->setEnabled(!running);
+		stepOutAct->setEnabled(!running);
+		untilAct->setEnabled(!running);
+		interruptAct->setEnabled(running);
+	};
+	setTargetRunningUi(false);
+	connect(m_session.get(), &DebuggerSession::targetRunning, this,
+	        [setTargetRunningUi] { setTargetRunningUi(true); });
+	connect(m_session.get(), &DebuggerSession::targetStopped, this,
+	        [setTargetRunningUi] { setTargetRunningUi(false); });
+	connect(m_session.get(), &DebuggerSession::targetExited, this,
+	        [setTargetRunningUi](int) { setTargetRunningUi(false); });
+
 	QMenu *commandsMenu = menuBar()->addMenu(tr("&Commands"));
 	commandsMenu->addAction(tr("Command History"));
 	commandsMenu->addAction(tr("Previous"));
