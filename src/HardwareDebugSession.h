@@ -110,8 +110,6 @@ private slots:
     void onGdbTargetStopped();
     void onGdbTargetExited(int exitCode);
 
-    void onGdbOutput(const QString& text);
-
     // GDB/MI sequence steps
     void stepLoadSymbols(const QString&);
     void stepPreConnect(const QString&);
