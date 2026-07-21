@@ -53,10 +53,11 @@ class VariablesView : public QTreeView {
   private:
 	void addNode(QStandardItem *parent,
 	             DebugVariable *node);
+	void commitValue(QStandardItem *item);
 
 	QStandardItemModel *m_model;
 	DebuggerSession *m_session = nullptr;
+	bool m_refreshing = false;
 };
-
 
 

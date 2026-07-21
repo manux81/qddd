@@ -265,7 +265,10 @@ static void expandInlineStructIntoChildren(
 QString DebugVariable::fullPath() const
 {
     if (!parent) return name;
-    return parent->fullPath() + "." + name;
+	const QString parentPath = parent->fullPath();
+	return name.startsWith('[')
+		? parentPath + name
+		: parentPath + "." + name;
 }
 
 // ============================================================================
@@ -1698,20 +1701,39 @@ void DebuggerSession::setVariable(const QString& fullPath,
 
 	const QString expr =
 		QString("%1 = %2").arg(fullPath, newValue);
+	auto refreshOnSuccess = [this, fullPath, newValue](const QString& reply) {
+		if (reply.contains("^error")) {
+			const QString message = miGet(reply, QStringLiteral("msg"));
+			emit debuggerOutput(tr("Unable to set %1 to %2: %3\n")
+				.arg(fullPath, newValue,
+				     message.isEmpty() ? reply.trimmed() : message));
+			return;
+		}
+
+		emit debuggerOutput(tr("Set %1 = %2\n").arg(fullPath, newValue));
+		requestStopState();
+	};
 
 	enqueueCommand(
-		QString("-data-evaluate-expression \"%1\"").arg(expr),
-		[this, fullPath, newValue](const QString& reply) {
-
-			if (reply.contains("^error")) {
-				qWarning().noquote()
-					<< "[SET VAR FAILED]"
-					<< fullPath << "=" << newValue
-					<< "\n" << reply;
+		QString("-data-evaluate-expression %1").arg(miQuote(expr)),
+		[this, fullPath, newValue, refreshOnSuccess](const QString& reply) {
+			if (!reply.contains("^error")) {
+				refreshOnSuccess(reply);
 				return;
 			}
 
-			requestStopState();
+			// Some GDB targets reject assignments through
+			// -data-evaluate-expression but accept the equivalent console command.
+			if (m_backend == Backend::GdbMi) {
+				const QString consoleCommand =
+					QString("set variable %1 = %2").arg(fullPath, newValue);
+				enqueueCommand(
+					QString("-interpreter-exec console %1").arg(miQuote(consoleCommand)),
+					refreshOnSuccess);
+				return;
+			}
+
+			refreshOnSuccess(reply);
 		}
 	);
 }

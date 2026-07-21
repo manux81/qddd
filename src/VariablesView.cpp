@@ -47,6 +47,8 @@ static constexpr int WatchRole = Qt::UserRole + 2;
 
 namespace {
 
+constexpr int VariablePathRole = Qt::UserRole + 3;
+
 QStringList splitTopLevel(const QString &s) {
 	QStringList result;
 	QString current;
@@ -171,7 +173,20 @@ QString itemPath(QStandardItem *item) {
 		parts.prepend(item->text());
 		item = item->parent();
 	}
-	return parts.join(".");
+	QString path;
+	for (const QString& part : parts) {
+		if (path.isEmpty() || part.startsWith('['))
+			path += part;
+		else
+			path += "." + part;
+	}
+	return path;
+}
+
+QString childPath(const QString& parentPath, const QString& childName) {
+	return childName.startsWith('[')
+		? parentPath + childName
+		: parentPath + "." + childName;
 }
 
 } // namespace
@@ -241,6 +256,8 @@ VariablesView::VariablesView(QWidget *parent)
 	              "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }");
 
 	setItemDelegateForColumn(1, new ValueDelegate(this));
+	connect(m_model, &QStandardItemModel::itemChanged,
+	        this, &VariablesView::commitValue);
 	setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(this, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
 		const QModelIndex index = indexAt(pos);
@@ -299,10 +316,12 @@ void VariablesView::refresh()
         save(m_model->item(i));
 
 
-    clearVariables();
+	m_refreshing = true;
+	clearVariables();
 
 	for (const auto& n : m_session->variables())
     	addNode(nullptr, n.get());
+	m_refreshing = false;
 
 
 
@@ -335,10 +354,13 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 	nameItem->setEditable(false);
 
 	const QString path = parent
-		? itemPath(parent) + "." + node->name
+		? childPath(itemPath(parent), node->name)
 		: node->name;
 
 	const bool isLeafValue = node->children.empty();
+	valueItem->setEditable(isLeafValue);
+	if (isLeafValue)
+		valueItem->setData(path, VariablePathRole);
 
 	const bool nodeChanged =
 		isLeafValue &&
@@ -374,6 +396,8 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 	if (!cur.startsWith('{') || !cur.endsWith('}'))
 		return;
 
+	valueItem->setEditable(false);
+	valueItem->setData(QVariant(), VariablePathRole);
 	valueItem->setText("[ ]");
 	valueItem->setForeground(QColor(160, 160, 160));
 
@@ -415,6 +439,8 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 		auto *cv = new QStandardItem(it.value());
 
 		cn->setIcon(iconForType(VarVisualType::Scalar));
+		cn->setEditable(false);
+		cv->setData(childPath(path, it.key()), VariablePathRole);
 
 		const bool fieldChanged =
 			prevFields.contains(it.key()) &&
@@ -424,4 +450,16 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 
 		nameItem->appendRow({ cn, cv });
 	}
+}
+
+void VariablesView::commitValue(QStandardItem *item)
+{
+	if (m_refreshing || !m_session || !item || item->column() != 1)
+		return;
+
+	const QString path = item->data(VariablePathRole).toString();
+	if (path.isEmpty())
+		return;
+
+	m_session->setVariable(path, item->text());
 }
