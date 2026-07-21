@@ -30,6 +30,7 @@
  */
 
 #include "SourceEditor.h"
+#include "CodeHighlighter.h"
 #include <QFileInfo>
 #include <QFile>
 #include <QPainter>
@@ -342,6 +343,9 @@ SourceEditor::SourceEditor(QWidget *parent)
 				m_hoverHint->show();
 			});
 	});
+
+	// Attach syntax highlighter to this editor's document
+	new CodeHighlighter(document());
 
 	highlightCurrentLine();
 }
