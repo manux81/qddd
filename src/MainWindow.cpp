@@ -59,6 +59,7 @@
 #include "DebugAssistantDock.h"
 #include "HardwareDebugSession.h"
 #include "HardwareServerConfig.h"
+#include "SourceBrowserDialog.h"
 
 namespace {
 constexpr int kAutomaticTarget = -3;
@@ -471,10 +472,53 @@ void MainWindow::showSourceLocation(const QString& file, int line)
 	editor->setCurrentPC(line);
 }
 
+QString MainWindow::sourceProjectRoot() const
+{
+	QString startPath;
+	if (!m_currentProgram.isEmpty())
+		startPath = QFileInfo(m_currentProgram).absolutePath();
+	if (startPath.isEmpty() && currentSourceEditor())
+		startPath = QFileInfo(currentSourceEditor()->property("currentFile").toString()).absolutePath();
+	if (startPath.isEmpty())
+		return QDir::homePath();
+
+	QDir candidate(startPath);
+	const QString fallback = candidate.absolutePath();
+	for (int level = 0; level < 12; ++level) {
+		if (candidate.exists(QStringLiteral("nbproject")) ||
+		    candidate.exists(QStringLiteral(".git")) ||
+		    candidate.exists(QStringLiteral("CMakeLists.txt")))
+			return candidate.absolutePath();
+		if (!candidate.cdUp())
+			break;
+	}
+	return fallback;
+}
+
+void MainWindow::browseProjectSources()
+{
+	SourceBrowserDialog dialog(sourceProjectRoot(), this);
+	if (dialog.exec() != QDialog::Accepted)
+		return;
+	const QString file = dialog.selectedFile();
+	SourceEditor* editor = ensureSourceTabForFile(file);
+	if (!editor)
+		return;
+	editor->showLocation(file, 1);
+	editor->setCurrentPC(-1);
+	const int index = m_sourceTabs ? m_sourceTabs->indexOf(editor) : -1;
+	if (index >= 0)
+		m_sourceTabs->setCurrentIndex(index);
+}
+
 void MainWindow::setupMenusAndToolbars() {
 	QMenu *fileMenu = menuBar()->addMenu(tr("&File"));
 	QAction *openAct = fileMenu->addAction(tr("Open Program..."));
 	connect(openAct, &QAction::triggered, this, &MainWindow::openProgram);
+	QAction *browseSourcesAct = fileMenu->addAction(tr("Browse Project Sources..."));
+	browseSourcesAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_P));
+	connect(browseSourcesAct, &QAction::triggered,
+	        this, &MainWindow::browseProjectSources);
 	QAction *settingsAct = fileMenu->addAction(tr("Settings..."));
 	settingsAct->setShortcut(QKeySequence::Preferences);
 	connect(settingsAct, &QAction::triggered, this, &MainWindow::openSettings);

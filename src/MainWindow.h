@@ -72,6 +72,7 @@ class MainWindow : public QMainWindow {
 
   private slots:
 	void openProgram();
+	void browseProjectSources();
 	void openSettings();
 	void selectGdbExecutable();
 	void runProgram();
@@ -101,6 +102,7 @@ class MainWindow : public QMainWindow {
 	void showSourceLocation(const QString& file, int line);
 	void wireSourceEditor(SourceEditor* editor);
 	void positionCommandOverlay();
+	QString sourceProjectRoot() const;
 
 	std::unique_ptr<DebuggerSession> m_session;
 	std::unique_ptr<HardwareDebugSession> m_hardwareSession;

@@ -10,6 +10,8 @@ add_executable(qddd
     DebugSession.h
     SourceEditor.cpp
     SourceEditor.h
+    SourceBrowserDialog.cpp
+    SourceBrowserDialog.h
     CodeHighlighter.cpp
     CodeHighlighter.h
     VariablesView.cpp
