@@ -615,6 +615,17 @@ void MainWindow::setupMenusAndToolbars() {
 	        [setTargetRunningUi] { setTargetRunningUi(false); });
 	connect(m_session.get(), &DebuggerSession::targetExited, this,
 	        [setTargetRunningUi](int) { setTargetRunningUi(false); });
+	connect(m_hardwareSession.get(), &HardwareDebugSession::sessionStateChanged, this,
+	        [this, setTargetRunningUi](HardwareDebugSession::SessionState state) {
+		        const bool running = state == HardwareDebugSession::SessionState::Running;
+		        setTargetRunningUi(running);
+		        if (running && m_sourceTabs) {
+			        for (int i = 0; i < m_sourceTabs->count(); ++i) {
+				        if (auto* editor = qobject_cast<SourceEditor*>(m_sourceTabs->widget(i)))
+					        editor->setCurrentPC(-1);
+			        }
+		        }
+	        });
 
 	QMenu *commandsMenu = menuBar()->addMenu(tr("&Commands"));
 	commandsMenu->addAction(tr("Command History"));
