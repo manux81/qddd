@@ -85,8 +85,8 @@ int main(int argc, char** argv)
     const QStringList expected = {
         QStringLiteral("ack:device dsPIC33CK256MP506"),
         QStringLiteral("ack:hwtool PICKitBasic"),
-        QStringLiteral("ack:reset"),
         QStringLiteral("ack:program \"firmware.elf\""),
+        QStringLiteral("ack:reset"),
         QStringLiteral("ack:break main")
     };
     int position = -1;

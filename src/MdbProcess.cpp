@@ -114,14 +114,16 @@ void MdbProcess::queueBootstrapCommands()
         m_commands.enqueue(command);
     for (const QString& command : m_config.postConnectCommands)
         m_commands.enqueue(command);
-    if (m_config.resetBeforeLoad)
-        m_commands.enqueue(QStringLiteral("reset"));
     for (const QString& command : m_config.preLoadCommands)
         m_commands.enqueue(command);
     if (m_config.loadImage && !m_config.programImage.isEmpty())
         m_commands.enqueue(QStringLiteral("program %1").arg(quotedMdbPath(m_config.programImage)));
     for (const QString& command : m_config.postLoadCommands)
         m_commands.enqueue(command);
+    // A blank or production-programmed dsPIC may not have a usable debug
+    // executive yet. MDB must program the debug image before reset can work.
+    if (m_config.resetBeforeLoad)
+        m_commands.enqueue(QStringLiteral("reset"));
     if (!m_config.initialBreakpoint.isEmpty())
         m_commands.enqueue(QStringLiteral("break %1").arg(m_config.initialBreakpoint));
     if (m_config.runAfterLoad)
@@ -193,6 +195,8 @@ void MdbProcess::onOutput()
         const bool commandFailed = !m_currentCommand.isEmpty() &&
             (m_outputBuffer.contains(QStringLiteral("Program failed"), Qt::CaseInsensitive) ||
              m_outputBuffer.contains(QStringLiteral("in use by another MPLAB client"), Qt::CaseInsensitive) ||
+             m_outputBuffer.contains(QStringLiteral("Fatal error"), Qt::CaseInsensitive) ||
+             m_outputBuffer.contains(QStringLiteral("Failed to reset"), Qt::CaseInsensitive) ||
              m_outputBuffer.contains(QStringLiteral("Failed to connect"), Qt::CaseInsensitive) ||
              m_outputBuffer.contains(QStringLiteral("Connection failed"), Qt::CaseInsensitive));
         if (commandFailed) {
