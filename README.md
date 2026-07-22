@@ -96,6 +96,20 @@ qddd can connect to a remote target through GDB using `-target-select remote hos
   - `JLinkGDBServer -if SWD -speed auto -port 2331 -device <MCU>`
 - Open your local ELF (`File → Open Program…`) to load symbols, then `Run` to continue execution on the target.
 
+### MPLAB PICkit Basic / dsPIC
+
+Hardware Debug profiles also support the MPLAB MDB command-line debugger used
+by PICkit Basic and dsPIC targets. Select `MPLAB MDB / PICkit Basic`, then set:
+
+- the `mdb.sh` (`mdb.bat` on Windows) executable installed with MPLAB X;
+- the exact dsPIC device name;
+- the hardware tool (`PICKitBasic` or `PICkit5`);
+- an optional probe serial number and the XC16 ELF image.
+
+QDDD launches MDB directly and maps Run, Continue, Halt, Step Into and Step Over
+to documented MDB commands. The dsPIC target must use external power because
+PICkit Basic does not power it.
+
 ---
 
 ## 🚀 Build & Run

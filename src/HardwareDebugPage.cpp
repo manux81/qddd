@@ -141,6 +141,7 @@ void HardwareDebugPage::setupUi()
     m_serverTypeCombo->addItem(tr("Generic GDB Server"), "generic");
     m_serverTypeCombo->addItem(tr("ST-LINK"), "stlink");
     m_serverTypeCombo->addItem(tr("J-Link"), "jlink");
+    m_serverTypeCombo->addItem(tr("MPLAB MDB / PICkit Basic"), "mplab-mdb");
     connect(m_serverTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &HardwareDebugPage::onServerTypeChanged);
     generalForm->addRow(tr("Server type:"), m_serverTypeCombo);
@@ -355,6 +356,35 @@ void HardwareDebugPage::setupUi()
 
     m_jlinkGroup->setVisible(false);
     scrollLayout->addWidget(m_jlinkGroup);
+
+    // ================================================================
+    // MPLAB MDB / PICkit Basic specific settings
+    // ================================================================
+    m_mplabGroup = new QGroupBox(tr("MPLAB MDB / PICkit Basic"), scrollContent);
+    auto* mplabForm = new QFormLayout(m_mplabGroup);
+
+    auto* mplabInfo = new QLabel(
+        tr("MDB is installed with MPLAB X. The target must be externally powered; PICkit Basic cannot power it."),
+        m_mplabGroup);
+    mplabInfo->setWordWrap(true);
+    mplabForm->addRow(mplabInfo);
+
+    m_mplabDeviceEdit = new QLineEdit(m_mplabGroup);
+    m_mplabDeviceEdit->setPlaceholderText(tr("e.g., dsPIC33CK256MP506"));
+    mplabForm->addRow(tr("Device:"), m_mplabDeviceEdit);
+
+    m_mplabToolCombo = new QComboBox(m_mplabGroup);
+    m_mplabToolCombo->setEditable(true);
+    m_mplabToolCombo->addItem(tr("PICkit Basic"), QStringLiteral("PICKitBasic"));
+    m_mplabToolCombo->addItem(tr("PICkit 5"), QStringLiteral("PICkit5"));
+    mplabForm->addRow(tr("Hardware tool:"), m_mplabToolCombo);
+
+    m_mplabSerialEdit = new QLineEdit(m_mplabGroup);
+    m_mplabSerialEdit->setPlaceholderText(tr("Optional probe serial number"));
+    mplabForm->addRow(tr("Serial number:"), m_mplabSerialEdit);
+
+    m_mplabGroup->setVisible(false);
+    scrollLayout->addWidget(m_mplabGroup);
 
     // ================================================================
     // Custom commands
@@ -614,6 +644,12 @@ void HardwareDebugPage::saveCurrentToConfig()
     cfg.jlinkTelnetPort = m_jlinkTelnetPortSpin->value();
     cfg.jlinkSerialNumber = m_jlinkSerialEdit->text().trimmed();
     cfg.jlinkEndianess = m_jlinkEndianCombo->currentData().toString();
+
+    cfg.mplabDevice = m_mplabDeviceEdit->text().trimmed();
+    cfg.mplabTool = m_mplabToolCombo->currentData().toString();
+    if (m_mplabToolCombo->currentIndex() < 0 || cfg.mplabTool.isEmpty())
+        cfg.mplabTool = m_mplabToolCombo->currentText().trimmed();
+    cfg.mplabToolSerialNumber = m_mplabSerialEdit->text().trimmed();
 }
 
 void HardwareDebugPage::loadConfigToUi(int index)
@@ -669,6 +705,13 @@ void HardwareDebugPage::loadConfigToUi(int index)
     m_jlinkSerialEdit->setText(cfg.jlinkSerialNumber);
     const int endIdx = m_jlinkEndianCombo->findData(cfg.jlinkEndianess);
     m_jlinkEndianCombo->setCurrentIndex(endIdx >= 0 ? endIdx : 0);
+    m_mplabDeviceEdit->setText(cfg.mplabDevice);
+    const int toolIdx = m_mplabToolCombo->findData(cfg.mplabTool);
+    if (toolIdx >= 0)
+        m_mplabToolCombo->setCurrentIndex(toolIdx);
+    else
+        m_mplabToolCombo->setEditText(cfg.mplabTool);
+    m_mplabSerialEdit->setText(cfg.mplabToolSerialNumber);
     m_loadingUi = false;
 }
 
@@ -687,6 +730,13 @@ void HardwareDebugPage::updateServerTypeSpecificFields()
 
     m_stlinkGroup->setVisible(type == HardwareServerType::STLink);
     m_jlinkGroup->setVisible(type == HardwareServerType::JLink);
+    m_mplabGroup->setVisible(type == HardwareServerType::MplabMdb);
+
+    const bool usesGdb = type != HardwareServerType::MplabMdb;
+    m_gdbPathEdit->setEnabled(usesGdb);
+    m_hostEdit->setEnabled(usesGdb);
+    m_portSpin->setEnabled(usesGdb);
+    m_readyPatternEdit->setEnabled(usesGdb);
 }
 
 void HardwareDebugPage::updateCommandPreview()
@@ -704,15 +754,22 @@ void HardwareDebugPage::updateCommandPreview()
     HardwareDebugConfiguration cfg = m_configManager.configurations[idx];
 
     QString preview;
-    preview += QStringLiteral("Server executable:\n  %1\n\n").arg(cfg.serverExecutable);
+    preview += (cfg.serverType == HardwareServerType::MplabMdb
+        ? QStringLiteral("MDB executable:\n  %1\n\n")
+        : QStringLiteral("Server executable:\n  %1\n\n")).arg(cfg.serverExecutable);
     preview += QStringLiteral("Arguments:\n");
     const QStringList args = cfg.generateServerArguments();
     for (const auto& arg : args) {
         preview += QStringLiteral("  %1\n").arg(arg);
     }
-    preview += QStringLiteral("\nHost: %1\n").arg(cfg.host);
-    preview += QStringLiteral("Port: %1\n\n").arg(cfg.port);
-    preview += QStringLiteral("GDB executable:\n  %1\n\n").arg(cfg.gdbExecutable);
+    if (cfg.serverType == HardwareServerType::MplabMdb) {
+        preview += QStringLiteral("\nDevice: %1\nTool: %2\n")
+            .arg(cfg.mplabDevice, cfg.mplabTool);
+    } else {
+        preview += QStringLiteral("\nHost: %1\n").arg(cfg.host);
+        preview += QStringLiteral("Port: %1\n\n").arg(cfg.port);
+        preview += QStringLiteral("GDB executable:\n  %1\n\n").arg(cfg.gdbExecutable);
+    }
     if (!cfg.workingDirectory.isEmpty()) {
         preview += QStringLiteral("Working directory:\n  %1\n\n").arg(cfg.workingDirectory);
     }
@@ -824,6 +881,21 @@ void HardwareDebugPage::onTestConfig()
         m_testStatusLabel->setText(
             QStringLiteral("<span style='color:orange'>Server executable is not executable:</span><br>%1")
             .arg(cfg.serverExecutable));
+        return;
+    }
+
+    if (cfg.serverType == HardwareServerType::MplabMdb) {
+        cfg.serverExecutable = resolvedServer;
+        const auto validation = cfg.validate();
+        if (!validation.valid) {
+            m_testStatusLabel->setText(
+                QStringLiteral("<span style='color:red'>%1</span>")
+                    .arg(validation.errors.join(QStringLiteral("<br>"))));
+            return;
+        }
+        m_testStatusLabel->setText(
+            tr("<span style='color:green'>MDB launcher found.</span><br>Device: %1<br>Tool: %2")
+                .arg(cfg.mplabDevice, cfg.mplabTool));
         return;
     }
 

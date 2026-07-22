@@ -98,6 +98,9 @@ void HardwareDebugConfiguration::save(QSettings& s, const QString& prefix) const
     s.setValue(cfgKey(prefix, "jlinkTelnetPort"), jlinkTelnetPort);
     s.setValue(cfgKey(prefix, "jlinkSerialNumber"), jlinkSerialNumber);
     s.setValue(cfgKey(prefix, "jlinkEndianess"), jlinkEndianess);
+    s.setValue(cfgKey(prefix, "mplabDevice"), mplabDevice);
+    s.setValue(cfgKey(prefix, "mplabTool"), mplabTool);
+    s.setValue(cfgKey(prefix, "mplabToolSerialNumber"), mplabToolSerialNumber);
 }
 
 void HardwareDebugConfiguration::load(const QSettings& s, const QString& prefix)
@@ -137,6 +140,9 @@ void HardwareDebugConfiguration::load(const QSettings& s, const QString& prefix)
     jlinkTelnetPort = s.value(cfgKey(prefix, "jlinkTelnetPort"), jlinkTelnetPort).toInt();
     jlinkSerialNumber = s.value(cfgKey(prefix, "jlinkSerialNumber")).toString();
     jlinkEndianess = s.value(cfgKey(prefix, "jlinkEndianess")).toString();
+    mplabDevice = s.value(cfgKey(prefix, "mplabDevice"), mplabDevice).toString();
+    mplabTool = s.value(cfgKey(prefix, "mplabTool"), mplabTool).toString();
+    mplabToolSerialNumber = s.value(cfgKey(prefix, "mplabToolSerialNumber")).toString();
 }
 
 // ============================================================================
@@ -148,7 +154,7 @@ HardwareDebugConfiguration::ValidationResult HardwareDebugConfiguration::validat
     ValidationResult r;
 
     // GDB executable - warn if missing but don't block (user may install later)
-    if (gdbExecutable.isEmpty()) {
+    if (serverType != HardwareServerType::MplabMdb && gdbExecutable.isEmpty()) {
         r.errors << QStringLiteral("GDB executable path is empty.");
         r.valid = false;
     }
@@ -168,14 +174,14 @@ HardwareDebugConfiguration::ValidationResult HardwareDebugConfiguration::validat
         }
     }
 
-    // Port
-    if (port == 0) {
+    // MDB talks directly to the probe and does not use a TCP endpoint.
+    if (serverType != HardwareServerType::MplabMdb && port == 0) {
         r.errors << QStringLiteral("Port must be a positive value.");
         r.valid = false;
     }
 
     // Host
-    if (host.trimmed().isEmpty()) {
+    if (serverType != HardwareServerType::MplabMdb && host.trimmed().isEmpty()) {
         r.errors << QStringLiteral("Host cannot be empty.");
         r.valid = false;
     }
@@ -221,6 +227,17 @@ HardwareDebugConfiguration::ValidationResult HardwareDebugConfiguration::validat
     if (serverType == HardwareServerType::JLink) {
         if (jlinkDevice.trimmed().isEmpty()) {
             r.errors << QStringLiteral("J-Link device name is required.");
+            r.valid = false;
+        }
+    }
+
+    if (serverType == HardwareServerType::MplabMdb) {
+        if (mplabDevice.trimmed().isEmpty()) {
+            r.errors << QStringLiteral("MPLAB device name is required (for example dsPIC33CK256MP506).");
+            r.valid = false;
+        }
+        if (mplabTool.trimmed().isEmpty()) {
+            r.errors << QStringLiteral("MPLAB hardware tool name is required.");
             r.valid = false;
         }
     }
@@ -311,6 +328,7 @@ QStringList HardwareDebugConfiguration::generateServerArguments() const
             return args;
         }
     case HardwareServerType::Generic:
+    case HardwareServerType::MplabMdb:
     default:
         return serverArguments;
     }
@@ -353,6 +371,9 @@ HardwareDebugConfiguration HardwareDebugConfiguration::defaultConfig()
     cfg.jlinkTelnetPort = 0;
     cfg.jlinkSerialNumber.clear();
     cfg.jlinkEndianess.clear();
+    cfg.mplabDevice.clear();
+    cfg.mplabTool = QStringLiteral("PICKitBasic");
+    cfg.mplabToolSerialNumber.clear();
     return cfg;
 }
 

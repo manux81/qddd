@@ -151,6 +151,12 @@ private:
     QLineEdit* m_jlinkSerialEdit = nullptr;
     QComboBox* m_jlinkEndianCombo = nullptr;
 
+    // MPLAB MDB / PICkit Basic specific
+    QGroupBox* m_mplabGroup = nullptr;
+    QLineEdit* m_mplabDeviceEdit = nullptr;
+    QComboBox* m_mplabToolCombo = nullptr;
+    QLineEdit* m_mplabSerialEdit = nullptr;
+
     // Command preview
     QLabel* m_commandPreview = nullptr;
 

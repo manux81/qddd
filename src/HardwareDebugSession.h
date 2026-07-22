@@ -39,6 +39,7 @@
 #include "HardwareServerConfig.h"
 #include "GdbServerProcess.h"
 #include "DebugSession.h" // Includes DebuggerSession
+#include "MdbProcess.h"
 
 // ============================================================================
 // Hardware debug session orchestrator
@@ -89,6 +90,14 @@ public:
 
     // Generation counter for session identity
     [[nodiscard]] int generation() const { return m_generation; }
+    [[nodiscard]] bool usesMdb() const { return m_config.serverType == HardwareServerType::MplabMdb; }
+    [[nodiscard]] bool isActive() const;
+    void runTarget();
+    void continueTarget();
+    void haltTarget();
+    void stepIntoTarget();
+    void stepOverTarget();
+    void stepOutTarget();
 
 signals:
     void sessionStateChanged(HardwareDebugSession::SessionState newState);
@@ -139,6 +148,7 @@ private:
 
     // Owned server process
     std::unique_ptr<GdbServerProcess> m_serverProcess;
+    std::unique_ptr<MdbProcess> m_mdbProcess;
 
     // Reference to existing GDB session (not owned)
     DebuggerSession* m_gdbSession = nullptr;

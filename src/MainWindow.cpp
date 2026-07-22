@@ -551,8 +551,7 @@ void MainWindow::setupMenusAndToolbars() {
 	upAct->setIcon(QIcon(":/icons/resources/icons/stack-up.svg"));
 	downAct->setIcon(QIcon(":/icons/resources/icons/stack-down.svg"));
 
-	connect(interruptAct, &QAction::triggered, this,
-			[this] { m_session->interruptExecution(); });
+	connect(interruptAct, &QAction::triggered, this, &MainWindow::interrupt);
 
 	connect(untilAct, &QAction::triggered, this, [this] {
 		QString file;
@@ -1034,7 +1033,9 @@ void MainWindow::runProgram() {
 	const int selectedTarget = m_targetSelector
 		? m_targetSelector->currentData().toInt()
 		: kAutomaticTarget;
-	if (selectedTarget != m_activeTargetId || !m_session->isRunning()) {
+	const bool hardwareActive = selectedTarget >= 0 && m_hardwareSession &&
+	                            m_hardwareSession->isActive();
+	if (selectedTarget != m_activeTargetId || (!m_session->isRunning() && !hardwareActive)) {
 		m_runAfterSessionStart = true;
 		startDebugger(m_currentProgram);
 		return;
@@ -1045,18 +1046,36 @@ void MainWindow::runProgram() {
 		m_breakOnMainInserted = true;
 	}
 
-	m_session->run();
+	if (hardwareActive)
+		m_hardwareSession->runTarget();
+	else
+		m_session->run();
 }
 
-void MainWindow::continueProgram() { m_session->continueExecution(); }
+void MainWindow::continueProgram() {
+	if (m_hardwareSession && m_hardwareSession->isActive()) m_hardwareSession->continueTarget();
+	else m_session->continueExecution();
+}
 
-void MainWindow::stepInto() { m_session->stepInto(); }
+void MainWindow::stepInto() {
+	if (m_hardwareSession && m_hardwareSession->isActive()) m_hardwareSession->stepIntoTarget();
+	else m_session->stepInto();
+}
 
-void MainWindow::stepOver() { m_session->stepOver(); }
+void MainWindow::stepOver() {
+	if (m_hardwareSession && m_hardwareSession->isActive()) m_hardwareSession->stepOverTarget();
+	else m_session->stepOver();
+}
 
-void MainWindow::stepOut() { m_session->stepOut(); }
+void MainWindow::stepOut() {
+	if (m_hardwareSession && m_hardwareSession->isActive()) m_hardwareSession->stepOutTarget();
+	else m_session->stepOut();
+}
 
-void MainWindow::interrupt() { m_session->interruptExecution(); };
+void MainWindow::interrupt() {
+	if (m_hardwareSession && m_hardwareSession->isActive()) m_hardwareSession->haltTarget();
+	else m_session->interruptExecution();
+};
 
 
 void MainWindow::up() {};

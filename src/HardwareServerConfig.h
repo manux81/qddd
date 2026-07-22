@@ -44,7 +44,8 @@
 enum class HardwareServerType {
     Generic,
     STLink,
-    JLink
+    JLink,
+    MplabMdb
 };
 
 // ============================================================================
@@ -113,6 +114,11 @@ struct HardwareDebugConfiguration
     int jlinkTelnetPort = 0;
     QString jlinkSerialNumber;
     QString jlinkEndianess;
+
+    // --- MPLAB MDB / PICkit specific fields ---
+    QString mplabDevice;
+    QString mplabTool = QStringLiteral("PICKitBasic");
+    QString mplabToolSerialNumber;
 
     // Serialization
     void save(QSettings& s, const QString& prefix = QString()) const;

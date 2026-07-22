@@ -55,9 +55,72 @@ HardwareDebugSession::HardwareDebugSession(QObject* parent)
             this, &HardwareDebugSession::onServerOutput);
     connect(m_serverProcess.get(), &GdbServerProcess::finished,
             this, &HardwareDebugSession::onServerFinished);
+
+    m_mdbProcess = std::make_unique<MdbProcess>(this);
+    connect(m_mdbProcess.get(), &MdbProcess::outputReceived,
+            this, &HardwareDebugSession::onServerOutput);
+    connect(m_mdbProcess.get(), &MdbProcess::errorOccurred,
+            this, &HardwareDebugSession::onServerError);
+    connect(m_mdbProcess.get(), &MdbProcess::ready, this, [this] {
+        emit debugOutput(QStringLiteral("[HARDWARE DEBUG] MPLAB MDB session ready\n"));
+        setSessionState(m_config.runAfterLoad ? SessionState::Running : SessionState::TargetReady);
+        emit sessionStarted();
+    });
+    connect(m_mdbProcess.get(), &MdbProcess::finished, this,
+            [this](int exitCode, QProcess::ExitStatus) {
+        if (m_sessionState != SessionState::Disconnecting &&
+            m_sessionState != SessionState::Idle &&
+            m_sessionState != SessionState::Error) {
+            abortSession(QStringLiteral("MDB finished unexpectedly (exit code %1)").arg(exitCode));
+        }
+    });
 }
 
 HardwareDebugSession::~HardwareDebugSession() = default;
+
+bool HardwareDebugSession::isActive() const
+{
+    return m_sessionState != SessionState::Idle &&
+           m_sessionState != SessionState::Error &&
+           m_sessionState != SessionState::ConfigInvalid;
+}
+
+void HardwareDebugSession::runTarget()
+{
+    if (usesMdb()) { m_mdbProcess->sendCommand(QStringLiteral("run")); setSessionState(SessionState::Running); }
+    else if (m_gdbSession) m_gdbSession->run();
+}
+
+void HardwareDebugSession::continueTarget()
+{
+    if (usesMdb()) { m_mdbProcess->sendCommand(QStringLiteral("continue")); setSessionState(SessionState::Running); }
+    else if (m_gdbSession) m_gdbSession->continueExecution();
+}
+
+void HardwareDebugSession::haltTarget()
+{
+    if (usesMdb()) { m_mdbProcess->sendCommand(QStringLiteral("halt")); setSessionState(SessionState::TargetHalted); }
+    else if (m_gdbSession) m_gdbSession->interruptExecution();
+}
+
+void HardwareDebugSession::stepIntoTarget()
+{
+    if (usesMdb()) m_mdbProcess->sendCommand(QStringLiteral("step"));
+    else if (m_gdbSession) m_gdbSession->stepInto();
+}
+
+void HardwareDebugSession::stepOverTarget()
+{
+    if (usesMdb()) m_mdbProcess->sendCommand(QStringLiteral("next"));
+    else if (m_gdbSession) m_gdbSession->stepOver();
+}
+
+void HardwareDebugSession::stepOutTarget()
+{
+    if (usesMdb()) emit debugOutput(QStringLiteral(
+        "[MDB] Step Out is not exposed by the MDB command-line interface.\n"));
+    else if (m_gdbSession) m_gdbSession->stepOut();
+}
 
 // ============================================================================
 // State management
@@ -120,6 +183,16 @@ void HardwareDebugSession::startSession(const HardwareDebugConfiguration& config
                          .arg(config.programImage));
     }
 
+    if (config.serverType == HardwareServerType::MplabMdb) {
+        emit debugOutput(QStringLiteral("[HARDWARE DEBUG] Backend: MPLAB MDB / %1\n")
+                         .arg(config.mplabTool));
+        emit debugOutput(QStringLiteral("[HARDWARE DEBUG] Device: %1\n")
+                         .arg(config.mplabDevice));
+        setSessionState(SessionState::ServerStarting);
+        m_mdbProcess->start(config);
+        return;
+    }
+
     // Connect GDB session signals
     connect(m_gdbSession, &DebuggerSession::targetStarted,
             this, &HardwareDebugSession::onGdbTargetStarted, Qt::UniqueConnection);
@@ -166,6 +239,9 @@ void HardwareDebugSession::stopSession()
     }
 
     // Stop server
+    if (m_mdbProcess && m_mdbProcess->isRunning())
+        m_mdbProcess->stop();
+
     if (m_serverProcess) {
         if (m_serverProcess->state() != GdbServerState::Stopped &&
             m_serverProcess->state() != GdbServerState::Failed) {

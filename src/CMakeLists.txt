@@ -39,6 +39,8 @@ add_executable(qddd
     GdbServerProcess.h
     HardwareDebugSession.cpp
     HardwareDebugSession.h
+    MdbProcess.cpp
+    MdbProcess.h
     HardwareDebugPage.cpp
     HardwareDebugPage.h
     MockGdbServer.cpp
