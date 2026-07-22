@@ -172,12 +172,17 @@ void HardwareDebugSession::startSession(const HardwareDebugConfiguration& config
     }
 
     emit debugOutput(QStringLiteral("[HARDWARE DEBUG] Starting session\n"));
-    emit debugOutput(QStringLiteral("[HARDWARE DEBUG] Server: %1\n")
-                     .arg(config.serverExecutable));
-    emit debugOutput(QStringLiteral("[HARDWARE DEBUG] GDB: %1\n")
-                     .arg(config.gdbExecutable));
-    emit debugOutput(QStringLiteral("[HARDWARE DEBUG] Target: %1:%2\n")
-                     .arg(config.host).arg(config.port));
+    if (config.serverType == HardwareServerType::MplabMdb) {
+        emit debugOutput(QStringLiteral("[HARDWARE DEBUG] MDB: %1\n")
+                         .arg(config.serverExecutable));
+    } else {
+        emit debugOutput(QStringLiteral("[HARDWARE DEBUG] Server: %1\n")
+                         .arg(config.serverExecutable));
+        emit debugOutput(QStringLiteral("[HARDWARE DEBUG] GDB: %1\n")
+                         .arg(config.gdbExecutable));
+        emit debugOutput(QStringLiteral("[HARDWARE DEBUG] Target: %1:%2\n")
+                         .arg(config.host).arg(config.port));
+    }
     if (!config.programImage.isEmpty()) {
         emit debugOutput(QStringLiteral("[HARDWARE DEBUG] Image: %1\n")
                          .arg(config.programImage));

@@ -37,6 +37,28 @@ int main(int argc, char** argv)
     cfg.initialBreakpoint = QStringLiteral("main");
     cfg.startupTimeoutMs = 3000;
 
+    auto writeElfHeader = [&temp](const QString& name, quint16 machine) {
+        QByteArray header(20, '\0');
+        header.replace(0, 4, QByteArray("\x7f" "ELF", 4));
+        header[5] = 1; // little endian
+        header[18] = static_cast<char>(machine & 0xff);
+        header[19] = static_cast<char>((machine >> 8) & 0xff);
+        const QString path = temp.filePath(name);
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly) || file.write(header) != header.size())
+            return QString();
+        return path;
+    };
+    const QString armElf = writeElfHeader(QStringLiteral("arm.elf"), 40);
+    const QString dspicElf = writeElfHeader(QStringLiteral("dspic.elf"), 118);
+    cfg.programImage = armElf;
+    if (cfg.validate().valid)
+        return 6;
+    cfg.programImage = dspicElf;
+    if (!cfg.validate().valid)
+        return 7;
+    cfg.programImage = QStringLiteral("firmware.elf");
+
     MdbProcess process;
     QString output;
     QString error;

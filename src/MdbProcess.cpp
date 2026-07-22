@@ -60,7 +60,10 @@ void MdbProcess::start(const HardwareDebugConfiguration& config)
     m_process.setProgram(config.serverExecutable);
     m_process.setArguments(config.serverArguments);
     m_process.start();
-    m_startupTimer.start(config.startupTimeoutMs);
+    // MPLAB may update probe firmware on the first connection. That operation
+    // is expected to take much longer than a GDB-server startup, so this timer
+    // represents inactivity rather than a hard deadline.
+    m_startupTimer.start(qMax(config.startupTimeoutMs, 120000));
 }
 
 void MdbProcess::stop()
@@ -152,6 +155,13 @@ void MdbProcess::onOutput()
         + QString::fromLocal8Bit(m_process.readAllStandardError());
     if (text.isEmpty())
         return;
+    if (!m_ready) {
+        const bool firmwareUpdate = text.contains(
+            QStringLiteral("Updating firmware"), Qt::CaseInsensitive);
+        m_startupTimer.start(firmwareUpdate
+            ? 600000
+            : qMax(m_config.startupTimeoutMs, 120000));
+    }
     m_outputBuffer += text;
     if (m_outputBuffer.size() > 8192)
         m_outputBuffer = m_outputBuffer.right(8192);
@@ -179,6 +189,8 @@ void MdbProcess::onFinished(int exitCode, QProcess::ExitStatus status)
 
 void MdbProcess::onTimeout()
 {
-    emit errorOccurred(QStringLiteral("Timed out waiting for the MPLAB MDB prompt."));
+    emit errorOccurred(QStringLiteral(
+        "MDB produced no output while waiting for a command prompt. "
+        "If probe firmware was being updated, reconnect the probe and let MPLAB X finish recovery."));
     stop();
 }

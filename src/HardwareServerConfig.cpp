@@ -32,6 +32,7 @@
 #include "HardwareServerConfig.h"
 
 #include <QFileInfo>
+#include <QFile>
 #include <QDir>
 
 // ============================================================================
@@ -239,6 +240,30 @@ HardwareDebugConfiguration::ValidationResult HardwareDebugConfiguration::validat
         if (mplabTool.trimmed().isEmpty()) {
             r.errors << QStringLiteral("MPLAB hardware tool name is required.");
             r.valid = false;
+        }
+        const QFileInfo imageInfo(programImage);
+        if (loadImage && imageInfo.suffix().compare(QStringLiteral("elf"), Qt::CaseInsensitive) == 0 &&
+            imageInfo.exists()) {
+            QFile image(programImage);
+            if (image.open(QIODevice::ReadOnly)) {
+                const QByteArray header = image.read(20);
+                const bool isElf = header.size() >= 20 && header.startsWith("\x7f" "ELF");
+                if (isElf) {
+                    const bool littleEndian = static_cast<unsigned char>(header[5]) == 1;
+                    const quint16 machine = littleEndian
+                        ? (static_cast<unsigned char>(header[18]) |
+                           (static_cast<quint16>(static_cast<unsigned char>(header[19])) << 8))
+                        : ((static_cast<quint16>(static_cast<unsigned char>(header[18])) << 8) |
+                           static_cast<unsigned char>(header[19]));
+                    constexpr quint16 kElfMachineDsPic30F = 118;
+                    if (machine != kElfMachineDsPic30F) {
+                        r.errors << QStringLiteral(
+                            "The selected ELF is not an XC16/dsPIC image (ELF machine %1).")
+                            .arg(machine);
+                        r.valid = false;
+                    }
+                }
+            }
         }
     }
 
