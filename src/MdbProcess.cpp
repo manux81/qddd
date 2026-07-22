@@ -91,10 +91,15 @@ void MdbProcess::stop()
     if (m_process.state() == QProcess::NotRunning)
         return;
     m_process.write("quit\n");
-    if (!m_process.waitForFinished(m_config.shutdownTimeoutMs)) {
+    if (m_process.waitForFinished(m_config.shutdownTimeoutMs)) {
+        // mdb.sh can exit while its Java child remains detached and continues
+        // to own the USB reservation. The process group must be cleaned even
+        // after an apparently graceful wrapper exit.
+        terminateProcessTree(true);
+    } else {
         terminateProcessTree(false);
-        if (!m_process.waitForFinished(1000))
-            terminateProcessTree(true);
+        m_process.waitForFinished(1000);
+        terminateProcessTree(true);
     }
 }
 

@@ -112,5 +112,41 @@ int main(int argc, char** argv)
     process.stop();
     if (stoppedFile != QStringLiteral("/tmp/src/db.c") || stoppedLine != 262)
         return 8;
+
+    if (qEnvironmentVariableIsSet("QDDD_LIVE_MDB")) {
+        HardwareDebugConfiguration live = HardwareDebugConfiguration::defaultConfig();
+        live.serverType = HardwareServerType::MplabMdb;
+        live.serverExecutable = qEnvironmentVariable("QDDD_LIVE_MDB");
+        live.mplabDevice = qEnvironmentVariable("QDDD_LIVE_MDB_DEVICE",
+                                                QStringLiteral("dsPIC33EP256MU810"));
+        live.mplabTool = qEnvironmentVariable("QDDD_LIVE_MDB_TOOL",
+                                              QStringLiteral("PICkit5"));
+        live.loadImage = false;
+        live.loadSymbols = false;
+        live.resetBeforeLoad = false;
+        live.initialBreakpoint.clear();
+        live.startupTimeoutMs = 120000;
+        live.shutdownTimeoutMs = 5000;
+
+        MdbProcess liveProcess;
+        bool liveReady = false;
+        QString liveError;
+        QEventLoop liveLoop;
+        QObject::connect(&liveProcess, &MdbProcess::ready, [&liveReady, &liveLoop] {
+            liveReady = true;
+            liveLoop.quit();
+        });
+        QObject::connect(&liveProcess, &MdbProcess::errorOccurred,
+                         [&liveError, &liveLoop](const QString& message) {
+            liveError = message;
+            liveLoop.quit();
+        });
+        QTimer::singleShot(180000, &liveLoop, &QEventLoop::quit);
+        liveProcess.start(live);
+        liveLoop.exec();
+        liveProcess.stop();
+        if (!liveReady || !liveError.isEmpty())
+            return 9;
+    }
     return 0;
 }
