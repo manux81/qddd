@@ -142,6 +142,12 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 		if (!m_hardwareAutoRuns)
 			runProgram();
 	});
+	connect(m_hardwareSession.get(), &HardwareDebugSession::stoppedAt, this,
+	        [this](const QString& file, int line, const QString& function) {
+		        showSourceLocation(file, line);
+		        if (m_aiAssistant)
+			        m_aiAssistant->setLastStopLocation(file, line, function);
+	        });
 
 	connect(m_session.get(), &DebuggerSession::breakpointLinesChanged, this,
 	        [this](const QString &file, const QSet<int> &lines) {

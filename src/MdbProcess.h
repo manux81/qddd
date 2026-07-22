@@ -25,6 +25,9 @@ signals:
     void outputReceived(const QString& text);
     void errorOccurred(const QString& message);
     void finished(int exitCode, QProcess::ExitStatus status);
+    void targetRunning();
+    void targetStopped();
+    void sourceLocation(const QString& file, int line);
 
 private:
     void onStarted();
@@ -41,7 +44,10 @@ private:
     HardwareDebugConfiguration m_config;
     QQueue<QString> m_commands;
     QString m_outputBuffer;
+    QString m_currentCommand;
     bool m_waitingForPrompt = false;
     bool m_ready = false;
     bool m_stopping = false;
+    QString m_lastSourceFile;
+    int m_lastSourceLine = -1;
 };

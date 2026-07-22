@@ -66,6 +66,16 @@ HardwareDebugSession::HardwareDebugSession(QObject* parent)
         setSessionState(m_config.runAfterLoad ? SessionState::Running : SessionState::TargetReady);
         emit sessionStarted();
     });
+    connect(m_mdbProcess.get(), &MdbProcess::targetRunning, this, [this] {
+        setSessionState(SessionState::Running);
+    });
+    connect(m_mdbProcess.get(), &MdbProcess::targetStopped, this, [this] {
+        setSessionState(SessionState::TargetHalted);
+    });
+    connect(m_mdbProcess.get(), &MdbProcess::sourceLocation, this,
+            [this](const QString& file, int line) {
+        emit stoppedAt(file, line, QString());
+    });
     connect(m_mdbProcess.get(), &MdbProcess::finished, this,
             [this](int exitCode, QProcess::ExitStatus) {
         if (m_sessionState != SessionState::Disconnecting &&

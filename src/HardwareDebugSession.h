@@ -106,6 +106,7 @@ signals:
     void sessionError(const QString& message);
     void serverOutput(const QString& text);
     void debugOutput(const QString& text);
+    void stoppedAt(const QString& file, int line, const QString& function);
 
 private slots:
     void onServerStateChanged(GdbServerState newState);

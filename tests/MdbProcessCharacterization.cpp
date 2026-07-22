@@ -21,6 +21,9 @@ int main(int argc, char** argv)
                  "printf '>\\n'\n"
                  "while IFS= read -r line; do\n"
                  "  printf 'ack:%s\\n>\\n' \"$line\"\n"
+                 "  if [ \"$line\" = run ]; then\n"
+                 "    printf 'Running\\nTarget Halted\\nStop at\\n address:0x1336a\\n file:/tmp/src/db.c\\n source line:262\\n'\n"
+                 "  fi\n"
                  "  [ \"$line\" = quit ] && exit 0\n"
                  "done\n");
     script.close();
@@ -76,7 +79,6 @@ int main(int argc, char** argv)
 
     process.start(cfg);
     loop.exec();
-    process.stop();
 
     if (!ready || !error.isEmpty())
         return 4;
@@ -94,5 +96,21 @@ int main(int argc, char** argv)
             return 5;
         position = next;
     }
+
+    QString stoppedFile;
+    int stoppedLine = -1;
+    QEventLoop locationLoop;
+    QObject::connect(&process, &MdbProcess::sourceLocation,
+                     [&stoppedFile, &stoppedLine, &locationLoop](const QString& file, int line) {
+        stoppedFile = file;
+        stoppedLine = line;
+        locationLoop.quit();
+    });
+    QTimer::singleShot(3000, &locationLoop, &QEventLoop::quit);
+    process.sendCommand(QStringLiteral("run"));
+    locationLoop.exec();
+    process.stop();
+    if (stoppedFile != QStringLiteral("/tmp/src/db.c") || stoppedLine != 262)
+        return 8;
     return 0;
 }

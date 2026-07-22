@@ -47,9 +47,12 @@ void MdbProcess::start(const HardwareDebugConfiguration& config)
     m_config = config;
     m_commands.clear();
     m_outputBuffer.clear();
+    m_currentCommand.clear();
     m_waitingForPrompt = false;
     m_ready = false;
     m_stopping = false;
+    m_lastSourceFile.clear();
+    m_lastSourceLine = -1;
 
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     for (const QString& key : config.serverEnvironment.keys())
@@ -138,6 +141,7 @@ void MdbProcess::dispatchNextCommand()
         return;
     }
     const QString command = m_commands.dequeue();
+    m_currentCommand = command;
     emit outputReceived(QStringLiteral("[MDB] > %1\n").arg(command));
     m_process.write(command.toUtf8() + '\n');
     m_waitingForPrompt = true;
@@ -166,8 +170,43 @@ void MdbProcess::onOutput()
     if (m_outputBuffer.size() > 8192)
         m_outputBuffer = m_outputBuffer.right(8192);
     emit outputReceived(text);
+    if (text.contains(QRegularExpression(QStringLiteral("(?:^|[\\r\\n])Running(?:[\\r\\n]|$)"))))
+        emit targetRunning();
+    if (text.contains(QStringLiteral("Target Halted"), Qt::CaseInsensitive))
+        emit targetStopped();
+
+    static const QRegularExpression sourceLocationPattern(
+        QStringLiteral("Stop at\\s+address:[^\\r\\n]+[\\r\\n]+\\s*file:([^\\r\\n]+)"
+                       "[\\r\\n]+\\s*source line:(\\d+)"),
+        QRegularExpression::CaseInsensitiveOption);
+    const auto locationMatch = sourceLocationPattern.match(m_outputBuffer);
+    if (locationMatch.hasMatch()) {
+        const QString file = locationMatch.captured(1).trimmed();
+        const int line = locationMatch.captured(2).toInt();
+        if (file != m_lastSourceFile || line != m_lastSourceLine) {
+            m_lastSourceFile = file;
+            m_lastSourceLine = line;
+            emit sourceLocation(file, line);
+        }
+    }
     if (m_waitingForPrompt && outputHasPrompt()) {
+        const bool commandFailed = !m_currentCommand.isEmpty() &&
+            (m_outputBuffer.contains(QStringLiteral("Program failed"), Qt::CaseInsensitive) ||
+             m_outputBuffer.contains(QStringLiteral("in use by another MPLAB client"), Qt::CaseInsensitive) ||
+             m_outputBuffer.contains(QStringLiteral("Failed to connect"), Qt::CaseInsensitive) ||
+             m_outputBuffer.contains(QStringLiteral("Connection failed"), Qt::CaseInsensitive));
+        if (commandFailed) {
+            const QString failedCommand = m_currentCommand;
+            m_commands.clear();
+            m_currentCommand.clear();
+            m_waitingForPrompt = false;
+            m_startupTimer.stop();
+            emit errorOccurred(QStringLiteral("MDB command failed: %1").arg(failedCommand));
+            QTimer::singleShot(0, this, &MdbProcess::stop);
+            return;
+        }
         m_waitingForPrompt = false;
+        m_currentCommand.clear();
         m_outputBuffer.clear();
         dispatchNextCommand();
     }
