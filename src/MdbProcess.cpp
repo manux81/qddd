@@ -4,6 +4,11 @@
 #include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
+#include <QStandardPaths>
+
+#ifdef Q_OS_UNIX
+#include <signal.h>
+#endif
 
 namespace {
 QString quotedMdbPath(const QString& path)
@@ -32,10 +37,8 @@ MdbProcess::~MdbProcess()
     if (m_process.state() != QProcess::NotRunning) {
         m_process.write("quit\n");
         m_process.waitForFinished(500);
-        if (m_process.state() != QProcess::NotRunning) {
-            m_process.kill();
-            m_process.waitForFinished(1000);
-        }
+        terminateProcessTree(true);
+        m_process.waitForFinished(1000);
     }
 }
 
@@ -60,8 +63,20 @@ void MdbProcess::start(const HardwareDebugConfiguration& config)
     m_process.setProcessEnvironment(env);
     if (!config.workingDirectory.isEmpty())
         m_process.setWorkingDirectory(config.workingDirectory);
-    m_process.setProgram(config.serverExecutable);
-    m_process.setArguments(config.serverArguments);
+    QString program = config.serverExecutable;
+    QStringList arguments = config.serverArguments;
+    m_usesProcessGroup = false;
+    m_processGroupId = 0;
+#ifdef Q_OS_UNIX
+    const QString setsid = QStandardPaths::findExecutable(QStringLiteral("setsid"));
+    if (!setsid.isEmpty()) {
+        arguments.prepend(program);
+        program = setsid;
+        m_usesProcessGroup = true;
+    }
+#endif
+    m_process.setProgram(program);
+    m_process.setArguments(arguments);
     m_process.start();
     // MPLAB may update probe firmware on the first connection. That operation
     // is expected to take much longer than a GDB-server startup, so this timer
@@ -76,8 +91,11 @@ void MdbProcess::stop()
     if (m_process.state() == QProcess::NotRunning)
         return;
     m_process.write("quit\n");
-    if (!m_process.waitForFinished(m_config.shutdownTimeoutMs))
-        m_process.kill();
+    if (!m_process.waitForFinished(m_config.shutdownTimeoutMs)) {
+        terminateProcessTree(false);
+        if (!m_process.waitForFinished(1000))
+            terminateProcessTree(true);
+    }
 }
 
 void MdbProcess::sendCommand(const QString& command)
@@ -97,6 +115,8 @@ bool MdbProcess::isRunning() const
 
 void MdbProcess::onStarted()
 {
+    if (m_usesProcessGroup)
+        m_processGroupId = m_process.processId();
     emit outputReceived(QStringLiteral("[MDB] Process started: %1\n").arg(m_config.serverExecutable));
     queueBootstrapCommands();
     // MDB prints an initial prompt before accepting the first command.
@@ -205,7 +225,9 @@ void MdbProcess::onOutput()
             m_currentCommand.clear();
             m_waitingForPrompt = false;
             m_startupTimer.stop();
-            emit errorOccurred(QStringLiteral("MDB command failed: %1").arg(failedCommand));
+            const QString details = m_outputBuffer.trimmed().right(3000);
+            emit errorOccurred(QStringLiteral("MDB command failed: %1\n%2")
+                               .arg(failedCommand, details));
             QTimer::singleShot(0, this, &MdbProcess::stop);
             return;
         }
@@ -213,6 +235,22 @@ void MdbProcess::onOutput()
         m_currentCommand.clear();
         m_outputBuffer.clear();
         dispatchNextCommand();
+    }
+}
+
+void MdbProcess::terminateProcessTree(bool force)
+{
+#ifdef Q_OS_UNIX
+    if (m_usesProcessGroup && m_processGroupId > 0) {
+        ::kill(-static_cast<pid_t>(m_processGroupId), force ? SIGKILL : SIGTERM);
+        return;
+    }
+#endif
+    if (m_process.state() != QProcess::NotRunning) {
+        if (force)
+            m_process.kill();
+        else
+            m_process.terminate();
     }
 }
 

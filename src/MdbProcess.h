@@ -38,6 +38,7 @@ private:
     void queueBootstrapCommands();
     void dispatchNextCommand();
     bool outputHasPrompt() const;
+    void terminateProcessTree(bool force);
 
     QProcess m_process;
     QTimer m_startupTimer;
@@ -48,6 +49,8 @@ private:
     bool m_waitingForPrompt = false;
     bool m_ready = false;
     bool m_stopping = false;
+    bool m_usesProcessGroup = false;
+    qint64 m_processGroupId = 0;
     QString m_lastSourceFile;
     int m_lastSourceLine = -1;
 };
