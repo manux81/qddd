@@ -38,6 +38,7 @@
 #include <QFontDatabase>
 
 class QStandardItemModel;
+class HardwareDebugSession;
 
 class VariablesView : public QTreeView {
 	Q_OBJECT
@@ -45,6 +46,7 @@ class VariablesView : public QTreeView {
 	explicit VariablesView(QWidget *parent = nullptr);
 
 	void setSession(DebuggerSession *session);
+	void setHardwareSession(HardwareDebugSession *session);
 
   public slots:
 	void clearVariables();
@@ -57,7 +59,7 @@ class VariablesView : public QTreeView {
 
 	QStandardItemModel *m_model;
 	DebuggerSession *m_session = nullptr;
+	HardwareDebugSession *m_hardwareSession = nullptr;
 	bool m_refreshing = false;
 };
-
 

@@ -36,6 +36,7 @@
 #include <QTimer>
 #include <QWidget>
 #include <QPointer>
+#include <functional>
 
 #include "DebugSession.h"
 
@@ -54,6 +55,8 @@ class SourceEditor : public QPlainTextEdit {
 
 	void currentLocation(QString &file, int &line) const;
 	void setBreakpointLines(const QSet<int>& lines);
+	void setExpressionEvaluator(std::function<void(const QString&,
+		std::function<void(const QString&, const QString&)>)> evaluator);
 
   public slots:
 	void setBreakpointsUpdated(const QSet<int>& lines);
@@ -79,12 +82,15 @@ class SourceEditor : public QPlainTextEdit {
 	LineNumberArea *m_lineNumberArea;
 	int m_currentPC = -1;
 	DebuggerSession *m_session = nullptr;
+	QSet<int> m_externalBreakpointLines;
 
 	QTimer m_hoverTimer;
 	QPoint m_lastMousePos;
 	QString m_pendingHoverExpr;
 	QString m_shownHoverExpr;
 	QPointer<QWidget> m_hoverHint;
+	std::function<void(const QString&,
+		std::function<void(const QString&, const QString&)>)> m_expressionEvaluator;
 };
 
 class LineNumberArea : public QWidget {

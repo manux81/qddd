@@ -30,6 +30,7 @@
  */
 
 #include "VariablesView.h"
+#include "HardwareDebugSession.h"
 
 #include <QFontDatabase>
 #include <QHeaderView>
@@ -289,6 +290,14 @@ void VariablesView::setSession(DebuggerSession *session) {
 	}
 }
 
+void VariablesView::setHardwareSession(HardwareDebugSession* session)
+{
+	m_hardwareSession = session;
+	if (session)
+		connect(session, &HardwareDebugSession::mdbVariablesChanged,
+		        this, &VariablesView::refresh, Qt::UniqueConnection);
+}
+
 void VariablesView::clearVariables() {
 	m_model->clear();
     m_model->setHorizontalHeaderLabels({tr("Name"), tr("Value")/*, tr("Type")*/});
@@ -320,7 +329,7 @@ void VariablesView::refresh()
 	clearVariables();
 
 	for (const auto& n : m_session->variables())
-    	addNode(nullptr, n.get());
+		addNode(nullptr, n.get());
 	m_refreshing = false;
 
 
@@ -461,5 +470,8 @@ void VariablesView::commitValue(QStandardItem *item)
 	if (path.isEmpty())
 		return;
 
-	m_session->setVariable(path, item->text());
+	if (m_hardwareSession && m_hardwareSession->isActive() && m_hardwareSession->usesMdb())
+		m_hardwareSession->setMdbVariable(path, item->text());
+	else
+		m_session->setVariable(path, item->text());
 }

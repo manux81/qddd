@@ -122,7 +122,7 @@ SourceEditor::SourceEditor(QWidget *parent)
 			return;
 
 		const QString expr = m_pendingHoverExpr;
-		m_session->evaluateExpressionValue(expr,
+		auto resultHandler =
 			[this, expr](const QString& value, const QString& type) {
 				if (expr != m_pendingHoverExpr)
 					return;
@@ -341,13 +341,24 @@ SourceEditor::SourceEditor(QWidget *parent)
 
 				m_hoverHint->move(pos);
 				m_hoverHint->show();
-			});
+			};
+		if (m_expressionEvaluator)
+			m_expressionEvaluator(expr, std::move(resultHandler));
+		else
+			m_session->evaluateExpressionValue(expr, std::move(resultHandler));
 	});
 
 	// Attach syntax highlighter to this editor's document
 	new CodeHighlighter(document());
 
 	highlightCurrentLine();
+}
+
+void SourceEditor::setExpressionEvaluator(
+	std::function<void(const QString&,
+		std::function<void(const QString&, const QString&)>)> evaluator)
+{
+	m_expressionEvaluator = std::move(evaluator);
 }
 
 static QString extractHoverExpression(const QString& lineText, int col)
@@ -452,6 +463,20 @@ static QString extractHoverExpression(const QString& lineText, int col)
 	expr.toLongLong(&okNum, 0);
 	if (okNum)
 		return {};
+	static const QSet<QString> cKeywords = {
+		QStringLiteral("if"), QStringLiteral("else"), QStringLiteral("for"),
+		QStringLiteral("while"), QStringLiteral("do"), QStringLiteral("switch"),
+		QStringLiteral("case"), QStringLiteral("default"), QStringLiteral("return"),
+		QStringLiteral("break"), QStringLiteral("continue"), QStringLiteral("goto"),
+		QStringLiteral("sizeof"), QStringLiteral("typedef"), QStringLiteral("struct"),
+		QStringLiteral("union"), QStringLiteral("enum"), QStringLiteral("const"),
+		QStringLiteral("volatile"), QStringLiteral("static"), QStringLiteral("extern"),
+		QStringLiteral("void"), QStringLiteral("char"), QStringLiteral("short"),
+		QStringLiteral("int"), QStringLiteral("long"), QStringLiteral("float"),
+		QStringLiteral("double"), QStringLiteral("signed"), QStringLiteral("unsigned")
+	};
+	if (cKeywords.contains(expr))
+		return {};
 
 	return expr;
 }
@@ -492,15 +517,10 @@ static QString prettyValueForHint(const QString& value)
 
 void SourceEditor::setBreakpointLines(const QSet<int>& lines)
 {
-	const QString file =
-		property("currentFile").toString();
-
-	for (int line : lines) {
-		const QString location = QString("%1:%2").arg(file).arg(line);
-		m_session->insertBreakpoint(location);
-	}
-
-	update();
+	m_externalBreakpointLines = lines;
+	if (m_lineNumberArea)
+		m_lineNumberArea->update();
+	viewport()->update();
 }
 
 
@@ -621,7 +641,7 @@ void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 			const int markerD = qBound(8, qMin(12, blockH - 4), 14);
 			const int markerY = top + (blockH - markerD) / 2;
 
-			const bool hasBp = m_session && !curFileAbs.isEmpty()
+			const bool sessionHasBp = m_session && !curFileAbs.isEmpty()
 				? std::any_of(
 					m_session->breakpoints().cbegin(),
 					m_session->breakpoints().cend(),
@@ -634,6 +654,7 @@ void SourceEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 					}
 				)
 				: false;
+			const bool hasBp = sessionHasBp || m_externalBreakpointLines.contains(lineIndex);
 
 			if (lineIndex == m_currentPC) {
 				// Visual Studio-like execution arrow.

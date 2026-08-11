@@ -35,6 +35,7 @@
 #include <QDir>
 #include <QDockWidget>
 #include <QEvent>
+#include <QCloseEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QIcon>
@@ -80,6 +81,7 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 	m_consoleWidget->setSession(m_session.get());
 	m_stackView->setSession(m_session.get());
 	m_variablesView->setSession(m_session.get());
+	m_variablesView->setHardwareSession(m_hardwareSession.get());
 	m_graphicalView->setSession(m_session.get());
 	if (m_disasmView)
 		m_disasmView->setSession(m_session.get());
@@ -158,6 +160,14 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 		        if (editor)
 			        editor->setBreakpointLines(lines);
 	        });
+	connect(m_hardwareSession.get(), &HardwareDebugSession::breakpointLinesChanged, this,
+	        [this](const QString& file, const QSet<int>& lines) {
+		        SourceEditor* editor = file.isEmpty()
+			        ? currentSourceEditor()
+			        : ensureSourceTabForFile(file);
+		        if (editor)
+			        editor->setBreakpointLines(lines);
+	        });
 
 	connect(m_session.get(), &DebuggerSession::snapshotCaptured, this,
 	        [this](const ExecutionSnapshot &) { m_graphicalView->refresh(); });
@@ -188,6 +198,17 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 {
 	QMainWindow::resizeEvent(event);
 	positionCommandOverlay();
+}
+
+void MainWindow::closeEvent(QCloseEvent* event)
+{
+	// Explicitly stop the backend before QObject teardown.  In particular MDB
+	// owns a Java child which otherwise can keep the PICkit USB reservation.
+	if (m_hardwareSession)
+		m_hardwareSession->stopSession();
+	if (m_session && m_session->isRunning())
+		m_session->terminateSession();
+	QMainWindow::closeEvent(event);
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
@@ -285,7 +306,10 @@ void MainWindow::setupUi() {
 		const QString expression = watchEdit->text().trimmed();
 		if (expression.isEmpty())
 			return;
-		m_session->addWatchExpression(expression);
+		if (m_hardwareSession && m_hardwareSession->isActive() && m_hardwareSession->usesMdb())
+			m_hardwareSession->addMdbWatch(expression);
+		else
+			m_session->addWatchExpression(expression);
 		watchEdit->clear();
 	};
 	connect(addWatch, &QPushButton::clicked, this, submitWatch);
@@ -368,6 +392,16 @@ void MainWindow::wireSourceEditor(SourceEditor* editor)
 	if (!editor)
 		return;
 	editor->setSession(m_session.get());
+	editor->setExpressionEvaluator(
+		[this](const QString& expression,
+		       std::function<void(const QString&, const QString&)> callback) {
+			if (m_hardwareSession && m_hardwareSession->isActive() &&
+			    m_hardwareSession->usesMdb()) {
+				m_hardwareSession->evaluateMdbExpression(expression, std::move(callback));
+			} else {
+				m_session->evaluateExpressionValue(expression, std::move(callback));
+			}
+		});
 	connect(editor, &SourceEditor::toggleBreakpointRequested,
 	        this, &MainWindow::toggleBpAt);
 	connect(editor, &SourceEditor::runUntilRequested,
@@ -1102,7 +1136,7 @@ void MainWindow::runProgram() {
 		return;
 	}
 
-	if (!m_breakOnMainInserted) {
+	if (!m_breakOnMainInserted && !(hardwareActive && m_hardwareSession->usesMdb())) {
 		m_session->insertBreakpoint("main");
 		m_breakOnMainInserted = true;
 	}
@@ -1159,7 +1193,10 @@ void MainWindow::toggleBpAt(const QString& file, int line)
 {
 	if (file.isEmpty() || line <= 0)
 		return;
-	m_session->toggleBreakpoint(QString("%1:%2").arg(file).arg(line));
+	if (m_hardwareSession && m_hardwareSession->isActive() && m_hardwareSession->usesMdb())
+		m_hardwareSession->toggleBreakpoint(file, line);
+	else
+		m_session->toggleBreakpoint(QString("%1:%2").arg(file).arg(line));
 }
 
 
