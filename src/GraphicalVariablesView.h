@@ -32,11 +32,13 @@
 #pragma once
 
 #include "DebugSession.h"
+#include "RuntimeObjectGraph.h"
 
 #include <QGraphicsView>
 #include <QGraphicsItem>
 #include <QGraphicsPathItem>
 #include <QTimer>
+#include <QContextMenuEvent>
 #include <functional>
 #include <vector>
 
@@ -47,14 +49,20 @@ class GraphicalEdgeItem : public QGraphicsPathItem
 public:
 	GraphicalEdgeItem(GraphicalNodeItem* from,
 					  GraphicalNodeItem* to,
-					  DebugVariable* fromChild);
+					  QString sourceObjectId,
+					  QString sourceExpression,
+					  QString destinationObjectId,
+					  RuntimeChangeState change = RuntimeChangeState::Unchanged);
 
 	void updatePosition();
 
 private:
 	GraphicalNodeItem* m_from;
 	GraphicalNodeItem* m_to;
-	DebugVariable*     m_fromChild;
+	QString m_sourceObjectId;
+	QString m_sourceExpression;
+	QString m_destinationObjectId;
+	RuntimeChangeState m_change;
 
 	static constexpr int SEGMENTS = 10;
 	QPointF m_pos[SEGMENTS]{};
@@ -78,9 +86,12 @@ public:
 			   QWidget*) override;
 
 	DebugVariable* node() const { return m_node; }
+	const QString& layoutKey() const { return m_layoutKey; }
 
 	QPointF inputPort() const;
 	QPointF outputPortFor(DebugVariable* child) const;
+	QPointF outputPortForExpression(const QString& expression) const;
+	void setExpandedRecursively(bool expanded, int maxDepth = 8);
 
 	void recalculateWidth();
 	void addEdge(GraphicalEdgeItem* e);
@@ -131,6 +142,7 @@ public slots:
 protected:
 	void wheelEvent(QWheelEvent*) override;
 	void mouseDoubleClickEvent(QMouseEvent*) override;
+	void contextMenuEvent(QContextMenuEvent*) override;
 	void drawBackground(QPainter*, const QRectF&) override;
 
 private:
@@ -149,4 +161,5 @@ private:
 	QHash<QString, DebugVariable*> m_dynamicRootByKey;
 	QHash<DebugVariable*, GraphicalNodeItem*> m_dynamicItems;
 	QSet<QString> m_openPointerExprs;
+	quint64 m_refreshGeneration = 0;
 };

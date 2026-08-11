@@ -242,6 +242,7 @@ static void expandInlineStructIntoChildren(
 		c->parent = node;
 
 		c->isPointer   = looksLikePointer(c->value);
+		c->pointeeAddress = c->isPointer ? extractHexAddress(c->value) : QString();
 		c->hasChildren = looksLikeStruct(c->value);
 
 		// ricorsione SOLO su struct inline
@@ -1419,6 +1420,7 @@ void DebuggerSession::requestWatchValues()
 				}
 				watch->isWatch = true;
 				watch->isPointer = looksLikePointer(watch->value);
+				watch->pointeeAddress = watch->isPointer ? extractHexAddress(watch->value) : QString();
 				watch->hasChildren = looksLikeStruct(watch->value);
 				expandInlineStructIntoChildren(watch.get(), watch->value, 0, 2);
 
@@ -1479,6 +1481,7 @@ void DebuggerSession::parseVarsFromReply(const QString& replyBlob)
         dv->type    = miGet(vblob, "type");
 
         dv->isPointer   = looksLikePointer(dv->value);
+		dv->pointeeAddress = dv->isPointer ? extractHexAddress(dv->value) : QString();
         dv->hasChildren = looksLikeStruct(dv->value);
         dv->parent      = nullptr;
 
@@ -1604,6 +1607,7 @@ bool DebuggerSession::restoreHistoricalVariables()
 			if (value != snapshot.variableValues.constEnd()) {
 				variable->value = value.value();
 				variable->isPointer = looksLikePointer(variable->value);
+				variable->pointeeAddress = variable->isPointer ? extractHexAddress(variable->value) : QString();
 				variable->hasChildren = looksLikeStruct(variable->value);
 				variable->children.clear();
 				expandInlineStructIntoChildren(variable.get(), variable->value, 0, 2);
@@ -1793,6 +1797,7 @@ void DebuggerSession::replaceExternalVariables(const QMap<QString, QString>& val
 		variable->value = it.value();
 		variable->isWatch = m_watchExpressions.contains(it.key());
 		variable->isPointer = looksLikePointer(variable->value);
+		variable->pointeeAddress = variable->isPointer ? extractHexAddress(variable->value) : QString();
 		variable->hasChildren = looksLikeStruct(variable->value);
 		expandInlineStructIntoChildren(variable.get(), variable->value, 0, 2);
 		m_variables.push_back(std::move(variable));

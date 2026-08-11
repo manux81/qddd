@@ -37,6 +37,7 @@
 #include <QVBoxLayout>
 #include <QToolButton>
 #include <QStyle>
+#include <QMenu>
 #include <cmath>
 #include <memory>
 #include <utility>
@@ -167,12 +168,12 @@ static QString layoutKeyForVariable(DebugVariable* v)
 	if (!v)
 		return {};
 
+	if (!v->address.isEmpty())
+		return RuntimeObjectGraph::identityFor(v->address, v->type, v->fullPath());
+
 	const QString path = v->fullPath();
 	if (!path.isEmpty())
 		return QStringLiteral("var:%1").arg(path);
-
-	if (!v->address.isEmpty())
-		return QStringLiteral("addr:%1").arg(v->address);
 
 	return QStringLiteral("name:%1").arg(v->name);
 }
@@ -576,6 +577,30 @@ QPointF GraphicalNodeItem::outputPortFor(DebugVariable* child) const
 	return mapToScene(QPointF(m_width, HeaderHeight / 2));
 }
 
+QPointF GraphicalNodeItem::outputPortForExpression(const QString& expression) const
+{
+	QVector<VisibleRow> rows;
+	for (auto& c : m_node->children)
+		buildRows(c.get(), 0, const_cast<QHash<DebugVariable*, bool>&>(m_expanded), rows);
+	for (int i = 0; i < rows.size(); ++i) {
+		if (rows[i].node->fullPath() == expression)
+			return mapToScene(QPointF(m_width, HeaderHeight + i * RowHeight + RowHeight / 2));
+	}
+	return mapToScene(QPointF(m_width, HeaderHeight / 2));
+}
+
+void GraphicalNodeItem::setExpandedRecursively(bool expanded, int maxDepth)
+{
+	std::function<void(DebugVariable*, int)> visit = [&](DebugVariable* value, int depth) {
+		if (!value || depth > maxDepth) return;
+		if (value->hasChildren) m_expanded[value] = expanded;
+		for (auto& child : value->children) visit(child.get(), depth + 1);
+	};
+	visit(m_node, 0);
+	prepareGeometryChange();
+	update();
+}
+
 QVariant GraphicalNodeItem::itemChange(GraphicsItemChange c,
 									   const QVariant& v)
 {
@@ -594,10 +619,16 @@ QVariant GraphicalNodeItem::itemChange(GraphicsItemChange c,
 
 GraphicalEdgeItem::GraphicalEdgeItem(GraphicalNodeItem* f,
 									 GraphicalNodeItem* t,
-									 DebugVariable* child)
+									 QString sourceObjectId,
+									 QString sourceExpression,
+									 QString destinationObjectId,
+									 RuntimeChangeState change)
 	: m_from(f)
 	, m_to(t)
-	, m_fromChild(child)
+	, m_sourceObjectId(std::move(sourceObjectId))
+	, m_sourceExpression(std::move(sourceExpression))
+	, m_destinationObjectId(std::move(destinationObjectId))
+	, m_change(change)
 {
 	setZValue(-1);
 	QPen pen(QColor(180, 180, 180, 210));
@@ -606,7 +637,7 @@ GraphicalEdgeItem::GraphicalEdgeItem(GraphicalNodeItem* f,
 	pen.setJoinStyle(Qt::RoundJoin);
 	setPen(pen);
 
-	const QString routeKey = child ? child->fullPath() : QString();
+	const QString routeKey = RuntimeObjectGraph::referenceIdentity(m_sourceObjectId, m_sourceExpression);
 	const uint lane = qHash(routeKey) % 9;
 	m_routeOffset = (static_cast<int>(lane) - 4) * 12.0;
 
@@ -617,7 +648,7 @@ GraphicalEdgeItem::GraphicalEdgeItem(GraphicalNodeItem* f,
 
 void GraphicalEdgeItem::updatePosition()
 {
-	m_pos[0] = m_from->outputPortFor(m_fromChild);
+	m_pos[0] = m_from->outputPortForExpression(m_sourceExpression);
 	m_targetEnd = m_to->inputPort();
 	if (!m_timer.isActive())
 		m_timer.start(16);
@@ -788,6 +819,7 @@ void GraphicalVariablesView::setSession(DebuggerSession* s)
 void GraphicalVariablesView::refresh()
 {
 	if (!m_session) return;
+	++m_refreshGeneration;
 
 	m_scene->clear();
 	m_dynamicItems.clear();
@@ -842,10 +874,10 @@ void GraphicalVariablesView::refresh()
 			if (!c->isPointer) continue;
 
 			bool ok = false;
-			quintptr target = c->value.toULongLong(&ok, 16);
+			quintptr target = c->pointeeAddress.toULongLong(&ok, 16);
 			if (ok && target != 0 && addrMap.contains(target)) {
-				auto* e = new GraphicalEdgeItem(
-					it.value(), addrMap[target], c.get());
+				auto* e = new GraphicalEdgeItem(it.value(), addrMap[target],
+					layoutKeyForVariable(root), c->fullPath(), layoutKeyForVariable(rootOf(c.get())));
 				m_scene->addItem(e);
 				it.value()->addEdge(e);
 				addrMap[target]->addEdge(e);
@@ -935,6 +967,22 @@ void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent* event)
 	QGraphicsView::mouseDoubleClickEvent(event);
 }
 
+void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
+{
+	auto* item = dynamic_cast<GraphicalNodeItem*>(itemAt(event->pos()));
+	if (!item) return QGraphicsView::contextMenuEvent(event);
+	QMenu menu(this);
+	auto* expandOne = menu.addAction(tr("Expand one level"));
+	auto* expandAll = menu.addAction(tr("Expand recursively"));
+	auto* collapseOne = menu.addAction(tr("Collapse children"));
+	auto* collapseAll = menu.addAction(tr("Collapse recursively"));
+	QAction* selected = menu.exec(event->globalPos());
+	if (selected == expandOne) item->setExpandedRecursively(true, 1);
+	else if (selected == expandAll) item->setExpandedRecursively(true, 8);
+	else if (selected == collapseOne) item->setExpandedRecursively(false, 1);
+	else if (selected == collapseAll) item->setExpandedRecursively(false, 8);
+}
+
 void GraphicalVariablesView::openPointerNode(DebugVariable* ptrVar, GraphicalNodeItem* fromItem)
 {
 	if (!m_session || !ptrVar || !fromItem)
@@ -956,7 +1004,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 	if (!m_session || pointerExpr.isEmpty() || !ptrVar || !fromItem)
 		return;
 
-	const QString key = QString("%1@%2").arg(pointerExpr, ptrVar->value.trimmed());
+	const QString key = RuntimeObjectGraph::identityFor(ptrVar->pointeeAddress, ptrVar->type, pointerExpr);
 	if (m_dynamicRootByKey.contains(key)) {
 		DebugVariable* rootRaw = m_dynamicRootByKey.value(key);
 		if (!rootRaw)
@@ -973,7 +1021,8 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 			m_scene->addItem(existing);
 			m_dynamicItems[rootRaw] = existing;
 
-			auto* e = new GraphicalEdgeItem(fromItem, existing, ptrVar);
+			auto* e = new GraphicalEdgeItem(fromItem, existing,
+				layoutKeyForVariable(rootOf(ptrVar)), pointerExpr, key);
 			m_scene->addItem(e);
 			fromItem->addEdge(e);
 			existing->addEdge(e);
@@ -985,13 +1034,30 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 		return;
 	}
 
+	const quint64 generation = m_refreshGeneration;
+	const QString pointerName = ptrVar->name;
 	m_session->dereferencePointer(pointerExpr,
-		[this, key, ptrVar, fromItem](const QString& value, const QString& type) {
+		[this, key, pointerExpr, pointerName, generation](const QString& value, const QString& type) {
+			if (generation != m_refreshGeneration) return;
+			DebugVariable* ptrVar = nullptr;
+			GraphicalNodeItem* fromItem = nullptr;
+			for (auto& candidate : m_session->variables()) {
+				if (candidate->fullPath() == pointerExpr) {
+					ptrVar = candidate.get();
+					const QString sourceKey = layoutKeyForVariable(candidate.get());
+					for (QGraphicsItem* sceneItem : m_scene->items()) {
+						auto* nodeItem = dynamic_cast<GraphicalNodeItem*>(sceneItem);
+						if (nodeItem && nodeItem->layoutKey() == sourceKey) { fromItem = nodeItem; break; }
+					}
+					break;
+				}
+			}
+			if (!ptrVar || !fromItem) return;
 			if (value.isEmpty())
 				return;
 
 			auto root = std::make_unique<DebugVariable>();
-			root->name = QString("*%1").arg(ptrVar->name);
+			root->name = QString("*%1").arg(pointerName);
 			root->value = value.trimmed();
 			root->type = type;
 			root->parent = nullptr;
@@ -1015,7 +1081,8 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 			item->setPos(positionForNode(layoutKey, fromItem->pos() + QPointF(340, 0)));
 			m_dynamicItems[rootRaw] = item;
 
-			auto* e = new GraphicalEdgeItem(fromItem, item, ptrVar);
+			auto* e = new GraphicalEdgeItem(fromItem, item,
+				layoutKeyForVariable(rootOf(ptrVar)), pointerExpr, key);
 			m_scene->addItem(e);
 			fromItem->addEdge(e);
 			item->addEdge(e);

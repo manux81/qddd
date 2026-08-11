@@ -76,6 +76,33 @@ The project is structured around a few core components:
 This architecture allows the UI to remain largely independent
 from the underlying debugging engine.
 
+### Runtime object graph
+
+The graphical variables view represents pointer relationships by runtime
+identity, rather than creating a separate object for every expression that
+reaches it. A normalized address plus the concrete debugger type forms the
+stable object key. Consequently, aliases share one node, cycles terminate when
+an already-known key is encountered, and opening the same object through a
+different pointer reuses its saved position. If an address is unavailable,
+qddd uses an expression-based fallback key and treats it as less stable.
+
+For example:
+
+```cpp
+struct Node {
+    int value;
+    Node *next;
+};
+```
+
+If `head` and `selected` point to the same `Node`, the graph contains one
+runtime object and two labeled references. A refresh is diffed by object,
+member, and logical reference identity: new objects, changed scalar members,
+and retargeted edges can be highlighted without rebuilding identity from UI
+text. Recursive expansion is bounded (currently eight levels in the context
+menu) and identity-based traversal provides cycle protection in the graph
+model.
+
 ---
 
 ## 🛠️ Build Requirements

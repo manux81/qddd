@@ -113,6 +113,9 @@ struct DebugVariable
 	QString value;
 	QString type;
 	QString address;
+	// Structured destination identity for pointer values. Views must use this
+	// instead of interpreting the presentation string in value.
+	QString pointeeAddress;
 
 	bool isPointer   = false;
 	bool hasChildren = false;

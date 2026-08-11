@@ -8,6 +8,8 @@ add_executable(qddd
     MainWindow.h
     DebugSession.cpp
     DebugSession.h
+    RuntimeObjectGraph.cpp
+    RuntimeObjectGraph.h
     SourceEditor.cpp
     SourceEditor.h
     SourceBrowserDialog.cpp
