@@ -38,6 +38,8 @@
 #include <QToolButton>
 #include <QStyle>
 #include <QMenu>
+#include <QLineF>
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <utility>
@@ -496,8 +498,11 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 }
 
 void GraphicalNodeItem::mousePressEvent(QGraphicsSceneMouseEvent *e) {
-	if (e->pos().y() < HeaderHeight)
+	if (e->pos().y() < HeaderHeight) {
+		m_dragStartPosition = pos();
+		m_draggingHeader = true;
 		return QGraphicsItem::mousePressEvent(e);
+	}
 
 	QVector<VisibleRow> rows;
 	for (auto &c : m_node->children)
@@ -525,12 +530,26 @@ void GraphicalNodeItem::mousePressEvent(QGraphicsSceneMouseEvent *e) {
 	if (idx >= 0 && idx < rows.size()) {
 		DebugVariable *n = rows[idx].node;
 		if (n->hasChildren) {
+			prepareGeometryChange();
 			m_expanded[n] = !m_expanded.value(n, false);
 			m_page = 0; // reset pagina
-			prepareGeometryChange();
 			update();
+			for (auto* edge : m_edges)
+				edge->updatePosition();
+			if (m_onGeometryChanged)
+				m_onGeometryChanged();
 		}
 	}
+}
+
+void GraphicalNodeItem::mouseReleaseEvent(QGraphicsSceneMouseEvent* event)
+{
+	QGraphicsItem::mouseReleaseEvent(event);
+	if (m_draggingHeader && QLineF(m_dragStartPosition, pos()).length() > 1.0 &&
+	    !m_layoutKey.isEmpty() && m_onUserMoved) {
+		m_onUserMoved(m_layoutKey, pos());
+	}
+	m_draggingHeader = false;
 }
 
 void GraphicalNodeItem::recalculateWidth()
@@ -549,6 +568,17 @@ void GraphicalNodeItem::setPositionChangedCallback(
 	std::function<void(const QString&, const QPointF&)> cb)
 {
 	m_onPositionChanged = std::move(cb);
+}
+
+void GraphicalNodeItem::setUserMovedCallback(
+	std::function<void(const QString&, const QPointF&)> cb)
+{
+	m_onUserMoved = std::move(cb);
+}
+
+void GraphicalNodeItem::setGeometryChangedCallback(std::function<void()> cb)
+{
+	m_onGeometryChanged = std::move(cb);
 }
 
 QPointF GraphicalNodeItem::inputPort() const
@@ -591,14 +621,18 @@ QPointF GraphicalNodeItem::outputPortForExpression(const QString& expression) co
 
 void GraphicalNodeItem::setExpandedRecursively(bool expanded, int maxDepth)
 {
+	prepareGeometryChange();
 	std::function<void(DebugVariable*, int)> visit = [&](DebugVariable* value, int depth) {
 		if (!value || depth > maxDepth) return;
 		if (value->hasChildren) m_expanded[value] = expanded;
 		for (auto& child : value->children) visit(child.get(), depth + 1);
 	};
 	visit(m_node, 0);
-	prepareGeometryChange();
 	update();
+	for (auto* edge : m_edges)
+		edge->updatePosition();
+	if (m_onGeometryChanged)
+		m_onGeometryChanged();
 }
 
 QVariant GraphicalNodeItem::itemChange(GraphicsItemChange c,
@@ -789,19 +823,22 @@ GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
 	vl->setContentsMargins(6, 6, 6, 6);
 	vl->setSpacing(4);
 
-	auto mk = [&](const QString &t) {
+	auto mk = [&](const QString &t, const QString& tooltip) {
 		auto *b = new QToolButton(overlay);
 		b->setText(t);
+		b->setToolTip(tooltip);
 		b->setAutoRaise(true);
 		b->setFixedSize(28, 28);
 		vl->addWidget(b);
 		return b;
 	};
 
-	connect(mk("+"), &QToolButton::clicked, this, &GraphicalVariablesView::zoomIn);
-	connect(mk("-"), &QToolButton::clicked, this, &GraphicalVariablesView::zoomOut);
-	connect(mk("⤢"), &QToolButton::clicked, this, &GraphicalVariablesView::fitGraph);
-	connect(mk("⟳"), &QToolButton::clicked, this, &GraphicalVariablesView::resetZoom);
+	connect(mk("+", tr("Zoom in")), &QToolButton::clicked, this, &GraphicalVariablesView::zoomIn);
+	connect(mk("-", tr("Zoom out")), &QToolButton::clicked, this, &GraphicalVariablesView::zoomOut);
+	connect(mk("⇆", tr("Auto layout (keeps manually positioned blocks)")),
+	        &QToolButton::clicked, this, &GraphicalVariablesView::autoLayout);
+	connect(mk("⤢", tr("Fit graph")), &QToolButton::clicked, this, &GraphicalVariablesView::fitGraph);
+	connect(mk("⟳", tr("Reset zoom")), &QToolButton::clicked, this, &GraphicalVariablesView::resetZoom);
 
 	overlay->move(10, 10);
 	overlay->show();
@@ -832,10 +869,7 @@ void GraphicalVariablesView::refresh()
 	for (auto& v : m_session->variables()) {
 		const QString layoutKey = layoutKeyForVariable(v.get());
 		auto* item = new GraphicalNodeItem(v.get(), layoutKey);
-		item->setPositionChangedCallback(
-			[this](const QString& key, const QPointF& pos) {
-				rememberNodePosition(key, pos);
-			});
+		configureNodeItem(item);
 		m_scene->addItem(item);
 		item->setPos(positionForNode(layoutKey, QPointF(0, y)));
 		nodeMap[v.get()] = item;
@@ -885,6 +919,8 @@ void GraphicalVariablesView::refresh()
 			}
 		}
 	}
+
+	applyAutomaticLayout(false);
 }
 
 void GraphicalVariablesView::rememberNodePosition(const QString& key, const QPointF& pos)
@@ -900,6 +936,77 @@ QPointF GraphicalVariablesView::positionForNode(
 	if (key.isEmpty())
 		return defaultPos;
 	return m_nodePositions.value(key, defaultPos);
+}
+
+void GraphicalVariablesView::configureNodeItem(GraphicalNodeItem* item)
+{
+	if (!item)
+		return;
+	item->setPositionChangedCallback(
+		[this](const QString& key, const QPointF& pos) {
+			rememberNodePosition(key, pos);
+		});
+	item->setUserMovedCallback(
+		[this](const QString& key, const QPointF& pos) {
+			m_pinnedNodeKeys.insert(key);
+			rememberNodePosition(key, pos);
+		});
+	item->setGeometryChangedCallback([this] {
+		QTimer::singleShot(0, this, &GraphicalVariablesView::autoLayout);
+	});
+}
+
+void GraphicalVariablesView::applyAutomaticLayout(bool fitAfterLayout)
+{
+	QHash<QString, GraphicalNodeItem*> itemsByKey;
+	QVector<RuntimeLayoutNode> nodes;
+	QVector<RuntimeLayoutEdge> edges;
+
+	for (QGraphicsItem* sceneItem : m_scene->items()) {
+		if (auto* nodeItem = dynamic_cast<GraphicalNodeItem*>(sceneItem)) {
+			const QString key = nodeItem->layoutKey();
+			if (key.isEmpty() || itemsByKey.contains(key))
+				continue;
+			itemsByKey.insert(key, nodeItem);
+			RuntimeLayoutNode node;
+			node.id = key;
+			node.size = nodeItem->boundingRect().size();
+			node.hasPreviousPosition = m_nodePositions.contains(key);
+			node.previousPosition = m_nodePositions.value(key);
+			node.pinned = m_pinnedNodeKeys.contains(key);
+			nodes.push_back(node);
+		}
+	}
+
+	for (QGraphicsItem* sceneItem : m_scene->items()) {
+		auto* edgeItem = dynamic_cast<GraphicalEdgeItem*>(sceneItem);
+		if (!edgeItem || !edgeItem->sourceNode() || !edgeItem->destinationNode())
+			continue;
+		const QString source = edgeItem->sourceNode()->layoutKey();
+		const QString destination = edgeItem->destinationNode()->layoutKey();
+		if (source.isEmpty() || destination.isEmpty())
+			continue;
+		edges.push_back({QStringLiteral("%1->%2:%3")
+		                    .arg(source, destination)
+		                    .arg(edges.size()),
+		                 source, destination});
+	}
+
+	const RuntimeLayoutResult layout = RuntimeGraphLayout::compute(nodes, edges);
+	QStringList keys = itemsByKey.keys();
+	std::sort(keys.begin(), keys.end());
+	for (const QString& key : keys) {
+		if (layout.positions.contains(key))
+			itemsByKey.value(key)->setPos(layout.positions.value(key));
+	}
+	m_scene->setSceneRect(m_scene->itemsBoundingRect().adjusted(-200, -200, 200, 200));
+	if (fitAfterLayout)
+		fitGraph();
+}
+
+void GraphicalVariablesView::autoLayout()
+{
+	applyAutomaticLayout(false);
 }
 
 // ------------------------------------------------------------
@@ -976,11 +1083,18 @@ void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
 	auto* expandAll = menu.addAction(tr("Expand recursively"));
 	auto* collapseOne = menu.addAction(tr("Collapse children"));
 	auto* collapseAll = menu.addAction(tr("Collapse recursively"));
+	menu.addSeparator();
+	auto* releasePosition = menu.addAction(tr("Release manual position"));
+	releasePosition->setEnabled(m_pinnedNodeKeys.contains(item->layoutKey()));
 	QAction* selected = menu.exec(event->globalPos());
 	if (selected == expandOne) item->setExpandedRecursively(true, 1);
 	else if (selected == expandAll) item->setExpandedRecursively(true, 8);
 	else if (selected == collapseOne) item->setExpandedRecursively(false, 1);
 	else if (selected == collapseAll) item->setExpandedRecursively(false, 8);
+	else if (selected == releasePosition) {
+		m_pinnedNodeKeys.remove(item->layoutKey());
+		autoLayout();
+	}
 }
 
 void GraphicalVariablesView::openPointerNode(DebugVariable* ptrVar, GraphicalNodeItem* fromItem)
@@ -1014,10 +1128,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 		auto* existing = m_dynamicItems.value(rootRaw, nullptr);
 		if (!existing) {
 			existing = new GraphicalNodeItem(rootRaw, layoutKey);
-			existing->setPositionChangedCallback(
-				[this](const QString& key, const QPointF& pos) {
-					rememberNodePosition(key, pos);
-				});
+			configureNodeItem(existing);
 			m_scene->addItem(existing);
 			m_dynamicItems[rootRaw] = existing;
 
@@ -1030,6 +1141,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 		}
 
 		existing->setPos(positionForNode(layoutKey, fromItem->pos() + QPointF(340, 0)));
+		applyAutomaticLayout(false);
 		centerOn(existing);
 		return;
 	}
@@ -1073,10 +1185,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 
 			const QString layoutKey = QStringLiteral("dynamic:%1").arg(key);
 			auto* item = new GraphicalNodeItem(rootRaw, layoutKey);
-			item->setPositionChangedCallback(
-				[this](const QString& key, const QPointF& pos) {
-					rememberNodePosition(key, pos);
-				});
+			configureNodeItem(item);
 			m_scene->addItem(item);
 			item->setPos(positionForNode(layoutKey, fromItem->pos() + QPointF(340, 0)));
 			m_dynamicItems[rootRaw] = item;
@@ -1088,6 +1197,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 			item->addEdge(e);
 			e->updatePosition();
 
+			applyAutomaticLayout(false);
 			centerOn(item);
 		});
 }

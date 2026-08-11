@@ -45,3 +45,12 @@ add_executable(runtime_object_graph_tests
 target_include_directories(runtime_object_graph_tests PRIVATE ../src)
 target_link_libraries(runtime_object_graph_tests PRIVATE Qt5::Core)
 add_test(NAME runtime_object_graph_tests COMMAND runtime_object_graph_tests)
+
+add_executable(runtime_graph_layout_tests
+	RuntimeGraphLayoutTests.cpp
+	../src/RuntimeGraphLayout.cpp
+	../src/RuntimeGraphLayout.h
+)
+target_include_directories(runtime_graph_layout_tests PRIVATE ../src)
+target_link_libraries(runtime_graph_layout_tests PRIVATE Qt5::Core)
+add_test(NAME runtime_graph_layout_tests COMMAND runtime_graph_layout_tests)

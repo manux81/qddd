@@ -33,6 +33,7 @@
 
 #include "DebugSession.h"
 #include "RuntimeObjectGraph.h"
+#include "RuntimeGraphLayout.h"
 
 #include <QGraphicsView>
 #include <QGraphicsItem>
@@ -55,6 +56,8 @@ public:
 					  RuntimeChangeState change = RuntimeChangeState::Unchanged);
 
 	void updatePosition();
+	GraphicalNodeItem* sourceNode() const { return m_from; }
+	GraphicalNodeItem* destinationNode() const { return m_to; }
 
 private:
 	GraphicalNodeItem* m_from;
@@ -97,9 +100,12 @@ public:
 	void addEdge(GraphicalEdgeItem* e);
 	DebugVariable* variableAt(const QPointF& localPos) const;
 	void setPositionChangedCallback(std::function<void(const QString&, const QPointF&)> cb);
+	void setUserMovedCallback(std::function<void(const QString&, const QPointF&)> cb);
+	void setGeometryChangedCallback(std::function<void()> cb);
 
 protected:
 	void mousePressEvent(QGraphicsSceneMouseEvent*) override;
+	void mouseReleaseEvent(QGraphicsSceneMouseEvent*) override;
 	QVariant itemChange(GraphicsItemChange,
 						const QVariant&) override;
 
@@ -111,11 +117,15 @@ private:
 	DebugVariable* m_node = nullptr;
 	QString m_layoutKey;
 	std::function<void(const QString&, const QPointF&)> m_onPositionChanged;
+	std::function<void(const QString&, const QPointF&)> m_onUserMoved;
+	std::function<void()> m_onGeometryChanged;
 	QList<GraphicalEdgeItem*> m_edges;
 	QHash<DebugVariable*, bool> m_expanded;
 
 	int m_width = 260;
 	int m_page = 0;
+	QPointF m_dragStartPosition;
+	bool m_draggingHeader = false;
 
 	static constexpr int HeaderHeight = 30;
 	static constexpr int RowHeight    = 26;
@@ -138,6 +148,7 @@ public slots:
 	void zoomOut();
 	void resetZoom();
 	void fitGraph();
+	void autoLayout();
 
 protected:
 	void wheelEvent(QWheelEvent*) override;
@@ -152,11 +163,14 @@ private:
 							   GraphicalNodeItem* fromItem);
 	void rememberNodePosition(const QString& key, const QPointF& pos);
 	QPointF positionForNode(const QString& key, const QPointF& defaultPos) const;
+	void configureNodeItem(GraphicalNodeItem* item);
+	void applyAutomaticLayout(bool fitAfterLayout = false);
 
 	QGraphicsScene*  m_scene   = nullptr;
 	DebuggerSession* m_session = nullptr;
 
 	QHash<QString, QPointF> m_nodePositions;
+	QSet<QString> m_pinnedNodeKeys;
 	std::vector<std::unique_ptr<DebugVariable>> m_dynamicRoots;
 	QHash<QString, DebugVariable*> m_dynamicRootByKey;
 	QHash<DebugVariable*, GraphicalNodeItem*> m_dynamicItems;

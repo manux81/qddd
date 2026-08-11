@@ -12,6 +12,8 @@ add_executable(qddd WIN32 MACOSX_BUNDLE
 	MiStreamBuffer.h
     RuntimeObjectGraph.cpp
     RuntimeObjectGraph.h
+	RuntimeGraphLayout.cpp
+	RuntimeGraphLayout.h
     SourceEditor.cpp
     SourceEditor.h
     SourceBrowserDialog.cpp
