@@ -107,10 +107,24 @@ model.
 
 ## 🛠️ Build Requirements
 
-- Qt 5 or Qt 6
+- Qt 5 (Core, Gui, Widgets and Network modules)
 - C++17 compatible compiler
 - GDB with MI support
 - CMake
+
+Qt 6 is not currently selected by the CMake build and is therefore not a
+documented target yet.
+
+## Debugger backends
+
+| Backend / target | Status | Notes |
+| --- | --- | --- |
+| GDB/MI | Supported | Primary local debugger transport, using MI2. |
+| LLDB-MI | Experimental | Requires a separately installed `lldb-mi`; availability and MI compatibility vary by platform. |
+| gdbserver | Supported | Remote connection through GDB/MI using `target remote` or `extended-remote`. |
+| ST-Link | Experimental | QDDD can launch `ST-LINK_gdbserver`; hardware is not exercised by automated tests. |
+| SEGGER J-Link | Experimental | Configurable managed GDB-server profile; hardware is not exercised by automated tests. |
+| MPLAB MDB | Experimental | Command-line integration for PICkit Basic/PICkit 5 and dsPIC targets; the process protocol is tested with a fake MDB only. |
 
 ## 🎯 Remote targets (gdbserver / SEGGER J-Link)
 
@@ -144,11 +158,34 @@ PICkit Basic does not power it.
 ```bash
 git clone https://github.com/manux81/qddd.git
 cd qddd
-mkdir build && cd build
-cmake ..
-make
-./qddd
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build --parallel
+./build/src/qddd
 ```
+
+On macOS the executable is inside `build/src/qddd.app`; on multi-configuration
+Windows generators, select the desired configuration when building.
+
+### Automated tests
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+The test suite covers MI stream reconstruction and command lifecycle with a
+fake GDB, the MPLAB MDB process protocol with a fake MDB on Unix, and the
+runtime object graph. It requires no debugger hardware or network access.
+
+GitHub Actions performs the same configure, build and test sequence on Linux
+with Qt 5 for every push and pull request.
+
+## AI assistant credentials
+
+For the OpenAI provider, set `OPENAI_API_KEY` in the environment that launches
+QDDD. This value takes precedence over the legacy API-key field in Settings.
+That fallback is retained for compatibility but is stored by `QSettings` in
+plain text and must not be treated as secure credential storage. API keys and
+Authorization headers are not written to the application log.
 
 ## 📦 Creating a release
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) [2026], Manuele Conti
+ * Copyright (c) 2026, Manuele Conti
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -515,10 +515,12 @@ void DebugAssistantDock::sendUserMessage()
 	QSettings s;
 	const QString provider = s.value("ai/provider", "ollama").toString().trimmed();
 	if (provider == "openai") {
-		const QString apiKey = s.value("ai/openaiApiKey").toString().trimmed();
+		QString apiKey = qEnvironmentVariable("OPENAI_API_KEY").trimmed();
+		if (apiKey.isEmpty())
+			apiKey = s.value("ai/openaiApiKey").toString().trimmed();
 		const QString baseUrl = s.value("ai/openaiBaseUrl", "https://api.openai.com/v1").toString().trimmed();
 		if (apiKey.isEmpty()) {
-			appendError("Missing API key (Settings → AI).");
+			appendError("Missing API key. Set OPENAI_API_KEY or configure the legacy Settings → AI fallback.");
 			setBusy(false);
 			return;
 		}

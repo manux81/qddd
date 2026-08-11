@@ -1,5 +1,5 @@
 /*
- * Copyright (c) [2026], Manuele Conti
+ * Copyright (c) 2026, Manuele Conti
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -196,7 +196,14 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 
 	m_openaiApiKeyEdit = new QLineEdit(aiBox);
 	m_openaiApiKeyEdit->setEchoMode(QLineEdit::Password);
+	m_openaiApiKeyEdit->setPlaceholderText(tr("OPENAI_API_KEY takes precedence"));
 	aiForm->addRow(tr("API key:"), m_openaiApiKeyEdit);
+	auto* openaiKeyWarning = new QLabel(
+		tr("Prefer the OPENAI_API_KEY environment variable. The fallback API-key field is stored by QSettings in plain text and is not a secure credential store."),
+		aiBox);
+	openaiKeyWarning->setWordWrap(true);
+	openaiKeyWarning->setStyleSheet("color: #d8a657;");
+	aiForm->addRow(QString(), openaiKeyWarning);
 
 	m_openaiModelEdit = new QLineEdit(aiBox);
 	m_openaiModelEdit->setPlaceholderText("gpt-4.1-mini");
