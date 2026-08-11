@@ -2,7 +2,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-add_executable(qddd
+add_executable(qddd WIN32 MACOSX_BUNDLE
     main.cpp
     MainWindow.cpp
     MainWindow.h
@@ -51,6 +51,13 @@ add_executable(qddd
     MockGdbServer.h
 
     resources.qrc
+)
+
+set_target_properties(qddd PROPERTIES
+    MACOSX_BUNDLE_BUNDLE_NAME "qddd"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.manux81.qddd"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+    MACOSX_BUNDLE_BUNDLE_VERSION "1"
 )
 
 target_link_libraries(qddd

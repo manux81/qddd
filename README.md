@@ -148,3 +148,18 @@ mkdir build && cd build
 cmake ..
 make
 ./qddd
+```
+
+## 📦 Creating a release
+
+Pushing a semantic version tag builds and tests qddd on Linux, Windows and
+macOS, then publishes the resulting archives in a GitHub Release:
+
+```bash
+git tag -a v1.0.0 -m "qddd 1.0.0"
+git push origin v1.0.0
+```
+
+Windows and macOS packages include the Qt runtime. The initial Linux archive
+expects Qt 5 runtime libraries to be installed by the distribution. macOS
+packages are currently unsigned and are not notarized by Apple.

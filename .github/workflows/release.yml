@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Qt
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes qtbase5-dev
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --build-config Release --output-on-failure
+      - name: Package
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p "dist/qddd-${VERSION}-linux-x86_64"
+          cp build/src/qddd README.md LICENSE "dist/qddd-${VERSION}-linux-x86_64/"
+          tar -C dist -czf "dist/qddd-${VERSION}-linux-x86_64.tar.gz" "qddd-${VERSION}-linux-x86_64"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: qddd-linux
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: "5.15.2"
+          cache: true
+      - name: Configure
+        run: cmake -S . -B build -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build --build-config Release --output-on-failure
+      - name: Deploy Qt and package
+        shell: pwsh
+        run: |
+          $package = "qddd-${{ github.ref_name }}-windows-x86_64"
+          New-Item -ItemType Directory -Path "dist/$package" | Out-Null
+          Copy-Item "build/src/Release/qddd.exe", README.md, LICENSE -Destination "dist/$package"
+          windeployqt --release --no-translations "dist/$package/qddd.exe"
+          Compress-Archive -Path "dist/$package" -DestinationPath "dist/$package.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: qddd-windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS
+    # Qt 5.15.2 official packages are x86_64; use the Intel runner until the
+    # project moves to a Qt version with official Apple Silicon packages.
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v6
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: "5.15.2"
+          arch: "clang_64"
+          cache: true
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --build-config Release --output-on-failure
+      - name: Deploy Qt and package
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          macdeployqt build/src/qddd.app
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent build/src/qddd.app "dist/qddd-${VERSION}-macos.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: qddd-macos
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/* --verify-tag --generate-notes --title "qddd ${{ github.ref_name }}"
