@@ -1784,6 +1784,28 @@ void DebuggerSession::evaluateExpressionValue(
 	);
 }
 
+void DebuggerSession::replaceExternalVariables(const QMap<QString, QString>& values)
+{
+	m_variables.clear();
+	for (auto it = values.cbegin(); it != values.cend(); ++it) {
+		auto variable = std::make_unique<DebugVariable>();
+		variable->name = it.key();
+		variable->value = it.value();
+		variable->isWatch = m_watchExpressions.contains(it.key());
+		variable->isPointer = looksLikePointer(variable->value);
+		variable->hasChildren = looksLikeStruct(variable->value);
+		expandInlineStructIntoChildren(variable.get(), variable->value, 0, 2);
+		m_variables.push_back(std::move(variable));
+	}
+	emit variablesUpdated();
+}
+
+void DebuggerSession::replaceExternalStackFrames(const QVector<StackFrame>& frames)
+{
+	m_stackFrames = frames;
+	emit stackFramesUpdated();
+}
+
 
 // ============================================================================
 // Accessors

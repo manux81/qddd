@@ -34,6 +34,8 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QHash>
+#include <QSet>
 #include <memory>
 
 #include "HardwareServerConfig.h"
@@ -98,6 +100,13 @@ public:
     void stepIntoTarget();
     void stepOverTarget();
     void stepOutTarget();
+    void toggleBreakpoint(const QString& file, int line);
+    void addMdbWatch(const QString& expression);
+    void removeMdbWatch(const QString& expression);
+    void setMdbVariable(const QString& expression, const QString& value);
+    void evaluateMdbExpression(const QString& expression,
+        std::function<void(const QString&, const QString&)> callback);
+    [[nodiscard]] const QMap<QString, QString>& mdbVariables() const { return m_mdbVariables; }
 
 signals:
     void sessionStateChanged(HardwareDebugSession::SessionState newState);
@@ -107,6 +116,8 @@ signals:
     void serverOutput(const QString& text);
     void debugOutput(const QString& text);
     void stoppedAt(const QString& file, int line, const QString& function);
+    void breakpointLinesChanged(const QString& file, const QSet<int>& lines);
+    void mdbVariablesChanged();
 
 private slots:
     void onServerStateChanged(GdbServerState newState);
@@ -161,4 +172,14 @@ private:
 
     // Output prefix helper
     QString m_prefix;
+    QHash<QString, int> m_mdbBreakpointIds;
+    QHash<QString, QSet<int>> m_mdbBreakpointLines;
+    QStringList m_mdbWatches;
+    QMap<QString, QString> m_mdbVariables;
+    QHash<QString, QString> m_pendingMdbWrites;
+    QHash<QString, QList<std::function<void(const QString&, const QString&)>>> m_mdbEvaluations;
+    void refreshMdbVariables();
+    void publishMdbVariables();
+    QString resolveMdbSymbolAddress(const QString& expression);
+    QHash<QString, QString> m_mdbSymbolAddresses;
 };

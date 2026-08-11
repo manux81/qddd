@@ -246,6 +246,10 @@ public:
 	void evaluateExpressionValue(const QString& expr,
 								 std::function<void(const QString& value,
 													const QString& type)> cb);
+	// Supplies variables from a non-GDB backend while keeping every variables
+	// UI (tree, graphical display and assistant) on the same model.
+	void replaceExternalVariables(const QMap<QString, QString>& values);
+	void replaceExternalStackFrames(const QVector<StackFrame>& frames);
 
 signals:
 	void targetRunning();

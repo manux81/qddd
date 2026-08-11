@@ -32,7 +32,11 @@
 #include "HardwareDebugSession.h"
 
 #include <QDebug>
+#include <QDir>
 #include <QFileInfo>
+#include <QProcess>
+#include <QRegularExpression>
+#include <QStandardPaths>
 
 // ============================================================================
 // Constructor / Destructor
@@ -71,10 +75,170 @@ HardwareDebugSession::HardwareDebugSession(QObject* parent)
     });
     connect(m_mdbProcess.get(), &MdbProcess::targetStopped, this, [this] {
         setSessionState(SessionState::TargetHalted);
+        refreshMdbVariables();
     });
     connect(m_mdbProcess.get(), &MdbProcess::sourceLocation, this,
             [this](const QString& file, int line) {
         emit stoppedAt(file, line, QString());
+        setSessionState(SessionState::TargetHalted);
+        refreshMdbVariables();
+    });
+    connect(m_mdbProcess.get(), &MdbProcess::commandFinished, this,
+            [this](const QString& command, const QString& response) {
+        static const QRegularExpression addedPattern(
+            QStringLiteral("Breakpoint\\s+(\\d+)\\s+at"),
+            QRegularExpression::CaseInsensitiveOption);
+        if (command.startsWith(QStringLiteral("break "), Qt::CaseInsensitive)) {
+            const auto match = addedPattern.match(response);
+            if (!match.hasMatch())
+                return;
+            const QString location = command.mid(6).trimmed();
+            const int separator = location.lastIndexOf(QLatin1Char(':'));
+            if (separator <= 0)
+                return;
+            QString file = location.left(separator);
+            if (file.startsWith(QLatin1Char('"')) && file.endsWith(QLatin1Char('"')))
+                file = file.mid(1, file.size() - 2);
+            bool ok = false;
+            const int line = location.mid(separator + 1).toInt(&ok);
+            if (!ok)
+                return;
+            file = QFileInfo(file).absoluteFilePath();
+            const QString key = file + QLatin1Char(':') + QString::number(line);
+            m_mdbBreakpointIds.insert(key, match.captured(1).toInt());
+            m_mdbBreakpointLines[file].insert(line);
+            emit breakpointLinesChanged(file, m_mdbBreakpointLines.value(file));
+        } else if (command.startsWith(QStringLiteral("print /a "), Qt::CaseInsensitive)) {
+            const QString expression = command.mid(9).trimmed();
+            if (!m_pendingMdbWrites.contains(expression))
+                return;
+            QString address;
+            static const QRegularExpression prefixedAddress(
+                QStringLiteral("\\b0x([0-9a-fA-F]+)\\b"));
+            const auto prefixedMatch = prefixedAddress.match(response);
+            if (prefixedMatch.hasMatch()) {
+                address = prefixedMatch.captured(1);
+            } else {
+                // XC16/dsPIC commonly prints an address as two lines:
+                // "symbol=\n2006" (without 0x).
+                static const QRegularExpression bareAddress(
+                    QStringLiteral("=\\s*([0-9a-fA-F]+)\\s*(?:[\\r\\n]|$)"));
+                const auto bareMatch = bareAddress.match(response);
+                if (bareMatch.hasMatch())
+                    address = bareMatch.captured(1);
+            }
+            const QString value = m_pendingMdbWrites.take(expression);
+            if (address.isEmpty()) {
+                emit debugOutput(QStringLiteral("[MDB] Cannot resolve address of %1\n").arg(expression));
+                return;
+            }
+            const QString writeCommand = QStringLiteral("write /r 0x%1 %2")
+                .arg(address, value);
+            m_pendingMdbWrites.insert(writeCommand, expression);
+            m_mdbProcess->sendCommand(writeCommand);
+        } else if (command.startsWith(QStringLiteral("write /r "), Qt::CaseInsensitive)) {
+            // Re-read after an assignment so the tree and graphical display
+            // reflect the value actually accepted by the target.
+            const QString expression = m_pendingMdbWrites.take(command);
+            if (!expression.isEmpty())
+                m_mdbProcess->sendCommand(QStringLiteral("print %1").arg(expression));
+        } else if (command.startsWith(QStringLiteral("print "), Qt::CaseInsensitive)) {
+            const QString expression = command.mid(6).trimmed();
+            const bool hoverEvaluation = m_mdbEvaluations.contains(expression);
+            QString value;
+            const QStringList lines = response.split(
+                QRegularExpression(QStringLiteral("[\\r\\n]+")), Qt::SkipEmptyParts);
+            for (const QString& rawLine : lines) {
+                const QString line = rawLine.trimmed();
+                if (line.isEmpty() || line == QLatin1String(">") ||
+                    line.startsWith(QLatin1String("print "), Qt::CaseInsensitive))
+                    continue;
+                value = line;
+            }
+            if (!value.isEmpty()) {
+                if (value.contains(QStringLiteral("Symbol does not exist"), Qt::CaseInsensitive)) {
+                    const auto callbacks = m_mdbEvaluations.take(expression);
+                    for (const auto& callback : callbacks)
+                        callback({}, {});
+                    return;
+                }
+                const int equals = value.indexOf(QLatin1Char('='));
+                const QString parsedValue = equals >= 0
+                    ? value.mid(equals + 1).trimmed() : value;
+                const auto callbacks = m_mdbEvaluations.take(expression);
+                for (const auto& callback : callbacks)
+                    callback(parsedValue, QString());
+                // Hover evaluation is transient. It must not turn an arbitrary
+                // identifier under the mouse into a watch/data-display item.
+                if (!hoverEvaluation) {
+                    m_mdbVariables[expression] = parsedValue;
+                    publishMdbVariables();
+                    emit mdbVariablesChanged();
+                }
+            }
+        } else if (command.startsWith(QStringLiteral("backtrace full"), Qt::CaseInsensitive)) {
+            QVector<StackFrame> frames;
+            // MDB follows the GDB backtrace format, e.g.
+            // "#0  function (...) at /path/file.c:123". Addresses and the
+            // optional "in" token vary between device families.
+            static const QRegularExpression framePattern(
+                QStringLiteral("^\\s*#(\\d+)\\s+(?:(?:0x[0-9a-fA-F]+)\\s+(?:in\\s+)?)?([^\\s(]+).*?\\s(?:at|from)\\s+(.+?):(\\d+)\\s*$"),
+                QRegularExpression::MultilineOption);
+            auto frameMatches = framePattern.globalMatch(response);
+            while (frameMatches.hasNext()) {
+                const auto match = frameMatches.next();
+                StackFrame frame;
+                frame.level = match.captured(1);
+                frame.function = match.captured(2);
+                frame.file = match.captured(3).trimmed();
+                frame.line = match.captured(4).toInt();
+                frames.append(frame);
+            }
+            if (frames.isEmpty()) {
+                // Some MDB/device combinations omit '#', parentheses, or
+                // addresses and print "0 function at file.c:line".
+                static const QRegularExpression compactFramePattern(
+                    QStringLiteral("^\\s*(\\d+)\\s+([A-Za-z_][A-Za-z0-9_:]*)\\s+.*?(?:at|from)\\s+(.+?):(\\d+)\\s*$"),
+                    QRegularExpression::MultilineOption);
+                auto compactMatches = compactFramePattern.globalMatch(response);
+                while (compactMatches.hasNext()) {
+                    const auto match = compactMatches.next();
+                    frames.append({match.captured(1), match.captured(2),
+                                   match.captured(3).trimmed(), match.captured(4).toInt()});
+                }
+            }
+            if (m_gdbSession)
+                m_gdbSession->replaceExternalStackFrames(frames);
+
+            static const QRegularExpression localPattern(
+                QStringLiteral("^\\s*([A-Za-z_][A-Za-z0-9_]*(?:\\[[^]]+\\])?)\\s*=\\s*(.+?)\\s*$"),
+                QRegularExpression::MultilineOption);
+            auto matches = localPattern.globalMatch(response);
+            while (matches.hasNext()) {
+                const auto match = matches.next();
+                if (!m_mdbWatches.contains(match.captured(1)))
+                    m_mdbVariables[match.captured(1)] = match.captured(2);
+            }
+            emit mdbVariablesChanged();
+            publishMdbVariables();
+        } else if (command.startsWith(QStringLiteral("delete "), Qt::CaseInsensitive)) {
+            bool ok = false;
+            const int id = command.mid(7).trimmed().toInt(&ok);
+            if (!ok)
+                return;
+            QString removedKey;
+            for (auto it = m_mdbBreakpointIds.cbegin(); it != m_mdbBreakpointIds.cend(); ++it) {
+                if (it.value() == id) { removedKey = it.key(); break; }
+            }
+            if (removedKey.isEmpty())
+                return;
+            m_mdbBreakpointIds.remove(removedKey);
+            const int separator = removedKey.lastIndexOf(QLatin1Char(':'));
+            const QString file = removedKey.left(separator);
+            const int line = removedKey.mid(separator + 1).toInt();
+            m_mdbBreakpointLines[file].remove(line);
+            emit breakpointLinesChanged(file, m_mdbBreakpointLines.value(file));
+        }
     });
     connect(m_mdbProcess.get(), &MdbProcess::finished, this,
             [this](int exitCode, QProcess::ExitStatus) {
@@ -87,6 +251,139 @@ HardwareDebugSession::HardwareDebugSession(QObject* parent)
 }
 
 HardwareDebugSession::~HardwareDebugSession() = default;
+
+void HardwareDebugSession::toggleBreakpoint(const QString& file, int line)
+{
+    if (!usesMdb() || !m_mdbProcess || !m_mdbProcess->isRunning() || line <= 0)
+        return;
+    const QString absoluteFile = QFileInfo(file).absoluteFilePath();
+    const QString key = absoluteFile + QLatin1Char(':') + QString::number(line);
+    const auto existing = m_mdbBreakpointIds.constFind(key);
+    if (existing != m_mdbBreakpointIds.constEnd()) {
+        m_mdbBreakpointLines[absoluteFile].remove(line);
+        emit breakpointLinesChanged(absoluteFile, m_mdbBreakpointLines.value(absoluteFile));
+        m_mdbProcess->sendCommand(QStringLiteral("delete %1").arg(existing.value()));
+        return;
+    }
+    QString escaped = absoluteFile;
+    escaped.replace(QLatin1Char('"'), QStringLiteral("\\\""));
+    if (escaped.contains(QLatin1Char(' ')))
+        escaped = QStringLiteral("\"") + escaped + QStringLiteral("\"");
+    m_mdbBreakpointLines[absoluteFile].insert(line);
+    emit breakpointLinesChanged(absoluteFile, m_mdbBreakpointLines.value(absoluteFile));
+    m_mdbProcess->sendCommand(QStringLiteral("break %1:%2").arg(escaped).arg(line));
+}
+
+void HardwareDebugSession::addMdbWatch(const QString& expression)
+{
+    const QString trimmed = expression.trimmed();
+    if (trimmed.isEmpty() || m_mdbWatches.contains(trimmed))
+        return;
+    m_mdbWatches.append(trimmed);
+    if (m_mdbProcess && m_mdbProcess->isRunning())
+        m_mdbProcess->sendCommand(QStringLiteral("print %1").arg(trimmed));
+}
+
+void HardwareDebugSession::removeMdbWatch(const QString& expression)
+{
+    m_mdbWatches.removeAll(expression);
+    m_mdbVariables.remove(expression);
+    publishMdbVariables();
+    emit mdbVariablesChanged();
+}
+
+void HardwareDebugSession::evaluateMdbExpression(
+    const QString& expression,
+    std::function<void(const QString&, const QString&)> callback)
+{
+    const QString trimmed = expression.trimmed();
+    if (!callback || trimmed.isEmpty() || !m_mdbProcess || !m_mdbProcess->isRunning()) {
+        if (callback)
+            callback({}, {});
+        return;
+    }
+    m_mdbEvaluations[trimmed].append(std::move(callback));
+    m_mdbProcess->sendCommand(QStringLiteral("print %1").arg(trimmed));
+}
+
+void HardwareDebugSession::setMdbVariable(const QString& expression, const QString& value)
+{
+    const QString trimmed = expression.trimmed();
+    if (!m_mdbProcess || !m_mdbProcess->isRunning() || trimmed.isEmpty())
+        return;
+    // Resolve from the ELF symbol table. XC16 MDB's `print /a` and symbolic
+    // write both fail on some dsPIC releases with a trailing-space parse bug.
+    const QString address = resolveMdbSymbolAddress(trimmed);
+    if (address.isEmpty()) {
+        emit debugOutput(QStringLiteral("[MDB] Cannot find symbol %1 in the ELF symbol table\n")
+                         .arg(trimmed));
+        return;
+    }
+    const QString command = QStringLiteral("write /r 0x%1 %2")
+        .arg(address, value.trimmed());
+    m_pendingMdbWrites.insert(command, trimmed);
+    m_mdbProcess->sendCommand(command);
+}
+
+QString HardwareDebugSession::resolveMdbSymbolAddress(const QString& expression)
+{
+    const auto cached = m_mdbSymbolAddresses.constFind(expression);
+    if (cached != m_mdbSymbolAddresses.constEnd())
+        return cached.value();
+
+    QStringList candidates;
+    const QString fromPath = QStandardPaths::findExecutable(QStringLiteral("xc16-nm"));
+    if (!fromPath.isEmpty())
+        candidates << fromPath;
+    QDir versions(QStringLiteral("/opt/microchip/xc16"));
+    const QStringList versionDirs = versions.entryList(QDir::Dirs | QDir::NoDotAndDotDot,
+                                                        QDir::Name | QDir::Reversed);
+    for (const QString& version : versionDirs)
+        candidates << versions.filePath(version + QStringLiteral("/bin/xc16-nm"));
+
+    QString tool;
+    for (const QString& candidate : std::as_const(candidates)) {
+        if (QFileInfo(candidate).isExecutable()) {
+            tool = candidate;
+            break;
+        }
+    }
+    if (tool.isEmpty() || m_config.programImage.isEmpty())
+        return {};
+
+    QProcess nm;
+    nm.start(tool, {QStringLiteral("-n"), m_config.programImage});
+    if (!nm.waitForStarted(3000) || !nm.waitForFinished(10000))
+        return {};
+    const QString output = QString::fromLocal8Bit(nm.readAllStandardOutput());
+    const QString symbol = QRegularExpression::escape(expression);
+    const QRegularExpression pattern(
+        QStringLiteral("(?m)^([0-9a-fA-F]+)\\s+\\S\\s+_?%1\\s*$").arg(symbol));
+    const auto match = pattern.match(output);
+    if (!match.hasMatch())
+        return {};
+    QString address = match.captured(1);
+    while (address.size() > 1 && address.startsWith(QLatin1Char('0')))
+        address.remove(0, 1);
+    m_mdbSymbolAddresses.insert(expression, address);
+    return address;
+}
+
+void HardwareDebugSession::refreshMdbVariables()
+{
+    if (!m_mdbProcess || !m_mdbProcess->isRunning())
+        return;
+    m_mdbVariables.clear();
+    m_mdbProcess->sendCommand(QStringLiteral("backtrace full"));
+    for (const QString& expression : std::as_const(m_mdbWatches))
+        m_mdbProcess->sendCommand(QStringLiteral("print %1").arg(expression));
+}
+
+void HardwareDebugSession::publishMdbVariables()
+{
+    if (m_gdbSession)
+        m_gdbSession->replaceExternalVariables(m_mdbVariables);
+}
 
 bool HardwareDebugSession::isActive() const
 {
@@ -168,6 +465,9 @@ void HardwareDebugSession::startSession(const HardwareDebugConfiguration& config
     m_config = config;
     m_sequenceStep = 0;
     m_sequenceSteps.clear();
+    m_mdbBreakpointIds.clear();
+    m_mdbBreakpointLines.clear();
+    m_mdbSymbolAddresses.clear();
 
     // Validate configuration
     const auto vr = config.validate();
