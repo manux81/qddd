@@ -28,6 +28,7 @@ signals:
     void targetRunning();
     void targetStopped();
     void sourceLocation(const QString& file, int line);
+    void commandFinished(const QString& command, const QString& response);
 
 private:
     void onStarted();

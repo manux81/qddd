@@ -37,9 +37,11 @@ MdbProcess::~MdbProcess()
     if (m_process.state() != QProcess::NotRunning) {
         m_process.write("quit\n");
         m_process.waitForFinished(500);
-        terminateProcessTree(true);
-        m_process.waitForFinished(1000);
     }
+    // The shell wrapper can finish before its Java child releases the probe.
+    // Always reap the process group, regardless of QProcess' wrapper state.
+    terminateProcessTree(true);
+    m_process.waitForFinished(1000);
 }
 
 void MdbProcess::start(const HardwareDebugConfiguration& config)
@@ -88,8 +90,10 @@ void MdbProcess::stop()
 {
     m_stopping = true;
     m_startupTimer.stop();
-    if (m_process.state() == QProcess::NotRunning)
+    if (m_process.state() == QProcess::NotRunning) {
+        terminateProcessTree(true);
         return;
+    }
     m_process.write("quit\n");
     if (m_process.waitForFinished(m_config.shutdownTimeoutMs)) {
         // mdb.sh can exit while its Java child remains detached and continues
@@ -217,6 +221,14 @@ void MdbProcess::onOutput()
         }
     }
     if (m_waitingForPrompt && outputHasPrompt()) {
+        // A run/continue command only returns its prompt after the target has
+        // stopped. Some devices do not print the literal "Target Halted", so
+        // the prompt is the reliable completion event (also for repeatedly
+        // hitting the same source line).
+        if (m_currentCommand.compare(QStringLiteral("run"), Qt::CaseInsensitive) == 0 ||
+            m_currentCommand.compare(QStringLiteral("continue"), Qt::CaseInsensitive) == 0 ||
+            m_currentCommand.compare(QStringLiteral("halt"), Qt::CaseInsensitive) == 0)
+            emit targetStopped();
         const bool commandFailed = !m_currentCommand.isEmpty() &&
             (m_outputBuffer.contains(QStringLiteral("Program failed"), Qt::CaseInsensitive) ||
              m_outputBuffer.contains(QStringLiteral("in use by another MPLAB client"), Qt::CaseInsensitive) ||
@@ -236,6 +248,8 @@ void MdbProcess::onOutput()
             QTimer::singleShot(0, this, &MdbProcess::stop);
             return;
         }
+        if (!m_currentCommand.isEmpty())
+            emit commandFinished(m_currentCommand, m_outputBuffer);
         m_waitingForPrompt = false;
         m_currentCommand.clear();
         m_outputBuffer.clear();
