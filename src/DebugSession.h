@@ -1,5 +1,5 @@
 /*
- * Copyright (c) [2026], Manuele Conti
+ * Copyright (c) 2026, Manuele Conti
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -40,6 +40,8 @@
 #include <QString>
 #include <QQueue>
 #include <QRegularExpression>
+#include <QTimer>
+#include "MiStreamBuffer.h"
 #include <memory>
 #include <vector>
 #include <functional>
@@ -194,6 +196,7 @@ public:
 	void setRemoteConnectCommands(const QStringList& commands, bool extendedRemote = false);
 	void setStlinkServerPath(const QString& path);
 	void setStlinkGdbPort(int port);
+	void setCommandTimeoutMs(int timeoutMs);
 	void startSession(const QString& executablePath);
 	void terminateSession();
 
@@ -289,6 +292,7 @@ private:
 	// =======================
 	struct PendingCommand {
 		int token = 0;
+		quint64 generation = 0;
 		QString command;                         // without token prefix
 		std::function<void(const QString&)> cb;  // receives full reply blob
 	};
@@ -300,6 +304,10 @@ private:
 
 	void onDebuggerOutputReady();
 	void onDebuggerFinished(int exitCode, QProcess::ExitStatus status);
+	void onCommandTimeout();
+	void consumeDebuggerOutput(const QByteArray& data);
+	void resetSessionState();
+	void abortCommandChannel(const QString& reason);
 
 	void dispatchDebuggerMessage(const QString& line);
 	void handleResultRecord(int token, const QString& resultLine);
@@ -355,7 +363,12 @@ private:
 
 	QProcess m_debuggerProcess;
 	QProcess m_stlinkProcess;
+	MiStreamBuffer m_debuggerOutputBuffer;
+	QTimer m_commandTimeoutTimer;
 	bool m_targetExecuting = false;
+	bool m_commandChannelReliable = true;
+	quint64 m_sessionGeneration = 0;
+	int m_commandTimeoutMs = 15000;
 
 	bool m_commandInFlight = false;
 	int  m_nextToken = 1;

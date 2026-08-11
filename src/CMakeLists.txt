@@ -8,6 +8,8 @@ add_executable(qddd WIN32 MACOSX_BUNDLE
     MainWindow.h
     DebugSession.cpp
     DebugSession.h
+	MiStreamBuffer.cpp
+	MiStreamBuffer.h
     RuntimeObjectGraph.cpp
     RuntimeObjectGraph.h
     SourceEditor.cpp

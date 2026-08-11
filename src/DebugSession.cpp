@@ -1,5 +1,5 @@
 /*
- * Copyright (c) [2026], Manuele Conti
+ * Copyright (c) 2026, Manuele Conti
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -289,6 +289,10 @@ DebuggerSession::DebuggerSession(QObject* parent)
             this,
             &DebuggerSession::onDebuggerFinished);
 
+	m_commandTimeoutTimer.setSingleShot(true);
+	connect(&m_commandTimeoutTimer, &QTimer::timeout,
+	        this, &DebuggerSession::onCommandTimeout);
+
 }
 
 DebuggerSession::~DebuggerSession() = default;
@@ -349,6 +353,11 @@ void DebuggerSession::setStlinkGdbPort(int port)
 		m_stlinkGdbPort = port;
 }
 
+void DebuggerSession::setCommandTimeoutMs(int timeoutMs)
+{
+	m_commandTimeoutMs = qMax(1, timeoutMs);
+}
+
 bool DebuggerSession::isRemoteTarget() const
 {
 	return m_targetType == TargetType::RemoteGdbserver
@@ -368,6 +377,8 @@ void DebuggerSession::startSession(const QString& executablePath)
 	// for an ARM GDB from being sent to an earlier host GDB instance.
 	if (m_debuggerProcess.state() != QProcess::NotRunning)
 		terminateSession();
+	resetSessionState();
+	m_commandChannelReliable = true;
 	m_currentThreadId.clear();
 
 	m_reverseRecordingRequested = false;
@@ -380,7 +391,9 @@ void DebuggerSession::startSession(const QString& executablePath)
 	emit reverseExecutionAvailabilityChanged();
     QFileInfo fi(executablePath);
     if (!fi.exists()) {
-        qWarning() << "Executable not found:" << executablePath;
+		const QString message = tr("Executable not found: %1").arg(executablePath);
+		qWarning().noquote() << message;
+		emit targetStartFailed(message);
         return;
     }
 
@@ -400,6 +413,8 @@ void DebuggerSession::startSession(const QString& executablePath)
 			qWarning() << "Failed to start ST-LINK GDB server:" << m_stlinkServerPath;
 			emit debuggerOutput(tr("ERROR: Failed to start ST-LINK GDB server: %1\n")
 			                      .arg(m_stlinkServerPath));
+			emit targetStartFailed(tr("Failed to start ST-LINK GDB server: %1")
+			                           .arg(m_stlinkServerPath));
 			return;
 		}
 
@@ -426,8 +441,12 @@ void DebuggerSession::startSession(const QString& executablePath)
 
     m_debuggerProcess.start(debugger, args);
 
-    if (!m_debuggerProcess.waitForStarted()) {
-        qWarning() << "Failed to start debugger:" << debugger;
+    if (!m_debuggerProcess.waitForStarted(5000)) {
+		const QString message = tr("Failed to start debugger: %1 (%2)")
+		                            .arg(debugger, m_debuggerProcess.errorString());
+		qWarning().noquote() << message;
+		resetSessionState();
+		emit targetStartFailed(message);
         return;
     }
 
@@ -485,11 +504,7 @@ void DebuggerSession::startSession(const QString& executablePath)
 
 void DebuggerSession::terminateSession()
 {
-	m_targetExecuting = false;
-	m_commandQueue.clear();
-	m_commandInFlight = false;
-	m_inFlightReply.clear();
-	m_inFlight.cb = nullptr;
+	resetSessionState();
 
     if (m_debuggerProcess.state() != QProcess::NotRunning) {
         m_debuggerProcess.kill();
@@ -940,8 +955,15 @@ void DebuggerSession::selectStackFrame(int frameIndex)
 void DebuggerSession::enqueueCommand(const QString& command,
                                     std::function<void(const QString&)> cb)
 {
+	if (m_debuggerProcess.state() == QProcess::NotRunning || !m_commandChannelReliable) {
+		emit debuggerOutput(tr("MI command rejected because the debugger session is not ready: %1\n")
+		                    .arg(command));
+		return;
+	}
+
     PendingCommand pc;
     pc.token = m_nextToken++;
+	pc.generation = m_sessionGeneration;
     pc.command = command;
     pc.cb = std::move(cb);
     m_commandQueue.enqueue(std::move(pc));
@@ -950,7 +972,8 @@ void DebuggerSession::enqueueCommand(const QString& command,
 
 void DebuggerSession::processCommandQueue()
 {
-    if (m_commandInFlight || m_commandQueue.isEmpty())
+	if (m_commandInFlight || m_commandQueue.isEmpty() || !m_commandChannelReliable
+	    || m_debuggerProcess.state() == QProcess::NotRunning)
         return;
 
     m_commandInFlight = true;
@@ -962,26 +985,102 @@ void DebuggerSession::processCommandQueue()
 		emit downloadStarted();
 
     qDebug().noquote() << "[MI SEND]" << wire;
-    m_debuggerProcess.write((wire + "\n").toUtf8());
+	const qint64 written = m_debuggerProcess.write((wire + "\n").toUtf8());
+	if (written < 0) {
+		abortCommandChannel(tr("Failed to write MI command %1: %2")
+		                    .arg(m_inFlight.token)
+		                    .arg(m_debuggerProcess.errorString()));
+		return;
+	}
+	m_commandTimeoutTimer.start(m_commandTimeoutMs);
 }
 
 void DebuggerSession::onDebuggerOutputReady()
 {
-    const QByteArray raw = m_debuggerProcess.readAllStandardOutput();
-    const QList<QByteArray> lines = raw.split('\n');
-
-    for (const QByteArray& l : lines) {
-        const QString line = QString::fromUtf8(l).trimmed();
-        if (!line.isEmpty())
-            dispatchDebuggerMessage(line);
-    }
+	consumeDebuggerOutput(m_debuggerProcess.readAllStandardOutput());
 }
 
 void DebuggerSession::onDebuggerFinished(int exitCode,
                                          QProcess::ExitStatus)
 {
-	m_targetExecuting = false;
+	consumeDebuggerOutput(m_debuggerProcess.readAllStandardOutput());
+	const QByteArray remainder = m_debuggerOutputBuffer.takeRemainder();
+	if (!remainder.isEmpty()) {
+		emit debuggerOutput(tr("Debugger terminated with an incomplete MI record; processing the residual fragment.\n"));
+		dispatchDebuggerMessage(QString::fromUtf8(remainder));
+	}
+	resetSessionState();
     emit targetExited(exitCode);
+}
+
+void DebuggerSession::consumeDebuggerOutput(const QByteArray& data)
+{
+	const QList<QByteArray> lines = m_debuggerOutputBuffer.append(data);
+	for (const QByteArray& bytes : lines) {
+		const QString line = QString::fromUtf8(bytes).trimmed();
+		if (!line.isEmpty())
+			dispatchDebuggerMessage(line);
+	}
+}
+
+void DebuggerSession::resetSessionState()
+{
+	++m_sessionGeneration;
+	m_commandTimeoutTimer.stop();
+	if (m_commandInFlight && m_inFlight.command == QStringLiteral("-target-download"))
+		emit downloadFinished(false);
+	m_commandQueue.clear();
+	m_commandInFlight = false;
+	m_inFlight = PendingCommand{};
+	m_inFlightReply.clear();
+	m_debuggerOutputBuffer.clear();
+	m_targetExecuting = false;
+	m_currentThreadId.clear();
+	m_pendingStack = false;
+	m_pendingVariables = false;
+	m_pendingPointerExpansions = 0;
+	m_pendingAddressRequests = 0;
+	m_captureDisassembly = false;
+	m_disassemblyBuffer.clear();
+	m_reverseRecordingRequested = false;
+	m_reverseRecordingFailed = false;
+	m_reverseRecordingReady = false;
+	m_replayDirection = ReplayDirection::None;
+	m_historyCursor = -1;
+	m_restoredHistoricalVariables = false;
+	m_executionHistory.clear();
+	m_stackFrames.clear();
+	m_variables.clear();
+	m_breakpoints.clear();
+	m_changedPaths.clear();
+	m_nextToken = 1;
+	emit stackFramesUpdated();
+	emit variablesUpdated();
+	emit breakpointsUpdated();
+	emit reverseExecutionAvailabilityChanged();
+}
+
+void DebuggerSession::abortCommandChannel(const QString& reason)
+{
+	if (!m_commandChannelReliable)
+		return;
+	m_commandChannelReliable = false;
+	emit debuggerOutput(tr("MI command channel aborted: %1\n").arg(reason));
+	resetSessionState();
+	if (m_debuggerProcess.state() != QProcess::NotRunning)
+		m_debuggerProcess.kill();
+}
+
+void DebuggerSession::onCommandTimeout()
+{
+	if (!m_commandInFlight)
+		return;
+	const int token = m_inFlight.token;
+	const QString command = m_inFlight.command;
+	abortCommandChannel(tr("command %1 (%2) timed out after %3 ms")
+	                    .arg(token)
+	                    .arg(command)
+	                    .arg(m_commandTimeoutMs));
 }
 
 // ============================================================================
@@ -1013,7 +1112,7 @@ void DebuggerSession::dispatchDebuggerMessage(const QString& rawLine)
 	// 2) Stream records (console / target / log)
 	// ------------------------------------------------------------
 	if (line.startsWith("~\"") || line.startsWith("@\"") || line.startsWith("&\"")) {
-		const QString decoded = decodeCString(line.mid(2));
+		const QString decoded = decodeCString(line.mid(1));
 		if (decoded.contains("Process record: failed to record execution log")) {
 			m_reverseRecordingRequested = false;
 			m_reverseRecordingFailed = true;
@@ -1125,13 +1224,17 @@ void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
 				m_targetExecuting = false;
 			}
 
-			// esegui callback del comando (se presente)
-			if (m_inFlight.cb)
-				m_inFlight.cb(m_inFlightReply);
-
-			// sblocca e manda prossimo comando
+			m_commandTimeoutTimer.stop();
+			const quint64 generation = m_inFlight.generation;
+			auto callback = std::move(m_inFlight.cb);
+			const QString reply = m_inFlightReply;
 			m_commandInFlight = false;
-			processCommandQueue();
+			m_inFlight = PendingCommand{};
+			m_inFlightReply.clear();
+			if (callback && generation == m_sessionGeneration)
+				callback(reply);
+			if (generation == m_sessionGeneration)
+				processCommandQueue();
 		}
 
 		return;
@@ -1143,6 +1246,11 @@ void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
 		<< "got=" << token
 		<< "expected=" << (m_commandInFlight ? m_inFlight.token : -1)
 		<< "line=" << resultLine;
+	if (token > 0) {
+		abortCommandChannel(tr("unexpected MI result token %1 (expected %2)")
+		                    .arg(token)
+		                    .arg(m_commandInFlight ? m_inFlight.token : -1));
+	}
 }
 
 
