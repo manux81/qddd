@@ -45,6 +45,9 @@
 
 static constexpr int ChangedRole = Qt::UserRole + 1;
 static constexpr int WatchRole = Qt::UserRole + 2;
+static constexpr int PointerExpressionRole = Qt::UserRole + 4;
+static constexpr int PointerLoadedRole = Qt::UserRole + 5;
+static constexpr int PointerLoadingRole = Qt::UserRole + 6;
 
 namespace {
 
@@ -259,6 +262,8 @@ VariablesView::VariablesView(QWidget *parent)
 	setItemDelegateForColumn(1, new ValueDelegate(this));
 	connect(m_model, &QStandardItemModel::itemChanged,
 	        this, &VariablesView::commitValue);
+	connect(this, &QTreeView::expanded, this, &VariablesView::expandPointer);
+	connect(this, &QTreeView::doubleClicked, this, &VariablesView::expandPointer);
 	setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(this, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
 		const QModelIndex index = indexAt(pos);
@@ -365,6 +370,10 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 	const QString path = parent
 		? childPath(itemPath(parent), node->name)
 		: node->name;
+	if (node->isPointer) {
+		nameItem->setData(path, PointerExpressionRole);
+		nameItem->setData(!node->children.empty(), PointerLoadedRole);
+	}
 
 	const bool isLeafValue = node->children.empty();
 	valueItem->setEditable(isLeafValue);
@@ -395,6 +404,18 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 		}
 		for (const auto &c : node->children)
 			if (c) addNode(nameItem, c.get());
+		return;
+	}
+
+	// Pointers to scalars (notably char*) have no debugger-provided children.
+	// Keep an expansion handle and resolve them only when the user opens them.
+	if (node->isPointer) {
+		auto* placeholderName = new QStandardItem(tr("Open pointer…"));
+		auto* placeholderValue = new QStandardItem;
+		placeholderName->setEditable(false);
+		placeholderValue->setEditable(false);
+		placeholderName->setForeground(QColor(150, 150, 150));
+		nameItem->appendRow({placeholderName, placeholderValue});
 		return;
 	}
 
@@ -459,6 +480,74 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 
 		nameItem->appendRow({ cn, cv });
 	}
+}
+
+QStandardItem* VariablesView::findPointerItem(const QString& expression) const
+{
+	std::function<QStandardItem*(QStandardItem*)> find =
+		[&](QStandardItem* parent) -> QStandardItem* {
+			if (!parent) return nullptr;
+			if (parent->data(PointerExpressionRole).toString() == expression)
+				return parent;
+			for (int row = 0; row < parent->rowCount(); ++row)
+				if (QStandardItem* found = find(parent->child(row, 0)))
+					return found;
+			return nullptr;
+		};
+
+	for (int row = 0; row < m_model->rowCount(); ++row)
+		if (QStandardItem* found = find(m_model->item(row, 0)))
+			return found;
+	return nullptr;
+}
+
+void VariablesView::expandPointer(const QModelIndex& index)
+{
+	if (!m_session || !index.isValid())
+		return;
+
+	QStandardItem* item = m_model->itemFromIndex(index.siblingAtColumn(0));
+	if (!item)
+		return;
+	const QString expression = item->data(PointerExpressionRole).toString();
+	if (expression.isEmpty() || item->data(PointerLoadedRole).toBool() ||
+	    item->data(PointerLoadingRole).toBool())
+		return;
+
+	item->setData(true, PointerLoadingRole);
+	if (item->rowCount() > 0) {
+		item->child(0, 0)->setText(tr("Loading…"));
+		item->child(0, 1)->setText(QString());
+	}
+
+	m_session->dereferencePointer(expression,
+		[this, expression](const QString& value, const QString& type) {
+			QStandardItem* pointerItem = findPointerItem(expression);
+			if (!pointerItem)
+				return;
+
+			pointerItem->setData(false, PointerLoadingRole);
+			pointerItem->setData(true, PointerLoadedRole);
+			pointerItem->removeRows(0, pointerItem->rowCount());
+
+			if (value.isEmpty()) {
+				auto* unavailableName = new QStandardItem(tr("<unavailable>"));
+				auto* unavailableValue = new QStandardItem;
+				unavailableName->setEditable(false);
+				unavailableValue->setEditable(false);
+				pointerItem->appendRow({unavailableName, unavailableValue});
+				return;
+			}
+
+			DebugVariable dereferenced;
+			dereferenced.name = QStringLiteral("*") + pointerItem->text();
+			dereferenced.value = value.trimmed();
+			dereferenced.type = type;
+			dereferenced.hasChildren = dereferenced.value.startsWith('{') &&
+			                           dereferenced.value.endsWith('}');
+			addNode(pointerItem, &dereferenced);
+			expand(m_model->indexFromItem(pointerItem));
+		});
 }
 
 void VariablesView::commitValue(QStandardItem *item)

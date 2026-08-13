@@ -56,10 +56,11 @@ class VariablesView : public QTreeView {
 	void addNode(QStandardItem *parent,
 	             DebugVariable *node);
 	void commitValue(QStandardItem *item);
+	void expandPointer(const QModelIndex& index);
+	QStandardItem* findPointerItem(const QString& expression) const;
 
 	QStandardItemModel *m_model;
 	DebuggerSession *m_session = nullptr;
 	HardwareDebugSession *m_hardwareSession = nullptr;
 	bool m_refreshing = false;
 };
-

@@ -169,8 +169,6 @@ MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
 			        editor->setBreakpointLines(lines);
 	        });
 
-	connect(m_session.get(), &DebuggerSession::snapshotCaptured, this,
-	        [this](const ExecutionSnapshot &) { m_graphicalView->refresh(); });
 	connect(m_session.get(), &DebuggerSession::variablesUpdated, m_graphicalView,
 				  &GraphicalVariablesView::refresh);
 

@@ -44,6 +44,7 @@
 #include <vector>
 
 class GraphicalNodeItem;
+class QToolButton;
 
 class GraphicalEdgeItem : public QGraphicsPathItem
 {
@@ -165,6 +166,7 @@ private:
 	QPointF positionForNode(const QString& key, const QPointF& defaultPos) const;
 	void configureNodeItem(GraphicalNodeItem* item);
 	void applyAutomaticLayout(bool fitAfterLayout = false);
+	void setAutoLayoutEnabled(bool enabled);
 
 	QGraphicsScene*  m_scene   = nullptr;
 	DebuggerSession* m_session = nullptr;
@@ -176,4 +178,7 @@ private:
 	QHash<DebugVariable*, GraphicalNodeItem*> m_dynamicItems;
 	QSet<QString> m_openPointerExprs;
 	quint64 m_refreshGeneration = 0;
+	QToolButton* m_autoLayoutButton = nullptr;
+	bool m_autoLayoutEnabled = true;
+	bool m_refreshInProgress = false;
 };

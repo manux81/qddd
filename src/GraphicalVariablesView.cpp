@@ -555,8 +555,28 @@ void GraphicalNodeItem::mouseReleaseEvent(QGraphicsSceneMouseEvent* event)
 void GraphicalNodeItem::recalculateWidth()
 {
 	QFontMetrics fm{QFont()};
-	int w = fm.horizontalAdvance(m_node->name) + 40;
-	m_width = qMax(m_width, w);
+	int w = fm.horizontalAdvance(m_node->address.isEmpty()
+		? m_node->name
+		: QString("%1 : %2").arg(m_node->name, m_node->address)) + 32;
+
+	std::function<void(const DebugVariable*, int)> measure =
+		[&](const DebugVariable* value, int indent) {
+			if (!value) return;
+			const QString text = value->children.empty()
+				? QString("%1 = %2").arg(value->name, value->value)
+				: QString("%1 = []").arg(value->name);
+			w = qMax(w, fm.horizontalAdvance(text) + 32 + indent * IndentStep);
+			for (const auto& child : value->children)
+				measure(child.get(), indent + 1);
+		};
+
+	if (m_node->children.empty())
+		w = qMax(w, fm.horizontalAdvance(m_node->value) + 24);
+	else
+		for (const auto& child : m_node->children)
+			measure(child.get(), 0);
+
+	m_width = qMax(260, w);
 }
 
 void GraphicalNodeItem::addEdge(GraphicalEdgeItem* e)
@@ -817,6 +837,13 @@ GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
 		QToolButton:pressed {
 			background: #5a5a5a;
 		}
+
+		QToolButton:checked {
+			color: white;
+			background: #2563EB;
+			border: 1px solid #60A5FA;
+			border-radius: 4px;
+		}
 	)");
 
 	auto *vl = new QVBoxLayout(overlay);
@@ -835,8 +862,12 @@ GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
 
 	connect(mk("+", tr("Zoom in")), &QToolButton::clicked, this, &GraphicalVariablesView::zoomIn);
 	connect(mk("-", tr("Zoom out")), &QToolButton::clicked, this, &GraphicalVariablesView::zoomOut);
-	connect(mk("⇆", tr("Auto layout (keeps manually positioned blocks)")),
-	        &QToolButton::clicked, this, &GraphicalVariablesView::autoLayout);
+	m_autoLayoutButton = mk("⇆", tr("Automatic layout: on"));
+	m_autoLayoutButton->setCheckable(true);
+	m_autoLayoutButton->setChecked(true);
+	m_autoLayoutButton->setAccessibleName(tr("Automatic layout"));
+	connect(m_autoLayoutButton, &QToolButton::toggled,
+	        this, &GraphicalVariablesView::setAutoLayoutEnabled);
 	connect(mk("⤢", tr("Fit graph")), &QToolButton::clicked, this, &GraphicalVariablesView::fitGraph);
 	connect(mk("⟳", tr("Reset zoom")), &QToolButton::clicked, this, &GraphicalVariablesView::resetZoom);
 
@@ -857,6 +888,9 @@ void GraphicalVariablesView::refresh()
 {
 	if (!m_session) return;
 	++m_refreshGeneration;
+	m_refreshInProgress = true;
+	setUpdatesEnabled(false);
+	const QPointF previousCenter = mapToScene(viewport()->rect().center());
 
 	m_scene->clear();
 	m_dynamicItems.clear();
@@ -920,7 +954,15 @@ void GraphicalVariablesView::refresh()
 		}
 	}
 
-	applyAutomaticLayout(false);
+	if (m_autoLayoutEnabled)
+		applyAutomaticLayout(false);
+	else
+		m_scene->setSceneRect(m_scene->itemsBoundingRect().adjusted(-200, -200, 200, 200));
+
+	m_refreshInProgress = false;
+	centerOn(previousCenter);
+	setUpdatesEnabled(true);
+	viewport()->update();
 }
 
 void GraphicalVariablesView::rememberNodePosition(const QString& key, const QPointF& pos)
@@ -952,8 +994,21 @@ void GraphicalVariablesView::configureNodeItem(GraphicalNodeItem* item)
 			rememberNodePosition(key, pos);
 		});
 	item->setGeometryChangedCallback([this] {
-		QTimer::singleShot(0, this, &GraphicalVariablesView::autoLayout);
+		if (m_autoLayoutEnabled && !m_refreshInProgress)
+			QTimer::singleShot(0, this, &GraphicalVariablesView::autoLayout);
 	});
+}
+
+void GraphicalVariablesView::setAutoLayoutEnabled(bool enabled)
+{
+	m_autoLayoutEnabled = enabled;
+	if (m_autoLayoutButton) {
+		m_autoLayoutButton->setToolTip(enabled
+			? tr("Automatic layout: on")
+			: tr("Automatic layout: off"));
+	}
+	if (enabled)
+		autoLayout();
 }
 
 void GraphicalVariablesView::applyAutomaticLayout(bool fitAfterLayout)
