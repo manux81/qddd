@@ -23,3 +23,21 @@ jobs:
         run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  windows-qt5:
+    name: Windows / Qt 5
+    # Keep this aligned with the release workflow: Qt 5.15.2 is not compatible
+    # with the newest MSVC checked-iterator changes on windows-latest.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: "5.15.2"
+          cache: true
+      - name: Configure
+        run: cmake -S . -B build -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build --build-config Release --output-on-failure

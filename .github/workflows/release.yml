@@ -39,7 +39,9 @@ jobs:
 
   windows:
     name: Windows
-    runs-on: windows-latest
+    # Qt 5.15.2 still depends on checked-iterator helpers removed from the
+    # newest MSVC toolchain shipped by windows-latest.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v6
       - uses: jurplel/install-qt-action@v4
