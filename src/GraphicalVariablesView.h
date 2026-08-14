@@ -82,7 +82,9 @@ private:
 class GraphicalNodeItem : public QGraphicsItem
 {
 public:
-	explicit GraphicalNodeItem(DebugVariable* node, QString layoutKey = {});
+	explicit GraphicalNodeItem(DebugVariable* node,
+	                           DebuggerSession* session,
+	                           QString layoutKey = {});
 
 	QRectF boundingRect() const override;
 	void paint(QPainter* painter,
@@ -96,6 +98,8 @@ public:
 	QPointF outputPortFor(DebugVariable* child) const;
 	QPointF outputPortForExpression(const QString& expression) const;
 	void setExpandedRecursively(bool expanded, int maxDepth = 8);
+	QSet<QString> expandedExpressions() const;
+	void restoreExpandedExpressions(const QSet<QString>& expressions);
 
 	void recalculateWidth();
 	void addEdge(GraphicalEdgeItem* e);
@@ -116,12 +120,14 @@ private:
 
 private:
 	DebugVariable* m_node = nullptr;
+	DebuggerSession* m_session = nullptr;
 	QString m_layoutKey;
 	std::function<void(const QString&, const QPointF&)> m_onPositionChanged;
 	std::function<void(const QString&, const QPointF&)> m_onUserMoved;
 	std::function<void()> m_onGeometryChanged;
 	QList<GraphicalEdgeItem*> m_edges;
 	QHash<DebugVariable*, bool> m_expanded;
+	QSet<QString> m_expandedExpressionState;
 
 	int m_width = 260;
 	int m_page = 0;
@@ -158,6 +164,10 @@ protected:
 	void drawBackground(QPainter*, const QRectF&) override;
 
 private:
+	void createDisplayExpression(const QString& dependsOn = {});
+	void deleteDisplayExpression(const QString& expression);
+	void replaceDisplayWithDereference(DebugVariable* variable);
+	void editVariableValue(DebugVariable* variable);
 	void openPointerNode(DebugVariable* ptrVar, GraphicalNodeItem* fromItem);
 	void ensurePointerNodeOpen(const QString& pointerExpr,
 							   DebugVariable* ptrVar,
@@ -172,13 +182,16 @@ private:
 	DebuggerSession* m_session = nullptr;
 
 	QHash<QString, QPointF> m_nodePositions;
+	QHash<QString, QSet<QString>> m_nodeExpandedExpressions;
 	QSet<QString> m_pinnedNodeKeys;
 	std::vector<std::unique_ptr<DebugVariable>> m_dynamicRoots;
 	QHash<QString, DebugVariable*> m_dynamicRootByKey;
 	QHash<DebugVariable*, GraphicalNodeItem*> m_dynamicItems;
 	QSet<QString> m_openPointerExprs;
+	QHash<QString, QString> m_displayDependencies;
 	quint64 m_refreshGeneration = 0;
 	QToolButton* m_autoLayoutButton = nullptr;
 	bool m_autoLayoutEnabled = true;
 	bool m_refreshInProgress = false;
+	bool m_refreshPending = false;
 };
