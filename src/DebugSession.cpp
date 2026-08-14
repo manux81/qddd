@@ -38,6 +38,85 @@
 // Small utilities
 // ======================
 
+QString debugValueFormatLabel(DebugValueFormat format)
+{
+	switch (format) {
+	case DebugValueFormat::Hexadecimal: return QObject::tr("Hexadecimal");
+	case DebugValueFormat::Decimal: return QObject::tr("Decimal");
+	case DebugValueFormat::Octal: return QObject::tr("Octal");
+	case DebugValueFormat::Binary: return QObject::tr("Binary");
+	case DebugValueFormat::Character: return QObject::tr("Character");
+	case DebugValueFormat::Natural: return QObject::tr("Natural");
+	}
+	return QObject::tr("Natural");
+}
+
+QString formatDebugValue(const QString& value, DebugValueFormat format)
+{
+	if (format == DebugValueFormat::Natural)
+		return value;
+
+	const QString text = value.trimmed();
+	static const QRegularExpression integerPattern(
+		QStringLiteral(R"(^([+-]?)(0[xX][0-9a-fA-F]+|0[bB][01]+|[0-9]+)(?:\s+.*)?$)"));
+	const QRegularExpressionMatch match = integerPattern.match(text);
+	if (!match.hasMatch())
+		return value;
+
+	const bool negative = match.captured(1) == QStringLiteral("-");
+	QString digits = match.captured(2);
+	int base = 10;
+	if (digits.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive)) {
+		base = 16;
+		digits.remove(0, 2);
+	} else if (digits.startsWith(QStringLiteral("0b"), Qt::CaseInsensitive)) {
+		base = 2;
+		digits.remove(0, 2);
+	}
+	bool ok = false;
+	const qulonglong magnitude = digits.toULongLong(&ok, base);
+	if (!ok)
+		return value;
+
+	auto signedPrefix = [negative](const QString& formatted) {
+		return negative ? QStringLiteral("-") + formatted : formatted;
+	};
+	switch (format) {
+	case DebugValueFormat::Hexadecimal:
+		return signedPrefix(QStringLiteral("0x") + QString::number(magnitude, 16));
+	case DebugValueFormat::Decimal:
+		return signedPrefix(QString::number(magnitude, 10));
+	case DebugValueFormat::Octal:
+		return signedPrefix(QStringLiteral("0o") + QString::number(magnitude, 8));
+	case DebugValueFormat::Binary:
+		return signedPrefix(QStringLiteral("0b") + QString::number(magnitude, 2));
+	case DebugValueFormat::Character: {
+		if (negative || magnitude > 0x10ffff)
+			return value;
+		QString character;
+		switch (magnitude) {
+		case '\n': character = QStringLiteral("\\n"); break;
+		case '\r': character = QStringLiteral("\\r"); break;
+		case '\t': character = QStringLiteral("\\t"); break;
+		case '\0': character = QStringLiteral("\\0"); break;
+		case '\\': character = QStringLiteral("\\\\"); break;
+		case '\'': character = QStringLiteral("\\'"); break;
+		default: {
+			const uint codePoint = static_cast<uint>(magnitude);
+			character = QChar::isPrint(codePoint)
+				? QString::fromUcs4(&codePoint, 1)
+				: QStringLiteral("\\u%1").arg(codePoint, 4, 16, QLatin1Char('0'));
+			break;
+		}
+		}
+		return QStringLiteral("'%1' (%2)").arg(character).arg(magnitude);
+	}
+	case DebugValueFormat::Natural:
+		return value;
+	}
+	return value;
+}
+
 static QString decodeCString(QString s)
 {
     if (s.startsWith('"') && s.endsWith('"'))
@@ -240,6 +319,15 @@ static void expandInlineStructIntoChildren(
 		c->name  = e.left(eq).trimmed();
 		c->value = e.mid(eq + 1).trimmed();
 		c->parent = node;
+		const QString parentExpression = node->fullPath();
+		if (!parentExpression.isEmpty()) {
+			const QString base = node->isPointer
+				? QStringLiteral("(*(%1))").arg(parentExpression)
+				: parentExpression;
+			c->expression = c->name.startsWith('[')
+				? base + c->name
+				: base + QStringLiteral(".") + c->name;
+		}
 
 		c->isPointer   = looksLikePointer(c->value);
 		c->pointeeAddress = c->isPointer ? extractHexAddress(c->value) : QString();
@@ -265,8 +353,11 @@ static void expandInlineStructIntoChildren(
 
 QString DebugVariable::fullPath() const
 {
-    if (!parent) return name;
-	const QString parentPath = parent->fullPath();
+	if (!expression.isEmpty()) return expression;
+	if (!parent) return name;
+	QString parentPath = parent->fullPath();
+	if (parent->isPointer)
+		parentPath = QStringLiteral("(*(%1))").arg(parentPath);
 	return name.startsWith('[')
 		? parentPath + name
 		: parentPath + "." + name;
@@ -1506,39 +1597,71 @@ void DebuggerSession::requestStopState()
 void DebuggerSession::requestWatchValues()
 {
 	for (const QString& expression : std::as_const(m_watchExpressions)) {
-		enqueueCommand(
-			QStringLiteral("-data-evaluate-expression %1").arg(miQuote(expression)),
-			[this, expression](const QString& reply) {
-				if (!m_watchExpressions.contains(expression))
-					return;
-
-				auto existing = std::find_if(
-					m_variables.begin(), m_variables.end(),
-					[&expression](const std::unique_ptr<DebugVariable>& variable) {
-						return variable && variable->isWatch && variable->name == expression;
-					});
-
-				auto watch = std::make_unique<DebugVariable>();
-				watch->name = expression;
-				watch->value = miGet(reply, QStringLiteral("value"));
-				if (watch->value.isEmpty()) {
-					const QString error = miGet(reply, QStringLiteral("msg"));
-					watch->value = error.isEmpty() ? tr("<unavailable>")
-					                               : QStringLiteral("<%1>").arg(error);
-				}
-				watch->isWatch = true;
-				watch->isPointer = looksLikePointer(watch->value);
-				watch->pointeeAddress = watch->isPointer ? extractHexAddress(watch->value) : QString();
-				watch->hasChildren = looksLikeStruct(watch->value);
-				expandInlineStructIntoChildren(watch.get(), watch->value, 0, 2);
-
-				if (existing == m_variables.end())
-					m_variables.push_back(std::move(watch));
-				else
-					*existing = std::move(watch);
-				emit variablesUpdated();
-			});
+		if (m_disabledWatchExpressions.contains(expression)) {
+			upsertWatchVariable(expression,
+			                    m_watchValueCache.value(expression, tr("<disabled>")),
+			                    m_watchTypeCache.value(expression), false);
+			continue;
+		}
+		requestWatchValue(expression);
 	}
+}
+
+void DebuggerSession::requestWatchValue(const QString& expression)
+{
+	if (!m_watchExpressions.contains(expression) ||
+	    m_disabledWatchExpressions.contains(expression) || !isRunning() ||
+	    m_targetExecuting)
+		return;
+
+	enqueueCommand(
+		QStringLiteral("-data-evaluate-expression %1").arg(miQuote(expression)),
+		[this, expression](const QString& reply) {
+			if (!m_watchExpressions.contains(expression) ||
+			    m_disabledWatchExpressions.contains(expression))
+				return;
+
+			QString value = miGet(reply, QStringLiteral("value"));
+			const QString type = miGet(reply, QStringLiteral("type"));
+			if (value.isEmpty()) {
+				const QString error = miGet(reply, QStringLiteral("msg"));
+				value = error.isEmpty() ? tr("<unavailable>")
+				                        : QStringLiteral("<%1>").arg(error);
+			}
+			m_watchValueCache.insert(expression, value);
+			m_watchTypeCache.insert(expression, type);
+			upsertWatchVariable(expression, value, type, true);
+			emit variablesUpdated();
+		});
+}
+
+void DebuggerSession::upsertWatchVariable(const QString& expression,
+	                                       const QString& value,
+	                                       const QString& type,
+	                                       bool enabled)
+{
+	auto existing = std::find_if(
+		m_variables.begin(), m_variables.end(),
+		[&expression](const std::unique_ptr<DebugVariable>& variable) {
+			return variable && variable->isWatch && variable->name == expression;
+		});
+
+	auto watch = std::make_unique<DebugVariable>();
+	watch->name = expression;
+	watch->value = value;
+	watch->type = type;
+	watch->isWatch = true;
+	watch->enabled = enabled;
+	watch->isPointer = enabled && looksLikePointer(watch->value);
+	watch->pointeeAddress = watch->isPointer ? extractHexAddress(watch->value) : QString();
+	watch->hasChildren = enabled && looksLikeStruct(watch->value);
+	if (enabled)
+		expandInlineStructIntoChildren(watch.get(), watch->value, 0, 2);
+
+	if (existing == m_variables.end())
+		m_variables.push_back(std::move(watch));
+	else
+		*existing = std::move(watch);
 }
 
 void DebuggerSession::parseStackFromReply(const QString& replyBlob)
@@ -1771,12 +1894,16 @@ void DebuggerSession::addWatchExpression(const QString& expression)
 		return;
 	m_watchExpressions.push_back(trimmed);
 	if (!m_targetExecuting)
-		requestWatchValues();
+		requestWatchValue(trimmed);
 }
 
 void DebuggerSession::removeWatchExpression(const QString& expression)
 {
 	m_watchExpressions.removeAll(expression);
+	m_disabledWatchExpressions.remove(expression);
+	m_watchValueCache.remove(expression);
+	m_watchTypeCache.remove(expression);
+	m_valueFormats.remove(expression);
 	m_variables.erase(
 		std::remove_if(m_variables.begin(), m_variables.end(),
 			[&expression](const std::unique_ptr<DebugVariable>& variable) {
@@ -1786,9 +1913,107 @@ void DebuggerSession::removeWatchExpression(const QString& expression)
 	emit variablesUpdated();
 }
 
+void DebuggerSession::replaceWatchExpression(const QString& oldExpression,
+	                                          const QString& newExpression)
+{
+	const QString replacement = newExpression.trimmed();
+	const int index = m_watchExpressions.indexOf(oldExpression);
+	if (index < 0 || replacement.isEmpty() ||
+	    (replacement != oldExpression && m_watchExpressions.contains(replacement)))
+		return;
+
+	const bool enabled = isWatchExpressionEnabled(oldExpression);
+	const DebugValueFormat previousFormat = valueFormat(oldExpression);
+	m_watchExpressions[index] = replacement;
+	m_disabledWatchExpressions.remove(oldExpression);
+	m_watchValueCache.remove(oldExpression);
+	m_watchTypeCache.remove(oldExpression);
+	m_valueFormats.remove(oldExpression);
+	if (previousFormat != DebugValueFormat::Natural)
+		m_valueFormats.insert(replacement, previousFormat);
+	if (!enabled)
+		m_disabledWatchExpressions.insert(replacement);
+
+	m_variables.erase(
+		std::remove_if(m_variables.begin(), m_variables.end(),
+			[&oldExpression](const std::unique_ptr<DebugVariable>& variable) {
+				return variable && variable->isWatch && variable->name == oldExpression;
+			}),
+		m_variables.end());
+
+	if (enabled) {
+		if (!m_targetExecuting)
+			requestWatchValue(replacement);
+		else
+			upsertWatchVariable(replacement, tr("<pending>"), {}, true);
+	} else {
+		upsertWatchVariable(replacement, tr("<disabled>"), {}, false);
+	}
+	emit variablesUpdated();
+}
+
+void DebuggerSession::setWatchExpressionEnabled(const QString& expression, bool enabled)
+{
+	if (!m_watchExpressions.contains(expression) ||
+	    isWatchExpressionEnabled(expression) == enabled)
+		return;
+
+	if (enabled) {
+		m_disabledWatchExpressions.remove(expression);
+		if (!m_targetExecuting)
+			requestWatchValue(expression);
+		else
+			upsertWatchVariable(expression, tr("<pending>"), {}, true);
+	} else {
+		m_disabledWatchExpressions.insert(expression);
+		auto existing = std::find_if(
+			m_variables.begin(), m_variables.end(),
+			[&expression](const std::unique_ptr<DebugVariable>& variable) {
+				return variable && variable->isWatch && variable->name == expression;
+			});
+		if (existing != m_variables.end()) {
+			m_watchValueCache.insert(expression, (*existing)->value);
+			m_watchTypeCache.insert(expression, (*existing)->type);
+		}
+		upsertWatchVariable(expression,
+		                    m_watchValueCache.value(expression, tr("<disabled>")),
+		                    m_watchTypeCache.value(expression), false);
+	}
+	emit variablesUpdated();
+}
+
+bool DebuggerSession::isWatchExpressionEnabled(const QString& expression) const
+{
+	return m_watchExpressions.contains(expression) &&
+	       !m_disabledWatchExpressions.contains(expression);
+}
+
 const QStringList& DebuggerSession::watchExpressions() const
 {
 	return m_watchExpressions;
+}
+
+void DebuggerSession::setValueFormat(const QString& expression, DebugValueFormat format)
+{
+	if (expression.isEmpty())
+		return;
+	if (format == DebugValueFormat::Natural)
+		m_valueFormats.remove(expression);
+	else
+		m_valueFormats.insert(expression, format);
+	emit variablesUpdated();
+}
+
+DebugValueFormat DebuggerSession::valueFormat(const QString& expression) const
+{
+	return m_valueFormats.value(expression, DebugValueFormat::Natural);
+}
+
+QString DebuggerSession::formattedValue(const DebugVariable* variable) const
+{
+	if (!variable)
+		return {};
+	return formatDebugValue(variable->value, valueFormat(variable->fullPath()));
 }
 
 void DebuggerSession::sendRawCommand(const QString& cmd,

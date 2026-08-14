@@ -88,6 +88,27 @@ bool start(DebuggerSession& session, const QString& executable, int& starts)
 int main(int argc, char** argv)
 {
 	QCoreApplication app(argc, argv);
+	DebugVariable pointerRoot;
+	pointerRoot.name = QStringLiteral("ptr");
+	pointerRoot.isPointer = true;
+	DebugVariable pointerMember;
+	pointerMember.name = QStringLiteral("field");
+	pointerMember.parent = &pointerRoot;
+	if (pointerMember.fullPath() != QStringLiteral("(*(ptr)).field"))
+		return 23;
+	if (formatDebugValue(QStringLiteral("42"), DebugValueFormat::Hexadecimal) !=
+	    QStringLiteral("0x2a"))
+		return 24;
+	if (formatDebugValue(QStringLiteral("0x2a"), DebugValueFormat::Decimal) !=
+	    QStringLiteral("42"))
+		return 25;
+	if (formatDebugValue(QStringLiteral("-10"), DebugValueFormat::Binary) !=
+	    QStringLiteral("-0b1010"))
+		return 26;
+	if (formatDebugValue(QStringLiteral("65"), DebugValueFormat::Character) !=
+	    QStringLiteral("'A' (65)"))
+		return 27;
+
 	QTemporaryDir temp;
 	if (!temp.isValid())
 		return 1;
@@ -134,6 +155,46 @@ int main(int argc, char** argv)
 	                       });
 	if (!waitFor([&] { return multiDone; }) || !consoleEscapeDecoded)
 		return 5;
+
+	session.addWatchExpression(QStringLiteral("watched"));
+	auto findWatch = [&session](const QString& expression) -> const DebugVariable* {
+		for (const auto& variable : session.variables())
+			if (variable && variable->isWatch && variable->name == expression)
+				return variable.get();
+		return nullptr;
+	};
+	if (!waitFor([&] { return findWatch(QStringLiteral("watched")) != nullptr; }))
+		return 17;
+	if (!session.isWatchExpressionEnabled(QStringLiteral("watched")))
+		return 18;
+	session.setValueFormat(QStringLiteral("watched"), DebugValueFormat::Hexadecimal);
+	if (session.valueFormat(QStringLiteral("watched")) != DebugValueFormat::Hexadecimal)
+		return 28;
+
+	session.setWatchExpressionEnabled(QStringLiteral("watched"), false);
+	const DebugVariable* disabledWatch = findWatch(QStringLiteral("watched"));
+	if (!disabledWatch || disabledWatch->enabled ||
+	    session.isWatchExpressionEnabled(QStringLiteral("watched")))
+		return 19;
+
+	session.replaceWatchExpression(QStringLiteral("watched"),
+	                               QStringLiteral("replacement"));
+	if (session.watchExpressions().contains(QStringLiteral("watched")) ||
+	    !session.watchExpressions().contains(QStringLiteral("replacement")) ||
+	    session.isWatchExpressionEnabled(QStringLiteral("replacement")) ||
+	    session.valueFormat(QStringLiteral("replacement")) != DebugValueFormat::Hexadecimal)
+		return 20;
+
+	session.setWatchExpressionEnabled(QStringLiteral("replacement"), true);
+	if (!waitFor([&] {
+		const DebugVariable* watch = findWatch(QStringLiteral("replacement"));
+		return watch && watch->enabled;
+	}))
+		return 21;
+	session.removeWatchExpression(QStringLiteral("replacement"));
+	if (findWatch(QStringLiteral("replacement")) ||
+	    !session.watchExpressions().isEmpty())
+		return 22;
 
 	bool errorDone = false;
 	bool afterErrorDone = false;

@@ -54,6 +54,18 @@ struct DebugVariable;
 struct ExecutionSnapshot;
 struct VariableChange;
 
+enum class DebugValueFormat {
+	Natural,
+	Hexadecimal,
+	Decimal,
+	Octal,
+	Binary,
+	Character
+};
+
+QString debugValueFormatLabel(DebugValueFormat format);
+QString formatDebugValue(const QString& value, DebugValueFormat format);
+
 struct BreakpointAction
 {
 	enum class Type {
@@ -112,6 +124,9 @@ struct StackFrame
 struct DebugVariable
 {
 	QString name;
+	// Debugger-ready expression for this value.  Unlike the display name it
+	// preserves dereference/member syntax for children of pointer displays.
+	QString expression;
 	QString value;
 	QString type;
 	QString address;
@@ -122,6 +137,7 @@ struct DebugVariable
 	bool isPointer   = false;
 	bool hasChildren = false;
 	bool isWatch     = false;
+	bool enabled     = true;
 
 	DebugVariable* parent = nullptr;
 	std::vector<std::unique_ptr<DebugVariable>> children;
@@ -240,7 +256,14 @@ public:
 	void evaluateExpression(const QString& expression);
 	void addWatchExpression(const QString& expression);
 	void removeWatchExpression(const QString& expression);
+	void replaceWatchExpression(const QString& oldExpression,
+	                            const QString& newExpression);
+	void setWatchExpressionEnabled(const QString& expression, bool enabled);
+	[[nodiscard]] bool isWatchExpressionEnabled(const QString& expression) const;
 	[[nodiscard]] const QStringList& watchExpressions() const;
+	void setValueFormat(const QString& expression, DebugValueFormat format);
+	[[nodiscard]] DebugValueFormat valueFormat(const QString& expression) const;
+	[[nodiscard]] QString formattedValue(const DebugVariable* variable) const;
 	void sendRawCommand(const QString& cmd,
 	                    std::function<void(const QString&)> cb = nullptr);
 	void setVariable(const QString& fullPath, const QString& newValue);
@@ -325,6 +348,11 @@ private:
 	void parseStackFromReply(const QString& replyBlob);
 	void parseVarsFromReply(const QString& replyBlob);
 	void requestWatchValues();
+	void requestWatchValue(const QString& expression);
+	void upsertWatchVariable(const QString& expression,
+	                        const QString& value,
+	                        const QString& type,
+	                        bool enabled);
 
 	// snapshot
 	void finalizeSnapshotIfReady();
@@ -380,6 +408,10 @@ private:
 	QVector<StackFrame> m_stackFrames;
 	std::vector<std::unique_ptr<DebugVariable>> m_variables;
 	QStringList m_watchExpressions;
+	QSet<QString> m_disabledWatchExpressions;
+	QHash<QString, QString> m_watchValueCache;
+	QHash<QString, QString> m_watchTypeCache;
+	QHash<QString, DebugValueFormat> m_valueFormats;
 
 	QVector<ExecutionSnapshot> m_executionHistory;
 	enum class ReplayDirection { None, Backward, Forward };
