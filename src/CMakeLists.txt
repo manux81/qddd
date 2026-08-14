@@ -38,6 +38,8 @@ add_executable(qddd WIN32 MACOSX_BUNDLE
     QDDDSplash.h
     SettingsDialog.cpp
     SettingsDialog.h
+    ToggleSwitch.cpp
+    ToggleSwitch.h
     DebugAssistantDock.cpp
     DebugAssistantDock.h
 

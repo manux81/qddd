@@ -39,6 +39,7 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
@@ -63,6 +64,72 @@
 HardwareDebugPage::HardwareDebugPage(QWidget* parent)
     : QWidget(parent)
 {
+    setObjectName(QStringLiteral("hardwareDebugPage"));
+    setStyleSheet(QStringLiteral(R"(
+        QWidget#hardwareDebugPage {
+            background: #1e1e1e;
+        }
+        QWidget#hardwareDebugPage QGroupBox {
+            background: transparent;
+            border: 0;
+            margin-top: 18px;
+            padding: 18px 0 10px 0;
+            color: #ffffff;
+            font-size: 14px;
+            font-weight: 650;
+        }
+        QWidget#hardwareDebugPage QGroupBox::title {
+            subcontrol-origin: margin;
+            subcontrol-position: top left;
+            left: 0;
+            padding: 0;
+            color: #ffffff;
+        }
+        QWidget#hardwareDebugPage QGroupBox#profileSidebar {
+            background: #252526;
+            border: 1px solid #3c3c3c;
+            border-radius: 8px;
+            padding: 18px 14px 14px 14px;
+        }
+        QWidget#hardwareDebugPage QGroupBox#profileSidebar::title {
+            left: 12px;
+            padding: 0 6px;
+        }
+        QWidget#hardwareDebugPage QGroupBox QLabel,
+        QWidget#hardwareDebugPage QGroupBox QCheckBox {
+            color: #cccccc;
+            font-size: 12px;
+            font-weight: 400;
+        }
+        QWidget#hardwareDebugPage QScrollArea {
+            background: transparent;
+            border: 0;
+        }
+        QWidget#hardwareDebugPage QListWidget {
+            background: #2d2d2d;
+            border: 1px solid #3c3c3c;
+            border-radius: 6px;
+            padding: 6px;
+        }
+        QWidget#hardwareDebugPage QListWidget::item {
+            min-height: 26px;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+        QWidget#hardwareDebugPage QListWidget::item:selected {
+            background: #094771;
+            color: #ffffff;
+        }
+        QWidget#hardwareDebugPage QPushButton#dangerButton {
+            color: #ff8a8a;
+            border-color: #704040;
+        }
+        QWidget#hardwareDebugPage QPushButton#dangerButton:hover {
+            color: #ffffff;
+            background: #5a2424;
+            border-color: #a64a4a;
+        }
+    )"));
     setupUi();
 }
 
@@ -75,46 +142,61 @@ HardwareDebugPage::~HardwareDebugPage() = default;
 void HardwareDebugPage::setupUi()
 {
     auto* rootLayout = new QVBoxLayout(this);
+    rootLayout->setContentsMargins(28, 14, 28, 20);
+    rootLayout->setSpacing(10);
 
     auto* intro = new QLabel(
         tr("Create one profile for each hardware probe. Enabled profiles appear in the target selector in the main window. Changes are stored with Apply or OK."),
         this);
     intro->setWordWrap(true);
-    intro->setStyleSheet("padding: 8px; background: rgba(70,120,180,35); border-radius: 5px;");
+    intro->setObjectName(QStringLiteral("introCard"));
     rootLayout->addWidget(intro);
 
     // ================================================================
     // Top: Configuration list management
     // ================================================================
-    auto* configListBox = new QGroupBox(tr("Hardware probe profiles"), this);
+    auto* bodyLayout = new QHBoxLayout();
+    bodyLayout->setContentsMargins(0, 0, 0, 0);
+    bodyLayout->setSpacing(16);
+
+    auto* configListBox = new QGroupBox(tr("Probe profiles"), this);
+    configListBox->setObjectName(QStringLiteral("profileSidebar"));
+    configListBox->setMinimumWidth(250);
+    configListBox->setMaximumWidth(290);
     auto* configListLayout = new QVBoxLayout(configListBox);
+    configListLayout->setSpacing(10);
 
     m_configList = new QListWidget(configListBox);
-    m_configList->setMaximumHeight(120);
+    m_configList->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_configList->setTextElideMode(Qt::ElideMiddle);
+    m_configList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     connect(m_configList, &QListWidget::currentRowChanged,
             this, &HardwareDebugPage::onConfigSelected);
 
-    auto* configBtnLayout = new QHBoxLayout();
+    auto* configBtnLayout = new QGridLayout();
+    configBtnLayout->setContentsMargins(0, 0, 0, 0);
+    configBtnLayout->setHorizontalSpacing(8);
+    configBtnLayout->setVerticalSpacing(8);
     m_addBtn = new QPushButton(tr("New profile"), configListBox);
     m_deleteBtn = new QPushButton(tr("Delete profile"), configListBox);
     m_duplicateBtn = new QPushButton(tr("Duplicate"), configListBox);
     m_renameBtn = new QPushButton(tr("Rename"), configListBox);
+    m_deleteBtn->setObjectName(QStringLiteral("dangerButton"));
 
     connect(m_addBtn, &QPushButton::clicked, this, &HardwareDebugPage::onAddConfig);
     connect(m_deleteBtn, &QPushButton::clicked, this, &HardwareDebugPage::onDeleteConfig);
     connect(m_duplicateBtn, &QPushButton::clicked, this, &HardwareDebugPage::onDuplicateConfig);
     connect(m_renameBtn, &QPushButton::clicked, this, &HardwareDebugPage::onRenameConfig);
 
-    configBtnLayout->addWidget(m_addBtn);
-    configBtnLayout->addWidget(m_deleteBtn);
-    configBtnLayout->addWidget(m_duplicateBtn);
-    configBtnLayout->addWidget(m_renameBtn);
-    configBtnLayout->addStretch(1);
+    configBtnLayout->addWidget(m_addBtn, 0, 0, 1, 2);
+    configBtnLayout->addWidget(m_duplicateBtn, 1, 0);
+    configBtnLayout->addWidget(m_renameBtn, 1, 1);
+    configBtnLayout->addWidget(m_deleteBtn, 2, 0, 1, 2);
 
     configListLayout->addWidget(m_configList);
     configListLayout->addLayout(configBtnLayout);
 
-    rootLayout->addWidget(configListBox);
+    bodyLayout->addWidget(configListBox);
 
     // ================================================================
     // Scroll area for all configuration fields
@@ -129,6 +211,11 @@ void HardwareDebugPage::setupUi()
     // ================================================================
     auto* generalBox = new QGroupBox(tr("General Configuration"), scrollContent);
     auto* generalForm = new QFormLayout(generalBox);
+    generalForm->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+    generalForm->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    generalForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    generalForm->setHorizontalSpacing(18);
+    generalForm->setVerticalSpacing(10);
 
     m_nameEdit = new QLineEdit(generalBox);
     m_nameEdit->setPlaceholderText(tr("Configuration name"));
@@ -235,6 +322,11 @@ void HardwareDebugPage::setupUi()
     // ================================================================
     auto* imageBox = new QGroupBox(tr("Program Image && Symbols"), scrollContent);
     auto* imageForm = new QFormLayout(imageBox);
+    imageForm->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+    imageForm->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    imageForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    imageForm->setHorizontalSpacing(18);
+    imageForm->setVerticalSpacing(10);
 
     auto* progRow = new QWidget(imageBox);
     auto* progRowLayout = new QHBoxLayout(progRow);
@@ -289,6 +381,11 @@ void HardwareDebugPage::setupUi()
     // ================================================================
     m_stlinkGroup = new QGroupBox(tr("ST-LINK Specific"), scrollContent);
     auto* stlinkForm = new QFormLayout(m_stlinkGroup);
+    stlinkForm->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+    stlinkForm->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    stlinkForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    stlinkForm->setHorizontalSpacing(18);
+    stlinkForm->setVerticalSpacing(10);
 
     auto* cubeRow = new QWidget(m_stlinkGroup);
     auto* cubeRowLayout = new QHBoxLayout(cubeRow);
@@ -322,6 +419,11 @@ void HardwareDebugPage::setupUi()
     // ================================================================
     m_jlinkGroup = new QGroupBox(tr("J-Link Specific"), scrollContent);
     auto* jlinkForm = new QFormLayout(m_jlinkGroup);
+    jlinkForm->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+    jlinkForm->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    jlinkForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    jlinkForm->setHorizontalSpacing(18);
+    jlinkForm->setVerticalSpacing(10);
 
     m_jlinkDeviceEdit = new QLineEdit(m_jlinkGroup);
     m_jlinkDeviceEdit->setPlaceholderText(tr("e.g., STM32F407VG"));
@@ -362,6 +464,11 @@ void HardwareDebugPage::setupUi()
     // ================================================================
     m_mplabGroup = new QGroupBox(tr("MPLAB MDB / PICkit Basic"), scrollContent);
     auto* mplabForm = new QFormLayout(m_mplabGroup);
+    mplabForm->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+    mplabForm->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    mplabForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    mplabForm->setHorizontalSpacing(18);
+    mplabForm->setVerticalSpacing(10);
 
     auto* mplabInfo = new QLabel(
         tr("MDB is installed with MPLAB X. The target must be externally powered; PICkit Basic cannot power it."),
@@ -444,7 +551,8 @@ void HardwareDebugPage::setupUi()
     scrollLayout->addStretch(1);
 
     scrollArea->setWidget(scrollContent);
-    rootLayout->addWidget(scrollArea, 1);
+    bodyLayout->addWidget(scrollArea, 1);
+    rootLayout->addLayout(bodyLayout, 1);
 }
 
 // ============================================================================

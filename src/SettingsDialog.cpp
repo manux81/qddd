@@ -31,19 +31,23 @@
 
 #include "SettingsDialog.h"
 #include "HardwareDebugPage.h"
+#include "ToggleSwitch.h"
 
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSpinBox>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
@@ -73,37 +77,287 @@ QString withBrowse(QLineEdit* edit, const QString& caption, QWidget* parent,
 	return QFileDialog::getOpenFileName(parent, caption, start, filter);
 }
 
+QLabel* makeSectionTitle(const QString& text, QWidget* parent)
+{
+	auto* label = new QLabel(text, parent);
+	label->setObjectName(QStringLiteral("settingsSectionTitle"));
+	return label;
+}
+
+QWidget* makeSettingsRow(const QString& title, const QString& description,
+	                     QWidget* control, QWidget* parent, int controlWidth = 430)
+{
+	auto* row = new QWidget(parent);
+	row->setObjectName(QStringLiteral("settingsRow"));
+	auto* layout = new QHBoxLayout(row);
+	layout->setContentsMargins(0, 8, 0, 8);
+	layout->setSpacing(28);
+
+	auto* copy = new QWidget(row);
+	auto* copyLayout = new QVBoxLayout(copy);
+	copyLayout->setContentsMargins(0, 0, 0, 0);
+	copyLayout->setSpacing(4);
+	auto* titleLabel = new QLabel(title, copy);
+	titleLabel->setObjectName(QStringLiteral("settingsRowTitle"));
+	copyLayout->addWidget(titleLabel);
+	if (!description.isEmpty()) {
+		auto* descriptionLabel = new QLabel(description, copy);
+		descriptionLabel->setObjectName(QStringLiteral("settingsRowDescription"));
+		descriptionLabel->setWordWrap(true);
+		copyLayout->addWidget(descriptionLabel);
+	}
+
+	if (controlWidth > 0) {
+		control->setMinimumWidth(qMin(320, controlWidth));
+		control->setMaximumWidth(controlWidth);
+	}
+	layout->addWidget(copy, 1);
+	layout->addWidget(control, 0, Qt::AlignRight | Qt::AlignVCenter);
+	return row;
+}
+
 } // namespace
 
 SettingsDialog::SettingsDialog(QWidget* parent)
 	: QDialog(parent)
 {
+	setObjectName(QStringLiteral("settingsDialog"));
 	setWindowTitle(tr("Settings"));
 	setModal(true);
-	resize(900, 680);
-	setMinimumSize(760, 560);
+	resize(980, 720);
+	setMinimumSize(820, 600);
+	setStyleSheet(QStringLiteral(R"(
+		QDialog#settingsDialog {
+			background: #1e1e1e;
+			color: #cccccc;
+		}
+		QDialog#settingsDialog QWidget {
+			background: #1e1e1e;
+			color: #cccccc;
+		}
+		QDialog#settingsDialog QFrame#settingsHeader,
+		QDialog#settingsDialog QFrame#settingsFooter {
+			background: #1e1e1e;
+		}
+		QDialog#settingsDialog QFrame#settingsFooter {
+			border-top: 1px solid #3c3c3c;
+		}
+		QDialog#settingsDialog QLabel#settingsTitle {
+			font-size: 34px;
+			font-weight: 700;
+			color: #ffffff;
+		}
+		QDialog#settingsDialog QLabel#settingsSubtitle {
+			font-size: 13px;
+			color: #a8a8a8;
+		}
+		QDialog#settingsDialog QTabWidget#settingsTabs::pane {
+			background: #1e1e1e;
+			border: 0;
+		}
+		QDialog#settingsDialog QTabWidget#settingsTabs::tab-bar {
+			left: 38px;
+		}
+		QDialog#settingsDialog QTabWidget#settingsTabs {
+			background: #1e1e1e;
+		}
+		QDialog#settingsDialog QTabWidget#settingsTabs QTabBar {
+			background: #252526;
+		}
+		QDialog#settingsDialog QTabWidget#settingsTabs QTabBar::tab {
+			min-width: 124px;
+			min-height: 42px;
+			padding: 0 14px;
+			margin: 0 8px 0 0;
+			background: transparent;
+			border: 0;
+			border-bottom: 3px solid transparent;
+			color: #b3b3b3;
+			font-size: 13px;
+			font-weight: 600;
+		}
+		QDialog#settingsDialog QTabWidget#settingsTabs QTabBar::tab:hover {
+			color: #ffffff;
+		}
+		QDialog#settingsDialog QTabWidget#settingsTabs QTabBar::tab:selected {
+			background: transparent;
+			border-bottom: 3px solid #007acc;
+			color: #ffffff;
+		}
+		QDialog#settingsDialog QScrollArea,
+		QDialog#settingsDialog QScrollArea > QWidget > QWidget {
+			background: #1e1e1e;
+			border: 0;
+		}
+		QDialog#settingsDialog QGroupBox {
+			background: transparent;
+			border: 0;
+			margin-top: 28px;
+			padding-top: 22px;
+			font-size: 18px;
+			font-weight: 700;
+			color: #ffffff;
+		}
+		QDialog#settingsDialog QGroupBox::title {
+			subcontrol-origin: margin;
+			subcontrol-position: top left;
+			left: 0;
+			padding: 0;
+		}
+		QDialog#settingsDialog QLabel {
+			background: transparent;
+			color: #b3b3b3;
+			font-size: 13px;
+		}
+		QDialog#settingsDialog QLabel#introCard {
+			background: #252526;
+			border-radius: 8px;
+			padding: 14px 16px;
+			color: #b3b3b3;
+		}
+		QDialog#settingsDialog QLabel#settingsSectionTitle {
+			font-size: 20px;
+			font-weight: 700;
+			color: #ffffff;
+			padding-top: 18px;
+			padding-bottom: 5px;
+		}
+		QDialog#settingsDialog QLabel#settingsRowTitle {
+			font-size: 14px;
+			font-weight: 650;
+			color: #ffffff;
+		}
+		QDialog#settingsDialog QLabel#settingsRowDescription {
+			font-size: 12px;
+			color: #9d9d9d;
+		}
+		QDialog#settingsDialog QLineEdit,
+		QDialog#settingsDialog QComboBox,
+		QDialog#settingsDialog QSpinBox,
+		QDialog#settingsDialog QPlainTextEdit,
+		QDialog#settingsDialog QListWidget {
+			background: #2d2d2d;
+			border: 1px solid #3c3c3c;
+			border-radius: 7px;
+			padding: 8px 12px;
+			selection-background-color: #094771;
+			selection-color: #ffffff;
+			color: #e6e6e6;
+			font-size: 13px;
+		}
+		QDialog#settingsDialog QLineEdit,
+		QDialog#settingsDialog QComboBox,
+		QDialog#settingsDialog QSpinBox {
+			min-height: 26px;
+		}
+		QDialog#settingsDialog QLineEdit:focus,
+		QDialog#settingsDialog QComboBox:focus,
+		QDialog#settingsDialog QSpinBox:focus,
+		QDialog#settingsDialog QPlainTextEdit:focus,
+		QDialog#settingsDialog QListWidget:focus {
+			border: 1px solid #007acc;
+		}
+		QDialog#settingsDialog QLineEdit:disabled,
+		QDialog#settingsDialog QComboBox:disabled {
+			background: #252526;
+			color: #666666;
+		}
+		QDialog#settingsDialog QComboBox::drop-down {
+			width: 30px;
+			border: 0;
+		}
+		QDialog#settingsDialog QComboBox QAbstractItemView {
+			background: #252526;
+			border: 1px solid #3c3c3c;
+			selection-background-color: #094771;
+			color: #ffffff;
+			outline: 0;
+		}
+		QDialog#settingsDialog QPushButton {
+			min-height: 34px;
+			padding: 0 16px;
+			background: transparent;
+			border: 1px solid #5a5a5a;
+			border-radius: 18px;
+			color: #ffffff;
+			font-size: 13px;
+			font-weight: 600;
+		}
+		QDialog#settingsDialog QPushButton:hover {
+			border-color: #007acc;
+			background: #2d2d2d;
+		}
+		QDialog#settingsDialog QPushButton:pressed {
+			background: #094771;
+		}
+		QDialog#settingsDialog QDialogButtonBox QPushButton {
+			min-width: 82px;
+		}
+		QDialog#settingsDialog QPushButton#primaryButton {
+			background: #007acc;
+			border-color: #007acc;
+			color: #ffffff;
+		}
+		QDialog#settingsDialog QPushButton#primaryButton:hover {
+			background: #118edb;
+			border-color: #118edb;
+		}
+		QDialog#settingsDialog QCheckBox {
+			spacing: 12px;
+			color: #e6e6e6;
+			font-size: 13px;
+		}
+		QDialog#settingsDialog QScrollBar:vertical {
+			background: transparent;
+			width: 12px;
+			margin: 4px 2px;
+		}
+		QDialog#settingsDialog QScrollBar::handle:vertical {
+			background: #cbd5e1;
+			border-radius: 5px;
+			min-height: 40px;
+		}
+		QDialog#settingsDialog QScrollBar::handle:vertical:hover {
+			background: #94a3b8;
+		}
+		QDialog#settingsDialog QScrollBar::add-line:vertical,
+		QDialog#settingsDialog QScrollBar::sub-line:vertical {
+			height: 0;
+		}
+		QDialog#settingsDialog QScrollBar::add-page:vertical,
+		QDialog#settingsDialog QScrollBar::sub-page:vertical {
+			background: transparent;
+		}
+	)"));
 
 	auto* tabs = new QTabWidget(this);
+	tabs->setObjectName(QStringLiteral("settingsTabs"));
+	tabs->setDocumentMode(true);
+	tabs->tabBar()->setExpanding(false);
+	tabs->tabBar()->setUsesScrollButtons(false);
 
 	// --- Debugger tab ---
 	auto* debuggerPage = new QWidget(tabs);
-	auto* dbgLayout = new QVBoxLayout(debuggerPage);
-	auto* debuggerIntro = new QLabel(
-		tr("Choose the debugger engine here. The target itself is selected from the main window."),
-		debuggerPage);
-	debuggerIntro->setWordWrap(true);
-	debuggerIntro->setStyleSheet("padding: 8px; background: rgba(70,120,180,35); border-radius: 5px;");
-	dbgLayout->addWidget(debuggerIntro);
+	auto* debuggerPageLayout = new QVBoxLayout(debuggerPage);
+	debuggerPageLayout->setContentsMargins(0, 0, 0, 0);
+	auto* debuggerScroll = new QScrollArea(debuggerPage);
+	debuggerScroll->setWidgetResizable(true);
+	debuggerScroll->setFrameShape(QFrame::NoFrame);
+	auto* debuggerContent = new QWidget(debuggerScroll);
+	auto* dbgLayout = new QVBoxLayout(debuggerContent);
+	dbgLayout->setContentsMargins(38, 16, 38, 34);
+	dbgLayout->setSpacing(12);
+	dbgLayout->addWidget(makeSectionTitle(tr("Debugger backend"), debuggerContent));
 
-	auto* dbgBox = new QGroupBox(tr("Debugger Backend"), debuggerPage);
-	auto* dbgForm = new QFormLayout(dbgBox);
-
-	m_backendCombo = new QComboBox(dbgBox);
+	m_backendCombo = new QComboBox(debuggerContent);
 	m_backendCombo->addItem(tr("GDB (MI2)"), "gdb-mi");
 	m_backendCombo->addItem(tr("LLDB (lldb-mi / MI3)"), "lldb-mi");
-	dbgForm->addRow(tr("Backend:"), m_backendCombo);
+	dbgLayout->addWidget(makeSettingsRow(
+		tr("Backend"),
+		tr("Choose the debugger engine used for new sessions."),
+		m_backendCombo, debuggerContent));
 
-	auto* gdbRow = new QWidget(dbgBox);
+	auto* gdbRow = new QWidget(debuggerContent);
 	auto* gdbRowLayout = new QHBoxLayout(gdbRow);
 	gdbRowLayout->setContentsMargins(0, 0, 0, 0);
 	m_gdbPathEdit = new QLineEdit(gdbRow);
@@ -111,9 +365,12 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 	connect(gdbBrowse, &QPushButton::clicked, this, &SettingsDialog::browseGdb);
 	gdbRowLayout->addWidget(m_gdbPathEdit, 1);
 	gdbRowLayout->addWidget(gdbBrowse);
-	dbgForm->addRow(tr("GDB path:"), gdbRow);
+	dbgLayout->addWidget(makeSettingsRow(
+		tr("GDB executable"),
+		tr("Path to the GDB executable used by the MI backend."),
+		gdbRow, debuggerContent));
 
-	auto* lldbRow = new QWidget(dbgBox);
+	auto* lldbRow = new QWidget(debuggerContent);
 	auto* lldbRowLayout = new QHBoxLayout(lldbRow);
 	lldbRowLayout->setContentsMargins(0, 0, 0, 0);
 	m_lldbMiPathEdit = new QLineEdit(lldbRow);
@@ -121,111 +378,110 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 	connect(lldbBrowse, &QPushButton::clicked, this, &SettingsDialog::browseLldbMi);
 	lldbRowLayout->addWidget(m_lldbMiPathEdit, 1);
 	lldbRowLayout->addWidget(lldbBrowse);
-	dbgForm->addRow(tr("LLDB-MI path:"), lldbRow);
+	dbgLayout->addWidget(makeSettingsRow(
+		tr("LLDB-MI executable"),
+		tr("Path to lldb-mi when the LLDB backend is selected."),
+		lldbRow, debuggerContent));
 
-	m_reverseModeCombo = new QComboBox(dbgBox);
+	m_reverseModeCombo = new QComboBox(debuggerContent);
 	m_reverseModeCombo->addItem(tr("Auto (safe branch tracing)"), "auto");
 	m_reverseModeCombo->addItem(tr("Branch trace (recommended)"), "btrace");
 	m_reverseModeCombo->addItem(tr("Full record (experimental)"), "full");
 	m_reverseModeCombo->addItem(tr("Disabled"), "disabled");
-	dbgForm->addRow(tr("Reverse execution:"), m_reverseModeCombo);
+	dbgLayout->addWidget(makeSettingsRow(
+		tr("Reverse execution"),
+		tr("Auto and branch trace use safe hardware-assisted recording. Full record is experimental."),
+		m_reverseModeCombo, debuggerContent));
 
-	auto* reverseHint = new QLabel(
-		tr("Auto and Branch trace never fall back to software recording. Full record is experimental and can fail in system libraries or on unsupported syscalls."),
-		dbgBox);
-	reverseHint->setWordWrap(true);
-	reverseHint->setStyleSheet("color: #d8a657;");
-	dbgForm->addRow(QString(), reverseHint);
+	// --- External target section (classic remote gdbserver / local) ---
+	dbgLayout->addWidget(makeSectionTitle(tr("External GDB server"), debuggerContent));
 
-	auto* hint = new QLabel(
-		tr("Note: changing backend/path applies the next time a debugging session is started."),
-		debuggerPage);
-	hint->setWordWrap(true);
-	hint->setStyleSheet("color: rgba(255,255,255,140);");
-
-	dbgLayout->addWidget(dbgBox);
-	dbgLayout->addWidget(hint);
-
-	// --- Target tab (classic remote gdbserver / local) ---
-	auto* targetPage = new QWidget(tabs);
-	auto* targetLayout = new QVBoxLayout(targetPage);
-
-	auto* targetBox = new QGroupBox(tr("External GDB server"), targetPage);
-	auto* targetForm = new QFormLayout(targetBox);
-
-	m_targetTypeCombo = new QComboBox(targetBox);
+	m_targetTypeCombo = new QComboBox(debuggerContent);
 	m_targetTypeCombo->addItem(tr("Local process"), "local");
 	m_targetTypeCombo->addItem(tr("External GDB server"), "gdbserver");
 	m_targetTypeCombo->hide(); // target mode is selected explicitly in the main window
 
-	m_remoteHostEdit = new QLineEdit(targetBox);
+	m_remoteHostEdit = new QLineEdit(debuggerContent);
 	m_remoteHostEdit->setPlaceholderText("127.0.0.1");
-	targetForm->addRow(tr("Remote host:"), m_remoteHostEdit);
+	dbgLayout->addWidget(makeSettingsRow(
+		tr("Remote host"),
+		tr("Address of an already running GDB server."),
+		m_remoteHostEdit, debuggerContent));
 
-	m_remotePortSpin = new QSpinBox(targetBox);
+	m_remotePortSpin = new QSpinBox(debuggerContent);
 	m_remotePortSpin->setRange(1, 65535);
 	m_remotePortSpin->setValue(3333);
-	targetForm->addRow(tr("Remote port:"), m_remotePortSpin);
-
-	auto* targetHint = new QLabel(
-		tr("Use this only when a GDB server is already running outside QDDD. For ST-LINK, J-Link or OpenOCD managed by QDDD, create a Hardware Probe profile."),
-		targetPage);
-	targetHint->setWordWrap(true);
-	targetHint->setStyleSheet("color: rgba(255,255,255,140);");
-
-	dbgLayout->addWidget(targetBox);
-	dbgLayout->addWidget(targetHint);
+	dbgLayout->addWidget(makeSettingsRow(
+		tr("Remote port"),
+		tr("For managed ST-LINK, J-Link or OpenOCD targets, use a Hardware probe profile instead."),
+		m_remotePortSpin, debuggerContent));
 	dbgLayout->addStretch(1);
+	debuggerScroll->setWidget(debuggerContent);
+	debuggerPageLayout->addWidget(debuggerScroll);
 
 	tabs->addTab(debuggerPage, tr("Debugger"));
 
 	// --- AI tab ---
 	auto* aiPage = new QWidget(tabs);
-	auto* aiLayout = new QVBoxLayout(aiPage);
+	auto* aiPageLayout = new QVBoxLayout(aiPage);
+	aiPageLayout->setContentsMargins(0, 0, 0, 0);
+	auto* aiScroll = new QScrollArea(aiPage);
+	aiScroll->setWidgetResizable(true);
+	aiScroll->setFrameShape(QFrame::NoFrame);
+	auto* aiContent = new QWidget(aiScroll);
+	auto* aiLayout = new QVBoxLayout(aiContent);
+	aiLayout->setContentsMargins(38, 16, 38, 34);
+	aiLayout->setSpacing(12);
 
-	auto* aiBox = new QGroupBox(tr("LLM Provider"), aiPage);
-	auto* aiForm = new QFormLayout(aiBox);
+	aiLayout->addWidget(makeSectionTitle(tr("Debug Assistant"), aiContent));
 
-	m_aiEnabledCheck = new QCheckBox(tr("Enable Debug Assistant"), aiBox);
-	aiForm->addRow(QString(), m_aiEnabledCheck);
+	m_aiEnabledCheck = new ToggleSwitch(QString(), aiContent);
+	aiLayout->addWidget(makeSettingsRow(
+		tr("Enable Debug Assistant"),
+		tr("Allow QDDD to analyse the current debug session and suggest actions."),
+		m_aiEnabledCheck, aiContent, 0));
 
-	m_aiProviderCombo = new QComboBox(aiBox);
+	m_aiProviderCombo = new QComboBox(aiContent);
 	m_aiProviderCombo->addItem(tr("Ollama (local)"), "ollama");
 	m_aiProviderCombo->addItem(tr("OpenAI (cloud)"), "openai");
-	aiForm->addRow(tr("Provider:"), m_aiProviderCombo);
+	aiLayout->addWidget(makeSettingsRow(
+		tr("Provider"),
+		tr("Run models locally with Ollama or connect to OpenAI."),
+		m_aiProviderCombo, aiContent));
 
-	m_openaiApiKeyEdit = new QLineEdit(aiBox);
+	m_openaiApiKeyEdit = new QLineEdit(aiContent);
 	m_openaiApiKeyEdit->setEchoMode(QLineEdit::Password);
 	m_openaiApiKeyEdit->setPlaceholderText(tr("OPENAI_API_KEY takes precedence"));
-	aiForm->addRow(tr("API key:"), m_openaiApiKeyEdit);
-	auto* openaiKeyWarning = new QLabel(
-		tr("Prefer the OPENAI_API_KEY environment variable. The fallback API-key field is stored by QSettings in plain text and is not a secure credential store."),
-		aiBox);
-	openaiKeyWarning->setWordWrap(true);
-	openaiKeyWarning->setStyleSheet("color: #d8a657;");
-	aiForm->addRow(QString(), openaiKeyWarning);
+	aiLayout->addWidget(makeSettingsRow(
+		tr("OpenAI API key"),
+		tr("Prefer the OPENAI_API_KEY environment variable. Values entered here are stored as plain text."),
+		m_openaiApiKeyEdit, aiContent));
 
-	m_openaiModelEdit = new QLineEdit(aiBox);
+	m_openaiModelEdit = new QLineEdit(aiContent);
 	m_openaiModelEdit->setPlaceholderText("gpt-4.1-mini");
-	aiForm->addRow(tr("Model:"), m_openaiModelEdit);
+	aiLayout->addWidget(makeSettingsRow(
+		tr("OpenAI model"), tr("Model used for cloud requests."),
+		m_openaiModelEdit, aiContent));
 
-	m_openaiBaseUrlEdit = new QLineEdit(aiBox);
+	m_openaiBaseUrlEdit = new QLineEdit(aiContent);
 	m_openaiBaseUrlEdit->setPlaceholderText("https://api.openai.com/v1");
-	aiForm->addRow(tr("Base URL:"), m_openaiBaseUrlEdit);
+	aiLayout->addWidget(makeSettingsRow(
+		tr("OpenAI base URL"), tr("API endpoint for OpenAI-compatible services."),
+		m_openaiBaseUrlEdit, aiContent));
 
-	m_ollamaModelEdit = new QLineEdit(aiBox);
+	aiLayout->addWidget(makeSectionTitle(tr("Local model"), aiContent));
+
+	m_ollamaModelEdit = new QLineEdit(aiContent);
 	m_ollamaModelEdit->setPlaceholderText("llama3.1");
-	aiForm->addRow(tr("Ollama model:"), m_ollamaModelEdit);
+	aiLayout->addWidget(makeSettingsRow(
+		tr("Ollama model"), tr("Name of the model installed in Ollama."),
+		m_ollamaModelEdit, aiContent));
 
-	m_ollamaBaseUrlEdit = new QLineEdit(aiBox);
+	m_ollamaBaseUrlEdit = new QLineEdit(aiContent);
 	m_ollamaBaseUrlEdit->setPlaceholderText("http://localhost:11434");
-	aiForm->addRow(tr("Ollama URL:"), m_ollamaBaseUrlEdit);
-
-	auto* aiHint = new QLabel(
-		tr("The Debug Assistant sends a compact snapshot of your debug session to the model to propose explanations and actions."),
-		aiPage);
-	aiHint->setWordWrap(true);
-	aiHint->setStyleSheet("color: rgba(255,255,255,140);");
+	aiLayout->addWidget(makeSettingsRow(
+		tr("Ollama URL"), tr("Address of the local Ollama server."),
+		m_ollamaBaseUrlEdit, aiContent));
 
 	auto updateAIVisibility = [this] {
 		const QString provider = m_aiProviderCombo->currentData().toString();
@@ -239,20 +495,22 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 	connect(m_aiProviderCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
 	        this, [updateAIVisibility](int) { updateAIVisibility(); });
 
-	aiLayout->addWidget(aiBox);
-	aiLayout->addWidget(aiHint);
 	aiLayout->addStretch(1);
+	aiScroll->setWidget(aiContent);
+	aiPageLayout->addWidget(aiScroll);
 
 	tabs->addTab(aiPage, tr("AI"));
 
 	// --- Hardware Debugging tab ---
 	m_hardwarePage = new HardwareDebugPage(tabs);
 	tabs->insertTab(1, m_hardwarePage, tr("Hardware Probes"));
+	tabs->setTabText(1, tr("Hardware probes"));
 
 	auto* buttons = new QDialogButtonBox(
 		QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Apply,
 		Qt::Horizontal,
 		this);
+	buttons->button(QDialogButtonBox::Ok)->setObjectName(QStringLiteral("primaryButton"));
 	connect(buttons, &QDialogButtonBox::accepted, this, [this] {
 		save();
 		accept();
@@ -261,12 +519,33 @@ SettingsDialog::SettingsDialog(QWidget* parent)
 	connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
 	        this, &SettingsDialog::save);
 	m_saveStatusLabel = new QLabel(this);
-	m_saveStatusLabel->setStyleSheet("color: #7cc47c; padding-left: 4px;");
+	m_saveStatusLabel->setStyleSheet("color: #4ec9b0; padding-left: 4px;");
 
 	auto* root = new QVBoxLayout(this);
+	root->setContentsMargins(0, 0, 0, 0);
+	root->setSpacing(0);
+
+	auto* header = new QFrame(this);
+	header->setObjectName(QStringLiteral("settingsHeader"));
+	auto* headerLayout = new QVBoxLayout(header);
+	headerLayout->setContentsMargins(38, 28, 38, 18);
+	headerLayout->setSpacing(3);
+	auto* title = new QLabel(tr("Settings"), header);
+	title->setObjectName(QStringLiteral("settingsTitle"));
+	auto* subtitle = new QLabel(tr("Configure QDDD to match your debugging workflow."), header);
+	subtitle->setObjectName(QStringLiteral("settingsSubtitle"));
+	headerLayout->addWidget(title);
+	headerLayout->addWidget(subtitle);
+	root->addWidget(header);
 	root->addWidget(tabs, 1);
-	root->addWidget(m_saveStatusLabel);
-	root->addWidget(buttons);
+
+	auto* footer = new QFrame(this);
+	footer->setObjectName(QStringLiteral("settingsFooter"));
+	auto* footerLayout = new QHBoxLayout(footer);
+	footerLayout->setContentsMargins(38, 14, 38, 22);
+	footerLayout->addWidget(m_saveStatusLabel, 1);
+	footerLayout->addWidget(buttons);
+	root->addWidget(footer);
 
 	load();
 }
