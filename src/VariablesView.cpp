@@ -42,12 +42,15 @@
 #include <QSet>
 #include <QHash>
 #include <QMenu>
+#include <QLineEdit>
 
 static constexpr int ChangedRole = Qt::UserRole + 1;
 static constexpr int WatchRole = Qt::UserRole + 2;
 static constexpr int PointerExpressionRole = Qt::UserRole + 4;
 static constexpr int PointerLoadedRole = Qt::UserRole + 5;
 static constexpr int PointerLoadingRole = Qt::UserRole + 6;
+static constexpr int ExpressionPathRole = Qt::UserRole + 7;
+static constexpr int RawValueRole = Qt::UserRole + 8;
 
 namespace {
 
@@ -220,6 +223,26 @@ class ValueDelegate : public QStyledItemDelegate {
 
 		QStyledItemDelegate::paint(p, o, idx);
 	}
+
+	void setEditorData(QWidget* editor, const QModelIndex& index) const override {
+		if (auto* lineEdit = qobject_cast<QLineEdit*>(editor)) {
+			lineEdit->setText(index.data(RawValueRole).toString());
+			lineEdit->selectAll();
+			return;
+		}
+		QStyledItemDelegate::setEditorData(editor, index);
+	}
+
+	void setModelData(QWidget* editor, QAbstractItemModel* model,
+	                  const QModelIndex& index) const override {
+		if (auto* lineEdit = qobject_cast<QLineEdit*>(editor)) {
+			const QString value = lineEdit->text();
+			model->setData(index, value, Qt::DisplayRole);
+			model->setData(index, value, RawValueRole);
+			return;
+		}
+		QStyledItemDelegate::setModelData(editor, model, index);
+	}
 };
 
 ValueDelegate::ValueDelegate(QObject *parent) : QStyledItemDelegate(parent) {}
@@ -266,17 +289,46 @@ VariablesView::VariablesView(QWidget *parent)
 	connect(this, &QTreeView::doubleClicked, this, &VariablesView::expandPointer);
 	setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(this, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
-		const QModelIndex index = indexAt(pos);
-		if (!index.isValid())
-			return;
-		const QModelIndex nameIndex = index.siblingAtColumn(0);
-		if (!nameIndex.data(WatchRole).toBool() || !m_session)
-			return;
-		QMenu menu(this);
-		QAction* remove = menu.addAction(tr("Remove watch"));
-		if (menu.exec(viewport()->mapToGlobal(pos)) == remove)
-			m_session->removeWatchExpression(nameIndex.data(Qt::DisplayRole).toString());
-	});
+			const QModelIndex index = indexAt(pos);
+			if (!index.isValid())
+				return;
+			const QModelIndex nameIndex = index.siblingAtColumn(0);
+			if (!m_session)
+				return;
+			QMenu menu(this);
+			auto* formatMenu = menu.addMenu(tr("Format"));
+			const QString expression = nameIndex.data(ExpressionPathRole).toString();
+			const DebugValueFormat formats[] = {
+				DebugValueFormat::Natural,
+				DebugValueFormat::Hexadecimal,
+				DebugValueFormat::Decimal,
+				DebugValueFormat::Octal,
+				DebugValueFormat::Binary,
+				DebugValueFormat::Character
+			};
+			const DebugValueFormat current = m_session->valueFormat(expression);
+			for (DebugValueFormat format : formats) {
+				QAction* action = formatMenu->addAction(debugValueFormatLabel(format));
+				action->setCheckable(true);
+				action->setChecked(format == current);
+				action->setData(static_cast<int>(format));
+				action->setProperty("debugValueFormat", true);
+			}
+			formatMenu->setEnabled(!expression.isEmpty());
+
+			QAction* remove = nullptr;
+			if (nameIndex.data(WatchRole).toBool()) {
+				menu.addSeparator();
+				remove = menu.addAction(tr("Remove watch"));
+			}
+			QAction* selected = menu.exec(viewport()->mapToGlobal(pos));
+			if (selected && selected->property("debugValueFormat").toBool())
+				m_session->setValueFormat(
+					expression,
+					static_cast<DebugValueFormat>(selected->data().toInt()));
+			else if (remove && selected == remove)
+				m_session->removeWatchExpression(nameIndex.data(Qt::DisplayRole).toString());
+		});
 }
 
 void VariablesView::setSession(DebuggerSession *session) {
@@ -360,25 +412,34 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 		return;
 
 	auto *nameItem  = new QStandardItem(node->name);
-	auto *valueItem = new QStandardItem(node->value);
+	auto *valueItem = new QStandardItem(
+		m_session ? m_session->formattedValue(node) : node->value);
+	valueItem->setData(node->value, RawValueRole);
 	nameItem->setData(node->isWatch, WatchRole);
+	nameItem->setData(node->fullPath(), ExpressionPathRole);
 
 	const VarVisualType vt = visualType(node);
 	nameItem->setIcon(iconForType(vt));
 	nameItem->setEditable(false);
 
-	const QString path = parent
+	const QString fallbackPath = parent
 		? childPath(itemPath(parent), node->name)
 		: node->name;
+	const QString path = node->fullPath().isEmpty()
+		? fallbackPath : node->fullPath();
 	if (node->isPointer) {
 		nameItem->setData(path, PointerExpressionRole);
 		nameItem->setData(!node->children.empty(), PointerLoadedRole);
 	}
 
 	const bool isLeafValue = node->children.empty();
-	valueItem->setEditable(isLeafValue);
-	if (isLeafValue)
+	valueItem->setEditable(isLeafValue && node->enabled);
+	if (isLeafValue && node->enabled)
 		valueItem->setData(path, VariablePathRole);
+	if (!node->enabled) {
+		nameItem->setForeground(QColor(145, 145, 145));
+		valueItem->setForeground(QColor(145, 145, 145));
+	}
 
 	const bool nodeChanged =
 		isLeafValue &&
@@ -466,11 +527,16 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 	// ---- create children, highlight ONLY changed field
 	for (auto it = curFields.begin(); it != curFields.end(); ++it) {
 		auto *cn = new QStandardItem(it.key());
-		auto *cv = new QStandardItem(it.value());
+		const QString expression = childPath(path, it.key());
+		auto *cv = new QStandardItem(m_session
+			? formatDebugValue(it.value(), m_session->valueFormat(expression))
+			: it.value());
+		cv->setData(it.value(), RawValueRole);
 
 		cn->setIcon(iconForType(VarVisualType::Scalar));
 		cn->setEditable(false);
-		cv->setData(childPath(path, it.key()), VariablePathRole);
+		cn->setData(expression, ExpressionPathRole);
+		cv->setData(expression, VariablePathRole);
 
 		const bool fieldChanged =
 			prevFields.contains(it.key()) &&
@@ -541,6 +607,7 @@ void VariablesView::expandPointer(const QModelIndex& index)
 
 			DebugVariable dereferenced;
 			dereferenced.name = QStringLiteral("*") + pointerItem->text();
+			dereferenced.expression = QStringLiteral("*(%1)").arg(expression);
 			dereferenced.value = value.trimmed();
 			dereferenced.type = type;
 			dereferenced.hasChildren = dereferenced.value.startsWith('{') &&
