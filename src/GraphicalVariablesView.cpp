@@ -55,6 +55,8 @@ static constexpr int SocketOffset = -6;
 static constexpr int IndentStep   = 14;
 static constexpr int FooterHeight = 24;
 static constexpr int RowsPerPage = 8;
+static constexpr qreal MinimumZoom = 0.25;
+static constexpr qreal MaximumZoom = 4.0;
 
 
 
@@ -77,6 +79,15 @@ struct VisibleRow {
 	DebugVariable* node;
 	int indent;
 };
+
+static void applyBoundedZoom(QGraphicsView* view, qreal factor)
+{
+	const qreal currentZoom = view->transform().m11();
+	if (currentZoom <= 0.0)
+		return;
+	const qreal targetZoom = qBound(MinimumZoom, currentZoom * factor, MaximumZoom);
+	view->scale(targetZoom / currentZoom, targetZoom / currentZoom);
+}
 
 static bool isInlineStruct(const QString& s)
 {
@@ -932,7 +943,7 @@ GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
 		return b;
 	};
 
-	connect(mk("+", tr("Zoom in")), &QToolButton::clicked, this, &GraphicalVariablesView::zoomIn);
+	connect(mk("+", tr("Zoom in (Ctrl/Command + scroll)")), &QToolButton::clicked, this, &GraphicalVariablesView::zoomIn);
 	connect(mk("-", tr("Zoom out")), &QToolButton::clicked, this, &GraphicalVariablesView::zoomOut);
 	connect(mk("ƒ+", tr("Create display expression")), &QToolButton::clicked,
 	        this, [this] { createDisplayExpression(); });
@@ -1197,12 +1208,12 @@ void GraphicalVariablesView::autoLayout()
 
 void GraphicalVariablesView::zoomIn()
 {
-	scale(1.2, 1.2);
+	applyBoundedZoom(this, 1.2);
 }
 
 void GraphicalVariablesView::zoomOut()
 {
-	scale(1.0 / 1.2, 1.0 / 1.2);
+	applyBoundedZoom(this, 1.0 / 1.2);
 }
 
 void GraphicalVariablesView::resetZoom()
@@ -1223,13 +1234,29 @@ void GraphicalVariablesView::fitGraph()
 
 void GraphicalVariablesView::wheelEvent(QWheelEvent* event)
 {
-	const double factor = 1.15;
+	// A two-finger secondary click on a touchpad can also produce a small
+	// wheel event.  Zoom only for an explicit keyboard-modified gesture;
+	// ordinary touchpad/wheel events keep their normal scrolling behaviour.
+	const Qt::KeyboardModifiers modifiers = event->modifiers();
+	const bool zoomGesture = modifiers.testFlag(Qt::ControlModifier)
+		|| modifiers.testFlag(Qt::MetaModifier);
+	if (!zoomGesture) {
+		QGraphicsView::wheelEvent(event);
+		return;
+	}
 
-	if (event->angleDelta().y() > 0)
-		scale(factor, factor);
-	else
-		scale(1.0 / factor, 1.0 / factor);
+	int delta = event->angleDelta().y();
+	if (delta == 0)
+		delta = event->pixelDelta().y();
+	if (delta == 0) {
+		event->ignore();
+		return;
+	}
 
+	const ViewportAnchor oldAnchor = transformationAnchor();
+	setTransformationAnchor(AnchorUnderMouse);
+	applyBoundedZoom(this, delta > 0 ? 1.15 : 1.0 / 1.15);
+	setTransformationAnchor(oldAnchor);
 	event->accept();
 }
 
