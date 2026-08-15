@@ -31,6 +31,24 @@ bool overlaps(const RuntimeLayoutResult& result,
 		.intersects(QRectF(result.positions.value(b), sizes.value(b)));
 }
 
+qreal centerY(const RuntimeLayoutResult& result,
+	          const QHash<QString, QSizeF>& sizes,
+	          const QString& id)
+{
+	return result.positions.value(id).y() + sizes.value(id).height() * 0.5;
+}
+
+qreal totalVerticalEdgeSpan(const RuntimeLayoutResult& result,
+	                        const QHash<QString, QSizeF>& sizes,
+	                        const QVector<RuntimeLayoutEdge>& edges)
+{
+	qreal total = 0.0;
+	for (const RuntimeLayoutEdge& connection : edges)
+		total += qAbs(centerY(result, sizes, connection.sourceId)
+		              - centerY(result, sizes, connection.destinationId));
+	return total;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -98,6 +116,46 @@ int main(int argc, char** argv)
 	CHECK(pinnedResult.positions.value("p") == QPointF(500, 250));
 	QHash<QString, QSizeF> pinnedSizes{{"p", QSizeF(140, 80)}, {"q", QSizeF(140, 80)}};
 	CHECK(!overlaps(pinnedResult, pinnedSizes, "p", "q"));
+
+	const QVector<RuntimeLayoutNode> alignmentNodes{
+		node("root", 150, 80), node("upper", 130, 70),
+		node("lower", 130, 120), node("tail", 140, 90)};
+	const QVector<RuntimeLayoutEdge> alignmentEdges{
+		edge("root-upper", "root", "upper"),
+		edge("root-lower", "root", "lower"),
+		edge("upper-tail", "upper", "tail")};
+	const QHash<QString, QSizeF> alignmentSizes{
+		{"root", QSizeF(150, 80)}, {"upper", QSizeF(130, 70)},
+		{"lower", QSizeF(130, 120)}, {"tail", QSizeF(140, 90)}};
+	RuntimeLayoutOptions unalignedOptions;
+	unalignedOptions.alignmentSweeps = 0;
+	const RuntimeLayoutResult unaligned = RuntimeGraphLayout::compute(
+		alignmentNodes, alignmentEdges, unalignedOptions);
+	const RuntimeLayoutResult aligned = RuntimeGraphLayout::compute(
+		alignmentNodes, alignmentEdges);
+	CHECK(totalVerticalEdgeSpan(aligned, alignmentSizes, alignmentEdges)
+	      < totalVerticalEdgeSpan(unaligned, alignmentSizes, alignmentEdges));
+	for (const QString& left : alignmentSizes.keys())
+		for (const QString& right : alignmentSizes.keys())
+			if (left < right)
+				CHECK(!overlaps(aligned, alignmentSizes, left, right));
+
+	const QVector<RuntimeLayoutNode> longEdgeNodes{
+		node("source"), node("middle"), node("sink"), node("side")};
+	const QVector<RuntimeLayoutEdge> longEdges{
+		edge("source-middle", "source", "middle"),
+		edge("middle-sink", "middle", "sink"),
+		edge("source-sink", "source", "sink"),
+		edge("source-side", "source", "side")};
+	const RuntimeLayoutResult longEdgeLayout = RuntimeGraphLayout::compute(
+		longEdgeNodes, longEdges);
+	CHECK(longEdgeLayout.positions.size() == longEdgeNodes.size());
+	CHECK(longEdgeLayout.layers.size() == longEdgeNodes.size());
+	CHECK(longEdgeLayout.layers.value("sink") == 2);
+	const RuntimeLayoutResult repeatedLongEdgeLayout = RuntimeGraphLayout::compute(
+		longEdgeNodes, longEdges);
+	CHECK(longEdgeLayout.positions == repeatedLongEdgeLayout.positions);
+	CHECK(longEdgeLayout.layers == repeatedLongEdgeLayout.layers);
 
 	const QVector<RuntimeLayoutNode> aliasNodes{node("root"), node("shared")};
 	const RuntimeLayoutResult aliases = RuntimeGraphLayout::compute(

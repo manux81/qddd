@@ -33,6 +33,8 @@ struct RuntimeLayoutOptions
 	qreal nodeSpacing = 42.0;
 	qreal componentSpacing = 100.0;
 	int crossingReductionSweeps = 6;
+	int alignmentSweeps = 6;
+	bool useLongEdgeHints = true;
 };
 
 struct RuntimeLayoutResult
@@ -42,7 +44,8 @@ struct RuntimeLayoutResult
 };
 
 // Deterministic, UI-independent, left-to-right layout for runtime object
-// graphs. Cycles are condensed with Tarjan SCC before layer assignment.
+// graphs. Cycles are condensed with Tarjan SCC before layer assignment;
+// virtual nodes guide long edges through intermediate layers.
 class RuntimeGraphLayout
 {
 public:

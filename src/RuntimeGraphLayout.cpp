@@ -187,6 +187,49 @@ LocalLayout layoutComponent(const QVector<QString>& componentIds,
 		});
 	}
 
+	// Replace edges spanning multiple layers with deterministic virtual nodes.
+	// They participate only in ordering/alignment and are never returned to the
+	// caller. This is the useful Sugiyama idea behind DDD's edge hints, adapted
+	// independently to our variable-sized card layout.
+	Adjacency layoutOutgoing;
+	Adjacency layoutIncoming;
+	QSet<QString> virtualNodes;
+	int nextVirtualId = 0;
+	for (const QString& source : componentIds) {
+		for (const QString& destination : outgoing.value(source)) {
+			if (!layerForNode.contains(destination))
+				continue;
+			const int sourceLayer = layerForNode.value(source);
+			const int destinationLayer = layerForNode.value(destination);
+			QString previous = source;
+			if (options.useLongEdgeHints && destinationLayer - sourceLayer > 1) {
+				for (int layer = sourceLayer + 1; layer < destinationLayer; ++layer) {
+					const QString hint = QString(QChar(0x1f))
+						+ QStringLiteral("layout-hint-%1").arg(nextVirtualId++, 8, 10,
+						                                      QLatin1Char('0'));
+					virtualNodes.insert(hint);
+					layerNodes[layer].push_back(hint);
+					layoutOutgoing[previous].push_back(hint);
+					layoutIncoming[hint].push_back(previous);
+					previous = hint;
+				}
+			}
+			layoutOutgoing[previous].push_back(destination);
+			layoutIncoming[destination].push_back(previous);
+		}
+	}
+	for (QVector<QString>& neighbours : layoutOutgoing)
+		neighbours = sortedUnique(std::move(neighbours));
+	for (QVector<QString>& neighbours : layoutIncoming)
+		neighbours = sortedUnique(std::move(neighbours));
+
+	auto layoutNodeWidth = [&](const QString& id) {
+		return virtualNodes.contains(id) ? 1.0 : nodeWidth(nodes[id]);
+	};
+	auto layoutNodeHeight = [&](const QString& id) {
+		return virtualNodes.contains(id) ? 1.0 : nodeHeight(nodes[id]);
+	};
+
 	auto orderMap = [&]() {
 		QHash<QString, int> order;
 		for (const QVector<QString>& layer : layerNodes)
@@ -225,11 +268,11 @@ LocalLayout layoutComponent(const QVector<QString>& componentIds,
 	for (int sweep = 0; sweep < qMax(0, options.crossingReductionSweeps); ++sweep) {
 		QHash<QString, int> order = orderMap();
 		for (int layer = 1; layer < layerNodes.size(); ++layer) {
-			reorder(layer, incoming, order);
+			reorder(layer, layoutIncoming, order);
 			order = orderMap();
 		}
 		for (int layer = layerNodes.size() - 2; layer >= 0; --layer) {
-			reorder(layer, outgoing, order);
+			reorder(layer, layoutOutgoing, order);
 			order = orderMap();
 		}
 	}
@@ -238,25 +281,88 @@ LocalLayout layoutComponent(const QVector<QString>& componentIds,
 	QVector<qreal> heights(layerNodes.size(), 0.0);
 	for (int layer = 0; layer < layerNodes.size(); ++layer) {
 		for (const QString& id : layerNodes[layer]) {
-			widths[layer] = qMax(widths[layer], nodeWidth(nodes[id]));
-			heights[layer] += nodeHeight(nodes[id]);
+			widths[layer] = qMax(widths[layer], layoutNodeWidth(id));
+			heights[layer] += layoutNodeHeight(id);
 		}
 		if (layerNodes[layer].size() > 1)
 			heights[layer] += options.nodeSpacing * (layerNodes[layer].size() - 1);
 	}
-	const qreal componentHeight = *std::max_element(heights.begin(), heights.end());
+	const qreal initialComponentHeight =
+		*std::max_element(heights.begin(), heights.end());
 
 	LocalLayout result;
 	qreal x = 0.0;
 	for (int layer = 0; layer < layerNodes.size(); ++layer) {
-		qreal y = (componentHeight - heights[layer]) * 0.5;
+		qreal y = (initialComponentHeight - heights[layer]) * 0.5;
 		for (const QString& id : layerNodes[layer]) {
 			result.positions[id] = QPointF(x, y);
-			result.layers[id] = layer;
-			y += nodeHeight(nodes[id]) + options.nodeSpacing;
+			if (!virtualNodes.contains(id))
+				result.layers[id] = layer;
+			y += layoutNodeHeight(id) + options.nodeSpacing;
 		}
 		x += widths[layer] + options.layerSpacing;
 	}
+
+	// Pull each card towards the average centre of its neighbours while
+	// preserving the barycentric order and the required vertical spacing.
+	// Alternating directions avoids favouring either parents or children.
+	auto alignLayer = [&](int layerIndex, const Adjacency& neighbours) {
+		const QVector<QString>& layer = layerNodes[layerIndex];
+		if (layer.isEmpty())
+			return;
+		QVector<qreal> tops;
+		tops.reserve(layer.size());
+		for (const QString& id : layer) {
+			qreal desiredCenter = 0.0;
+			int neighbourCount = 0;
+			for (const QString& neighbour : neighbours.value(id)) {
+				if (!result.positions.contains(neighbour))
+					continue;
+				desiredCenter += result.positions.value(neighbour).y()
+					+ layoutNodeHeight(neighbour) * 0.5;
+				++neighbourCount;
+			}
+			const qreal currentTop = result.positions.value(id).y();
+			const qreal desiredTop = neighbourCount > 0
+				? desiredCenter / neighbourCount - layoutNodeHeight(id) * 0.5
+				: currentTop;
+			qreal top = currentTop * 0.25 + desiredTop * 0.75;
+			if (!tops.isEmpty()) {
+				const int previousIndex = tops.size() - 1;
+				top = qMax(top, tops.last() + layoutNodeHeight(layer[previousIndex])
+				                         + options.nodeSpacing);
+			}
+			tops.push_back(top);
+		}
+		for (int i = tops.size() - 2; i >= 0; --i) {
+			const qreal latestTop = tops[i + 1] - options.nodeSpacing
+				- layoutNodeHeight(layer[i]);
+			tops[i] = qMin(tops[i], latestTop);
+		}
+		for (int i = 0; i < layer.size(); ++i)
+			result.positions[layer[i]].setY(tops[i]);
+	};
+
+	for (int sweep = 0; sweep < qMax(0, options.alignmentSweeps); ++sweep) {
+		for (int layer = 1; layer < layerNodes.size(); ++layer)
+			alignLayer(layer, layoutIncoming);
+		for (int layer = layerNodes.size() - 2; layer >= 0; --layer)
+			alignLayer(layer, layoutOutgoing);
+	}
+
+	qreal minY = std::numeric_limits<qreal>::max();
+	qreal maxY = std::numeric_limits<qreal>::lowest();
+	for (const QVector<QString>& layer : layerNodes) {
+		for (const QString& id : layer) {
+			minY = qMin(minY, result.positions.value(id).y());
+			maxY = qMax(maxY, result.positions.value(id).y() + layoutNodeHeight(id));
+		}
+	}
+	if (minY != std::numeric_limits<qreal>::max()) {
+		for (auto it = result.positions.begin(); it != result.positions.end(); ++it)
+			it.value().ry() -= minY;
+	}
+	const qreal componentHeight = maxY > minY ? maxY - minY : 0.0;
 	result.size = QSizeF(qMax<qreal>(0.0, x - options.layerSpacing), componentHeight);
 	return result;
 }
