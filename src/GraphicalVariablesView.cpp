@@ -1946,6 +1946,73 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 	if (!m_session || pointerExpr.isEmpty() || !ptrVar || !fromItem)
 		return;
 
+	// Reuse an already displayed card when the pointer resolves to the same
+	// runtime address. The expression used to open the pointer may have a
+	// different name (for example *&work), but the address identifies the
+	// same runtime object as the existing work card.
+	if (!ptrVar->pointeeAddress.isEmpty()) {
+		bool targetOk = false;
+		const quintptr targetAddress =
+			ptrVar->pointeeAddress.toULongLong(&targetOk, 16);
+
+		GraphicalNodeItem* existingTarget = nullptr;
+		for (QGraphicsItem* sceneItem : m_scene->items()) {
+			auto* nodeItem = dynamic_cast<GraphicalNodeItem*>(sceneItem);
+			if (!nodeItem || nodeItem == fromItem || !nodeItem->node())
+				continue;
+
+			const QString candidateAddress = nodeItem->node()->address;
+			if (candidateAddress.isEmpty())
+				continue;
+
+			bool candidateOk = false;
+			const quintptr candidate =
+				candidateAddress.toULongLong(&candidateOk, 16);
+
+			const bool sameAddress =
+				(targetOk && candidateOk && candidate == targetAddress)
+				|| (!targetOk
+					&& candidateAddress.compare(
+						ptrVar->pointeeAddress,
+						Qt::CaseInsensitive) == 0);
+
+			if (sameAddress) {
+				existingTarget = nodeItem;
+				break;
+			}
+		}
+
+		if (existingTarget) {
+			bool edgeExists = false;
+			for (QGraphicsItem* sceneItem : m_scene->items()) {
+				auto* edge = dynamic_cast<GraphicalEdgeItem*>(sceneItem);
+				if (edge && edge->sourceNode() == fromItem
+				    && edge->destinationNode() == existingTarget
+				    && edge->sourceExpression() == pointerExpr) {
+					edgeExists = true;
+					break;
+				}
+			}
+
+			if (!edgeExists) {
+				auto* edge = new GraphicalEdgeItem(
+					fromItem,
+					existingTarget,
+					layoutKeyForVariable(rootOf(ptrVar)),
+					pointerExpr,
+					layoutKeyForVariable(existingTarget->node()));
+				m_scene->addItem(edge);
+				fromItem->addEdge(edge);
+				existingTarget->addEdge(edge);
+				edge->updatePosition();
+			}
+
+			applyAutomaticLayout(false);
+			centerOn(existingTarget);
+			return;
+		}
+	}
+
 	QString key = RuntimeObjectGraph::identityFor(
 		ptrVar->pointeeAddress, ptrVar->type, pointerExpr);
 	if (!ptrVar->pointeeAddress.isEmpty()) {
