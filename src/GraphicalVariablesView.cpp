@@ -52,8 +52,9 @@
 // =======================================================
 // Helpers / layout constants (come versione vecchia)
 // =======================================================
-static constexpr int SocketRadius = 4;
-static constexpr int SocketOffset = -6;
+static constexpr qreal SocketRadius = 5.0;
+static constexpr qreal ArrowLength = 11.0;
+static constexpr qreal Pi = 3.14159265358979323846;
 static constexpr int IndentStep   = 14;
 static constexpr int FooterHeight = 24;
 static constexpr int RowsPerPage = 8;
@@ -258,6 +259,138 @@ static void drawTriangle(QPainter* p,
 	p->setBrush(QColor(220, 220, 220));
 	p->setPen(Qt::NoPen);
 	p->drawPolygon(poly);
+}
+
+static qreal normalizedAngle(qreal angle)
+{
+	constexpr qreal TwoPi = 2.0 * Pi;
+
+	while (angle < 0.0)
+		angle += TwoPi;
+	while (angle >= TwoPi)
+		angle -= TwoPi;
+
+	return angle;
+}
+
+static qreal positiveAngleDistance(qreal from, qreal to)
+{
+	return normalizedAngle(to - from);
+}
+
+static bool circleThroughPoints(const QPointF& p1,
+								const QPointF& p2,
+								const QPointF& p3,
+								QPointF& center,
+								qreal& radius)
+{
+	const qreal x1 = p1.x();
+	const qreal y1 = p1.y();
+	const qreal x2 = p2.x();
+	const qreal y2 = p2.y();
+	const qreal x3 = p3.x();
+	const qreal y3 = p3.y();
+
+	const qreal d =
+		2.0 *
+		(x1 * (y2 - y3) +
+		 x2 * (y3 - y1) +
+		 x3 * (y1 - y2));
+
+	// Nearly collinear points would produce an excessively large circle.
+	// A straight line is cleaner and matches DDD's fallback behavior.
+	if (std::abs(d) < 0.001)
+		return false;
+
+	const qreal p1sq = x1 * x1 + y1 * y1;
+	const qreal p2sq = x2 * x2 + y2 * y2;
+	const qreal p3sq = x3 * x3 + y3 * y3;
+
+	center.setX(
+		(p1sq * (y2 - y3) +
+		 p2sq * (y3 - y1) +
+		 p3sq * (y1 - y2)) / d);
+
+	center.setY(
+		(p1sq * (x3 - x2) +
+		 p2sq * (x1 - x3) +
+		 p3sq * (x2 - x1)) / d);
+
+	radius = QLineF(center, p1).length();
+	return std::isfinite(radius) && radius > 1.0;
+}
+
+static void appendCircularArc(QPainterPath& path,
+							  const QPointF& start,
+							  const QPointF& through,
+							  const QPointF& end,
+							  qreal sourceGap)
+{
+	QPointF center;
+	qreal radius = 0.0;
+
+	if (!circleThroughPoints(start, through, end, center, radius)) {
+		QLineF line(start, end);
+
+		if (line.length() <= sourceGap) {
+			path.moveTo(start);
+			path.lineTo(end);
+			return;
+		}
+
+		line.setLength(sourceGap);
+		path.moveTo(line.p2());
+		path.lineTo(end);
+		return;
+	}
+
+	const qreal startAngle =
+		std::atan2(start.y() - center.y(), start.x() - center.x());
+	const qreal hintAngle =
+		std::atan2(through.y() - center.y(), through.x() - center.x());
+	const qreal endAngle =
+		std::atan2(end.y() - center.y(), end.x() - center.x());
+
+	const qreal ccwTotal = positiveAngleDistance(startAngle, endAngle);
+	const qreal ccwHint = positiveAngleDistance(startAngle, hintAngle);
+
+	const qreal sweep =
+		ccwHint <= ccwTotal
+			? ccwTotal
+			: -positiveAngleDistance(endAngle, startAngle);
+
+	// Skip the portion of the arc covered by the hollow source socket.
+	const qreal gapAngle =
+		qMin(std::abs(sweep) * 0.40,
+			 sourceGap / qMax<qreal>(radius, 1.0));
+
+	const qreal firstAngle =
+		startAngle + std::copysign(gapAngle, sweep);
+	const qreal remainingSweep =
+		sweep - std::copysign(gapAngle, sweep);
+
+	path.moveTo(
+		center +
+		QPointF(radius * std::cos(firstAngle),
+				radius * std::sin(firstAngle)));
+
+	// Sample the circular arc densely enough to remain smooth at every zoom
+	// level without depending on QPainterPath::arcTo angle conventions.
+	const int segments =
+		qBound(
+			8,
+			int(std::ceil(std::abs(remainingSweep) * radius / 6.0)),
+			96);
+
+	for (int i = 1; i <= segments; ++i) {
+		const qreal t = qreal(i) / qreal(segments);
+		const qreal angle = firstAngle + remainingSweep * t;
+
+		path.lineTo(
+			center +
+			QPointF(radius * std::cos(angle),
+					radius * std::sin(angle)));
+	}
 }
 
 // ------------------------------------------------------------
@@ -743,42 +876,24 @@ QPointF GraphicalNodeItem::inputPort() const
 
 QPointF GraphicalNodeItem::outputPortFor(DebugVariable* child) const
 {
-	if (!child)
-		return mapToScene(QPointF(m_width, HeaderHeight / 2));
+	Q_UNUSED(child);
 
-	QVector<VisibleRow> rows;
-	for (auto& c : m_node->children)
-		buildRows(c.get(), 0,
-				  const_cast<QHash<DebugVariable*, bool>&>(m_expanded),
-				  rows);
-
-	for (int i = 0; i < rows.size(); ++i) {
-		if (rows[i].node == child) {
-			const int start = m_page * RowsPerPage;
-			const int localRow = qBound(0, i - start, RowsPerPage - 1);
-			qreal y = HeaderHeight + localRow * RowHeight + RowHeight / 2;
-			return mapToScene(QPointF(m_width, y));
-		}
-	}
-
-	return mapToScene(QPointF(m_width, HeaderHeight / 2));
+	// References are visually attached to the card header rather than to
+	// individual rows. The hollow socket touches the right edge of the card.
+	return mapToScene(
+		QPointF(m_width - (SocketRadius * 2.0),
+				HeaderHeight / 2.0));
 }
 
 QPointF GraphicalNodeItem::outputPortForExpression(const QString& expression) const
 {
-	QVector<VisibleRow> rows;
-	for (auto& c : m_node->children)
-		buildRows(c.get(), 0, const_cast<QHash<DebugVariable*, bool>&>(m_expanded), rows);
-	for (int i = 0; i < rows.size(); ++i) {
-		if (rows[i].node->fullPath() == expression)
-			return mapToScene(QPointF(
-				m_width,
-				HeaderHeight
-					+ qBound(0, i - m_page * RowsPerPage, RowsPerPage - 1)
-						* RowHeight
-					+ RowHeight / 2));
-	}
-	return mapToScene(QPointF(m_width, HeaderHeight / 2));
+	Q_UNUSED(expression);
+
+	// Keep the expression as the semantic edge identity while using one stable
+	// visual anchor for the whole card.
+	return mapToScene(
+		QPointF(m_width - (SocketRadius * 2.0),
+				HeaderHeight / 2.0));
 }
 
 void GraphicalNodeItem::setExpandedRecursively(bool expanded, int maxDepth)
@@ -854,7 +969,7 @@ GraphicalEdgeItem::GraphicalEdgeItem(GraphicalNodeItem* f,
 	, m_destinationObjectId(std::move(destinationObjectId))
 	, m_change(change)
 {
-	setZValue(-1);
+	setZValue(1);
 	QPen pen(QColor(180, 180, 180, 210));
 	pen.setWidthF(2);
 	pen.setCapStyle(Qt::RoundCap);
@@ -862,54 +977,309 @@ GraphicalEdgeItem::GraphicalEdgeItem(GraphicalNodeItem* f,
 	setPen(pen);
 
 	const QString routeKey = RuntimeObjectGraph::referenceIdentity(m_sourceObjectId, m_sourceExpression);
-	const uint lane = qHash(routeKey) % 9;
-	m_routeOffset = (static_cast<int>(lane) - 4) * 12.0;
+	const int lane = static_cast<int>(qHash(routeKey) % 9) - 4;
 
-	// ✔ CORRETTO: GraphicalEdgeItem NON è QObject
+	// Spread parallel references by moving the circular-arc hint point away
+	// from the source-to-destination chord.
+	m_routeOffset = lane * 18.0;
+
+	// GraphicalEdgeItem is not a QObject, so connect through the timer object.
 	QObject::connect(&m_timer, &QTimer::timeout,
 			[this]() { tick(); });
+}
+
+static QRectF visibleCardRect(const GraphicalNodeItem* node)
+{
+	// GraphicalNodeItem::boundingRect() includes an 8 px horizontal margin.
+	// Remove it so edges attach to the visible card border.
+	return node->sceneBoundingRect().adjusted(8.0, 0.0, -8.0, 0.0);
+}
+
+static QPointF pointOnRectToward(const QRectF& rect, const QPointF& toward)
+{
+	const QPointF center = rect.center();
+	const QPointF delta = toward - center;
+
+	if (qFuzzyIsNull(delta.x()) && qFuzzyIsNull(delta.y()))
+		return center;
+
+	const qreal halfWidth = rect.width() * 0.5;
+	const qreal halfHeight = rect.height() * 0.5;
+
+	const qreal nx =
+		halfWidth > 0.0 ? std::abs(delta.x()) / halfWidth : 0.0;
+	const qreal ny =
+		halfHeight > 0.0 ? std::abs(delta.y()) / halfHeight : 0.0;
+
+	const qreal divisor = qMax(nx, ny);
+	if (divisor <= 0.0)
+		return center;
+
+	return center + delta / divisor;
 }
 
 void GraphicalEdgeItem::updatePosition()
 {
 	m_pos[0] = m_from->outputPortForExpression(m_sourceExpression);
-	m_targetEnd = m_to->inputPort();
+
+	if (m_from == m_to) {
+		// Self references select their destination point while building the loop.
+		m_targetEnd = m_pos[0];
+	} else {
+		// Let the arrow slide along the destination perimeter according to
+		// the direction from which the connection approaches the card.
+		m_targetEnd =
+			pointOnRectToward(
+				visibleCardRect(m_to),
+				m_pos[0]);
+	}
+
 	if (!m_timer.isActive())
 		m_timer.start(16);
+}
+
+static bool segmentIntersectsRect(const QPointF& start,
+								  const QPointF& end,
+								  const QRectF& rect)
+{
+	if (rect.contains(start) || rect.contains(end))
+		return true;
+
+	const QLineF segment(start, end);
+	const QLineF top(rect.topLeft(), rect.topRight());
+	const QLineF right(rect.topRight(), rect.bottomRight());
+	const QLineF bottom(rect.bottomRight(), rect.bottomLeft());
+	const QLineF left(rect.bottomLeft(), rect.topLeft());
+
+	QPointF intersection;
+	return segment.intersects(top, &intersection) == QLineF::BoundedIntersection
+		|| segment.intersects(right, &intersection) == QLineF::BoundedIntersection
+		|| segment.intersects(bottom, &intersection) == QLineF::BoundedIntersection
+		|| segment.intersects(left, &intersection) == QLineF::BoundedIntersection;
+}
+
+static void appendStraightEdge(QPainterPath& path,
+							   const QPointF& start,
+							   const QPointF& end,
+							   qreal sourceGap)
+{
+	QLineF line(start, end);
+
+	if (line.length() <= sourceGap) {
+		path.moveTo(start);
+		path.lineTo(end);
+		return;
+	}
+
+	line.setLength(sourceGap);
+	path.moveTo(line.p2());
+	path.lineTo(end);
 }
 
 void GraphicalEdgeItem::tick()
 {
 	m_pos[SEGMENTS - 1] = m_targetEnd;
+
 	const QPointF start = m_pos[0];
 	const QPointF end = m_pos[SEGMENTS - 1];
-	const qreal dx = end.x() - start.x();
-	const qreal direction = dx >= 0 ? 1.0 : -1.0;
-	const qreal tension = qMax<qreal>(80.0, std::abs(dx) * 0.45);
-	const qreal verticalSpread = m_routeOffset;
 
 	QPainterPath p;
-	p.moveTo(start);
 
-	if (std::abs(dx) < 70.0) {
-		const qreal side = direction * (90.0 + std::abs(verticalSpread));
-		const qreal midY = (start.y() + end.y()) * 0.5 + verticalSpread;
-		p.cubicTo(start + QPointF(side, 0),
-				  QPointF(start.x() + side, midY),
-				  QPointF(start.x() + side, midY));
-		p.cubicTo(QPointF(end.x() - side, midY),
-				  end - QPointF(side, 0),
-				  end);
+	const QPointF chord = end - start;
+	const qreal length = std::hypot(chord.x(), chord.y());
+	const qreal sourceGap = SocketRadius + 1.5;
+
+	if (m_from == m_to) {
+		// Keep the source socket in the header and route the self-reference
+		// completely outside the visible card.
+		const QRectF cardRect = visibleCardRect(m_from);
+
+		const QPointF loopStart = start;
+		const QPointF loopEnd(
+			cardRect.right() - qMin<qreal>(36.0, cardRect.width() * 0.18),
+			cardRect.top());
+
+		const qreal loopOffset =
+			qMax<qreal>(70.0, cardRect.height() * 0.65);
+
+		// A point above and to the right of the card forces the circular arc
+		// away from the card instead of letting it cross the card body.
+		const QPointF hint(
+			cardRect.right() + loopOffset,
+			cardRect.top() - loopOffset);
+
+		m_pos[SEGMENTS - 1] = loopEnd;
+
+		appendCircularArc(
+			p,
+			loopStart,
+			hint,
+			loopEnd,
+			sourceGap);
+	} else if (length < 1.0) {
+		p.moveTo(start);
+		p.lineTo(end);
 	} else {
-		p.cubicTo(QPointF(start.x() + direction * tension,
-						  start.y() + verticalSpread),
-				  QPointF(end.x() - direction * tension,
-						  end.y() + verticalSpread),
-				  end);
+		QRectF blockingRect;
+		bool blocked = false;
+
+		if (scene()) {
+			for (QGraphicsItem* item : scene()->items()) {
+				auto* node = dynamic_cast<GraphicalNodeItem*>(item);
+				if (!node || node == m_from || node == m_to)
+					continue;
+
+				// Include a small clearance around each card so the edge does not
+				// visually graze its border or shadow.
+				const QRectF candidate =
+					node->sceneBoundingRect().adjusted(
+						-12.0, -12.0, 12.0, 12.0);
+
+				if (segmentIntersectsRect(start, end, candidate)) {
+					blockingRect = candidate;
+					blocked = true;
+					break;
+				}
+			}
+		}
+
+		if (!blocked) {
+			// DDD-style default: use a straight edge whenever nothing blocks it.
+			appendStraightEdge(p, start, end, sourceGap);
+		} else {
+			// Bend only when the straight edge would cross another card.
+			const QPointF middle = (start + end) * 0.5;
+			const QPointF normal(
+				-chord.y() / length,
+				 chord.x() / length);
+
+			const qreal blockerSide =
+				QPointF::dotProduct(
+					blockingRect.center() - middle,
+					normal);
+
+			qreal side;
+			if (std::abs(blockerSide) > 1.0) {
+				// Route on the opposite side of the blocking card.
+				side = blockerSide > 0.0 ? -1.0 : 1.0;
+			} else {
+				// Pick a stable side when the blocker is centered on the chord.
+				const QString routeKey =
+					RuntimeObjectGraph::referenceIdentity(
+						m_sourceObjectId,
+						m_sourceExpression);
+				side = (qHash(routeKey) & 1U) ? 1.0 : -1.0;
+			}
+
+			const qreal clearance =
+				qMax<qreal>(
+					80.0,
+					qMax(blockingRect.width(), blockingRect.height()) * 0.55
+						+ 35.0
+						+ std::abs(m_routeOffset));
+
+			const QPointF hint =
+				middle + normal * (side * clearance);
+
+			appendCircularArc(
+				p,
+				start,
+				hint,
+				end,
+				sourceGap);
+		}
 	}
 
 	setPath(p);
 	m_timer.stop();
+}
+
+QRectF GraphicalEdgeItem::boundingRect() const
+{
+	QRectF rect =
+		QGraphicsPathItem::boundingRect().adjusted(
+			-ArrowLength,
+			-ArrowLength,
+			 ArrowLength,
+			 ArrowLength);
+
+	const QRectF socketRect(
+		m_pos[0].x() - SocketRadius - 2.0,
+		m_pos[0].y() - SocketRadius - 2.0,
+		(SocketRadius + 2.0) * 2.0,
+		(SocketRadius + 2.0) * 2.0);
+
+	return rect.united(socketRect);
+}
+
+void GraphicalEdgeItem::paint(
+	QPainter* painter,
+	const QStyleOptionGraphicsItem* option,
+	QWidget* widget)
+{
+	painter->setRenderHint(QPainter::Antialiasing);
+
+	// Draw the edge path first.
+	QGraphicsPathItem::paint(painter, option, widget);
+
+	const QColor edgeColor = pen().color();
+
+	// Draw a hollow source socket. The edge itself starts outside the socket,
+	// so its center remains genuinely transparent.
+	painter->save();
+
+	QPen socketPen(edgeColor);
+	socketPen.setWidthF(2.0);
+	socketPen.setCapStyle(Qt::RoundCap);
+	socketPen.setJoinStyle(Qt::RoundJoin);
+
+	painter->setPen(socketPen);
+	painter->setBrush(Qt::NoBrush);
+	painter->drawEllipse(
+		m_pos[0],
+		SocketRadius,
+		SocketRadius);
+
+	painter->restore();
+
+	const QPainterPath edgePath = path();
+	if (edgePath.isEmpty())
+		return;
+
+	// Build a filled DDD-style arrowhead from the final path tangent.
+	const QPointF tip = edgePath.pointAtPercent(1.0);
+	const QPointF before = edgePath.pointAtPercent(0.985);
+
+	QPointF direction = before - tip;
+	const qreal directionLength =
+		std::hypot(direction.x(), direction.y());
+
+	if (directionLength < 0.001)
+		return;
+
+	direction /= directionLength;
+
+	constexpr qreal ArrowHalfAngleDegrees = 17.0;
+	const qreal angle =
+		std::atan2(direction.y(), direction.x());
+	const qreal delta =
+		ArrowHalfAngleDegrees * Pi / 180.0;
+
+	QPolygonF arrow;
+	arrow
+		<< tip
+		<< QPointF(
+			tip.x() + ArrowLength * std::cos(angle + delta),
+			tip.y() + ArrowLength * std::sin(angle + delta))
+		<< QPointF(
+			tip.x() + ArrowLength * std::cos(angle - delta),
+			tip.y() + ArrowLength * std::sin(angle - delta));
+
+	painter->save();
+	painter->setPen(Qt::NoPen);
+	painter->setBrush(edgeColor);
+	painter->drawPolygon(arrow);
+	painter->restore();
 }
 
 // ------------------------------------------------------------

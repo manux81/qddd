@@ -58,6 +58,10 @@ public:
 					  RuntimeChangeState change = RuntimeChangeState::Unchanged);
 
 	void updatePosition();
+	QRectF boundingRect() const override;
+	void paint(QPainter* painter,
+			   const QStyleOptionGraphicsItem* option,
+			   QWidget* widget = nullptr) override;
 	GraphicalNodeItem* sourceNode() const { return m_from; }
 	GraphicalNodeItem* destinationNode() const { return m_to; }
 	const QString& sourceExpression() const { return m_sourceExpression; }
