@@ -1076,6 +1076,166 @@ static void appendStraightEdge(QPainterPath& path,
 	path.lineTo(end);
 }
 
+static qreal routeLength(const QPointF& start,
+						 const QVector<QPointF>& bends,
+						 const QPointF& end)
+{
+	qreal total = 0.0;
+	QPointF previous = start;
+
+	for (const QPointF& bend : bends) {
+		total += QLineF(previous, bend).length();
+		previous = bend;
+	}
+
+	return total + QLineF(previous, end).length();
+}
+
+static bool routeCrossesRect(const QPointF& start,
+							 const QVector<QPointF>& bends,
+							 const QPointF& end,
+							 const QRectF& rect)
+{
+	QPointF previous = start;
+
+	for (const QPointF& bend : bends) {
+		if (segmentIntersectsRect(previous, bend, rect))
+			return true;
+		previous = bend;
+	}
+
+	return segmentIntersectsRect(previous, end, rect);
+}
+
+static QVector<QPointF> shortestDetour(
+	const QPointF& start,
+	const QPointF& end,
+	const QRectF& blockingRect,
+	qreal laneOffset)
+{
+	// Keep the detour close to the obstacle. The lane offset only separates
+	// otherwise identical references instead of producing oversized arcs.
+	const qreal clearance =
+		18.0 + qMin<qreal>(18.0, std::abs(laneOffset) * 0.20);
+	const QRectF routeRect =
+		blockingRect.adjusted(-clearance, -clearance, clearance, clearance);
+
+	const bool leftToRight = start.x() <= end.x();
+	const bool topToBottom = start.y() <= end.y();
+
+	const QPointF topA =
+		leftToRight ? routeRect.topLeft() : routeRect.topRight();
+	const QPointF topB =
+		leftToRight ? routeRect.topRight() : routeRect.topLeft();
+	const QPointF bottomA =
+		leftToRight ? routeRect.bottomLeft() : routeRect.bottomRight();
+	const QPointF bottomB =
+		leftToRight ? routeRect.bottomRight() : routeRect.bottomLeft();
+	const QPointF leftA =
+		topToBottom ? routeRect.topLeft() : routeRect.bottomLeft();
+	const QPointF leftB =
+		topToBottom ? routeRect.bottomLeft() : routeRect.topLeft();
+	const QPointF rightA =
+		topToBottom ? routeRect.topRight() : routeRect.bottomRight();
+	const QPointF rightB =
+		topToBottom ? routeRect.bottomRight() : routeRect.topRight();
+
+	const QVector<QVector<QPointF>> candidates = {
+		{topA, topB},
+		{bottomA, bottomB},
+		{leftA, leftB},
+		{rightA, rightB}
+	};
+
+	QVector<QPointF> best;
+	qreal bestLength = -1.0;
+	const QRectF forbidden =
+		blockingRect.adjusted(-2.0, -2.0, 2.0, 2.0);
+
+	for (const QVector<QPointF>& candidate : candidates) {
+		if (routeCrossesRect(start, candidate, end, forbidden))
+			continue;
+
+		const qreal candidateLength =
+			routeLength(start, candidate, end);
+		if (bestLength < 0.0 || candidateLength < bestLength) {
+			bestLength = candidateLength;
+			best = candidate;
+		}
+	}
+
+	return best;
+}
+
+static QPointF pointToward(
+	const QPointF& from,
+	const QPointF& toward,
+	qreal distance)
+{
+	QLineF line(from, toward);
+	if (line.length() < 0.001)
+		return from;
+
+	line.setLength(qMin(distance, line.length()));
+	return line.p2();
+}
+
+static void appendRoundedRoute(
+	QPainterPath& path,
+	const QPointF& start,
+	const QVector<QPointF>& bends,
+	const QPointF& end,
+	qreal sourceGap)
+{
+	QLineF sourceLine(start, bends.isEmpty() ? end : bends.first());
+	QPointF routedStart = start;
+
+	if (sourceLine.length() > sourceGap) {
+		sourceLine.setLength(sourceGap);
+		routedStart = sourceLine.p2();
+	}
+
+	path.moveTo(routedStart);
+
+	if (bends.isEmpty()) {
+		path.lineTo(end);
+		return;
+	}
+
+	QVector<QPointF> points;
+	points << routedStart;
+	for (const QPointF& bend : bends)
+		points << bend;
+	points << end;
+
+	constexpr qreal CornerRadius = 18.0;
+
+	for (int i = 1; i + 1 < points.size(); ++i) {
+		const QPointF& previous = points[i - 1];
+		const QPointF& corner = points[i];
+		const QPointF& next = points[i + 1];
+
+		const qreal incomingLength =
+			QLineF(corner, previous).length();
+		const qreal outgoingLength =
+			QLineF(corner, next).length();
+		const qreal radius =
+			qMin(CornerRadius,
+				 qMin(incomingLength * 0.28,
+					  outgoingLength * 0.28));
+
+		const QPointF enter =
+			pointToward(corner, previous, radius);
+		const QPointF leave =
+			pointToward(corner, next, radius);
+
+		path.lineTo(enter);
+		path.quadTo(corner, leave);
+	}
+
+	path.lineTo(end);
+}
+
 void GraphicalEdgeItem::tick()
 {
 	m_pos[SEGMENTS - 1] = m_targetEnd;
@@ -1090,103 +1250,69 @@ void GraphicalEdgeItem::tick()
 	const qreal sourceGap = SocketRadius + 1.5;
 
 	if (m_from == m_to) {
-		// Keep the source socket in the header and route the self-reference
-		// completely outside the visible card.
 		const QRectF cardRect = visibleCardRect(m_from);
-
 		const QPointF loopStart = start;
 		const QPointF loopEnd(
 			cardRect.right() - qMin<qreal>(36.0, cardRect.width() * 0.18),
 			cardRect.top());
-
 		const qreal loopOffset =
 			qMax<qreal>(70.0, cardRect.height() * 0.65);
-
-		// A point above and to the right of the card forces the circular arc
-		// away from the card instead of letting it cross the card body.
 		const QPointF hint(
 			cardRect.right() + loopOffset,
 			cardRect.top() - loopOffset);
 
 		m_pos[SEGMENTS - 1] = loopEnd;
-
 		appendCircularArc(
-			p,
-			loopStart,
-			hint,
-			loopEnd,
-			sourceGap);
+			p, loopStart, hint, loopEnd, sourceGap);
 	} else if (length < 1.0) {
 		p.moveTo(start);
 		p.lineTo(end);
 	} else {
 		QRectF blockingRect;
 		bool blocked = false;
+		qreal closestBlocker = -1.0;
 
 		if (scene()) {
 			for (QGraphicsItem* item : scene()->items()) {
-				auto* node = dynamic_cast<GraphicalNodeItem*>(item);
+				auto* node =
+					dynamic_cast<GraphicalNodeItem*>(item);
 				if (!node || node == m_from || node == m_to)
 					continue;
 
-				// Include a small clearance around each card so the edge does not
-				// visually graze its border or shadow.
 				const QRectF candidate =
-					node->sceneBoundingRect().adjusted(
-						-12.0, -12.0, 12.0, 12.0);
+					visibleCardRect(node).adjusted(
+						-10.0, -10.0, 10.0, 10.0);
 
-				if (segmentIntersectsRect(start, end, candidate)) {
+				if (!segmentIntersectsRect(start, end, candidate))
+					continue;
+
+				const qreal distance =
+					QLineF(start, candidate.center()).length();
+
+				if (closestBlocker < 0.0
+				    || distance < closestBlocker) {
+					closestBlocker = distance;
 					blockingRect = candidate;
 					blocked = true;
-					break;
 				}
 			}
 		}
 
 		if (!blocked) {
-			// DDD-style default: use a straight edge whenever nothing blocks it.
 			appendStraightEdge(p, start, end, sourceGap);
 		} else {
-			// Bend only when the straight edge would cross another card.
-			const QPointF middle = (start + end) * 0.5;
-			const QPointF normal(
-				-chord.y() / length,
-				 chord.x() / length);
+			// Try compact detours around all four sides and select the
+			// shortest valid route.
+			const QVector<QPointF> detour =
+				shortestDetour(
+					start, end, blockingRect, m_routeOffset);
 
-			const qreal blockerSide =
-				QPointF::dotProduct(
-					blockingRect.center() - middle,
-					normal);
-
-			qreal side;
-			if (std::abs(blockerSide) > 1.0) {
-				// Route on the opposite side of the blocking card.
-				side = blockerSide > 0.0 ? -1.0 : 1.0;
-			} else {
-				// Pick a stable side when the blocker is centered on the chord.
-				const QString routeKey =
-					RuntimeObjectGraph::referenceIdentity(
-						m_sourceObjectId,
-						m_sourceExpression);
-				side = (qHash(routeKey) & 1U) ? 1.0 : -1.0;
-			}
-
-			const qreal clearance =
-				qMax<qreal>(
-					80.0,
-					qMax(blockingRect.width(), blockingRect.height()) * 0.55
-						+ 35.0
-						+ std::abs(m_routeOffset));
-
-			const QPointF hint =
-				middle + normal * (side * clearance);
-
-			appendCircularArc(
-				p,
-				start,
-				hint,
-				end,
-				sourceGap);
+			if (detour.isEmpty())
+				appendStraightEdge(
+					p, start, end, sourceGap);
+			else
+				appendRoundedRoute(
+					p, start, detour, end, sourceGap);
 		}
 	}
 
@@ -1196,12 +1322,10 @@ void GraphicalEdgeItem::tick()
 
 QRectF GraphicalEdgeItem::boundingRect() const
 {
+	// Keep room for the connection label around the path.
 	QRectF rect =
 		QGraphicsPathItem::boundingRect().adjusted(
-			-ArrowLength,
-			-ArrowLength,
-			 ArrowLength,
-			 ArrowLength);
+			-42.0, -42.0, 42.0, 42.0);
 
 	const QRectF socketRect(
 		m_pos[0].x() - SocketRadius - 2.0,
@@ -1245,6 +1369,79 @@ void GraphicalEdgeItem::paint(
 	const QPainterPath edgePath = path();
 	if (edgePath.isEmpty())
 		return;
+
+	// Show the field name on the connection so parallel references remain
+	// distinguishable without displaying the full debugger expression.
+	QString edgeLabel;
+	const QString expression = m_sourceExpression.trimmed();
+
+	if (!expression.isEmpty()) {
+		static const QRegularExpression fieldPattern(
+			QStringLiteral(
+				R"(([A-Za-z_][A-Za-z0-9_]*)\s*(?:\)|\])*\s*$)"));
+		const QRegularExpressionMatch fieldMatch =
+			fieldPattern.match(expression);
+
+		edgeLabel =
+			fieldMatch.hasMatch()
+				? fieldMatch.captured(1)
+				: expression;
+	}
+
+	if (!edgeLabel.isEmpty()) {
+		const qreal labelPercent = 0.38;
+		const QPointF labelPoint =
+			edgePath.pointAtPercent(labelPercent);
+		const QPointF tangent =
+			edgePath.pointAtPercent(
+				qMin<qreal>(1.0, labelPercent + 0.02))
+			- edgePath.pointAtPercent(
+				qMax<qreal>(0.0, labelPercent - 0.02));
+
+		QPointF normal(-tangent.y(), tangent.x());
+		const qreal normalLength =
+			std::hypot(normal.x(), normal.y());
+
+		if (normalLength > 0.001) {
+			normal /= normalLength;
+			if (normal.y() > 0.0)
+				normal = -normal;
+		}
+
+		QFont labelFont = painter->font();
+		if (labelFont.pointSizeF() > 0.0) {
+			labelFont.setPointSizeF(
+				qMax<qreal>(
+					8.0,
+					labelFont.pointSizeF() - 1.0));
+		}
+		painter->setFont(labelFont);
+
+		const QFontMetricsF metrics(labelFont);
+		const QSizeF textSize(
+			metrics.horizontalAdvance(edgeLabel),
+			metrics.height());
+
+		const QPointF center =
+			labelPoint + normal * 13.0;
+		const QRectF labelRect(
+			center.x() - textSize.width() * 0.5 - 5.0,
+			center.y() - textSize.height() * 0.5 - 2.0,
+			textSize.width() + 10.0,
+			textSize.height() + 4.0);
+
+		painter->save();
+		painter->setPen(Qt::NoPen);
+		painter->setBrush(QColor(30, 30, 30, 220));
+		painter->drawRoundedRect(
+			labelRect, 4.0, 4.0);
+		painter->setPen(QColor(220, 220, 220));
+		painter->drawText(
+			labelRect,
+			Qt::AlignCenter,
+			edgeLabel);
+		painter->restore();
+	}
 
 	// Build a filled DDD-style arrowhead from the final path tangent.
 	const QPointF tip = edgePath.pointAtPercent(1.0);
