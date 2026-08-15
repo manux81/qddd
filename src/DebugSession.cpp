@@ -45,10 +45,10 @@ QString debugValueFormatLabel(DebugValueFormat format)
 	case DebugValueFormat::Decimal: return QObject::tr("Decimal");
 	case DebugValueFormat::Octal: return QObject::tr("Octal");
 	case DebugValueFormat::Binary: return QObject::tr("Binary");
-	case DebugValueFormat::Character: return QObject::tr("Character");
-	case DebugValueFormat::Natural: return QObject::tr("Natural");
+	case DebugValueFormat::Character: return QObject::tr("Character / ASCII");
+	case DebugValueFormat::Natural: return QObject::tr("Debugger default");
 	}
-	return QObject::tr("Natural");
+	return QObject::tr("Debugger default");
 }
 
 QString formatDebugValue(const QString& value, DebugValueFormat format)

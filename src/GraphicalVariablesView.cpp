@@ -34,6 +34,7 @@
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QGraphicsSceneMouseEvent>
+#include <QGraphicsSceneWheelEvent>
 #include <QVBoxLayout>
 #include <QToolButton>
 #include <QStyle>
@@ -41,6 +42,7 @@
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QLineF>
+#include <QRegularExpression>
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -55,6 +57,8 @@ static constexpr int SocketOffset = -6;
 static constexpr int IndentStep   = 14;
 static constexpr int FooterHeight = 24;
 static constexpr int RowsPerPage = 8;
+static constexpr int MinimumNodeWidth = 260;
+static constexpr int MaximumNodeWidth = 440;
 static constexpr qreal MinimumZoom = 0.25;
 static constexpr qreal MaximumZoom = 4.0;
 
@@ -93,6 +97,14 @@ static bool isInlineStruct(const QString& s)
 {
 	const QString v = s.trimmed();
 	return v.startsWith('{') && v.endsWith('}');
+}
+
+static QString pointerAddressFromValue(const QString& value)
+{
+	static const QRegularExpression addressPattern(
+		QStringLiteral(R"(0x[0-9a-fA-F]+)"));
+	const QRegularExpressionMatch match = addressPattern.match(value);
+	return match.hasMatch() ? match.captured(0).toLower() : QString();
 }
 
 static QStringList splitTopLevelCommasLocal(const QString& s)
@@ -144,13 +156,14 @@ static void expandInlineStructIntoChildrenLocal(
 		if (!parentExpression.isEmpty()) {
 			const QString base = node->isPointer
 				? QStringLiteral("(*(%1))").arg(parentExpression)
-				: parentExpression;
+				: QStringLiteral("(%1)").arg(parentExpression);
 			c->expression = c->name.startsWith('[')
 				? base + c->name
 				: base + QStringLiteral(".") + c->name;
 		}
 
-		c->isPointer = c->value.trimmed().toLower().startsWith("0x");
+		c->pointeeAddress = pointerAddressFromValue(c->value);
+		c->isPointer = !c->pointeeAddress.isEmpty();
 		c->hasChildren = isInlineStruct(c->value);
 
 		if (c->hasChildren)
@@ -397,10 +410,12 @@ void GraphicalNodeItem::drawHeader(QPainter* p, const QRectF& r)
 	if (!m_node->enabled)
 		t += QObject::tr("  [disabled]");
 
+	const QString visibleTitle = p->fontMetrics().elidedText(
+		t, Qt::ElideMiddle, qMax(1, int(h.width()) - 24));
 	p->drawText(
 		h.adjusted(12, 0, -12, 0),
 		Qt::AlignVCenter | Qt::AlignLeft,
-		t
+		visibleTitle
 	);
 }
 
@@ -434,10 +449,12 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 
 		const QString displayedValue = m_session
 			? m_session->formattedValue(m_node) : m_node->value;
+		const QString visibleValue = p->fontMetrics().elidedText(
+			displayedValue, Qt::ElideMiddle, qMax(1, m_width - 24));
 		p->drawText(
 			rowRect.adjusted(12, 0, -12, 0),
 			Qt::AlignVCenter | Qt::AlignLeft,
-			displayedValue
+			visibleValue
 		);
 		return;
 	}
@@ -483,7 +500,12 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 				text = QString("%1 = []").arg(n->name);
 		}
 
-		p->drawText(x, y + 16, text);
+		const QString visibleText = p->fontMetrics().elidedText(
+			text, Qt::ElideMiddle, qMax(1, m_width - x - 14));
+		p->drawText(
+			QRectF(x, y, qMax(1, m_width - x - 12), RowHeight),
+			Qt::AlignVCenter | Qt::AlignLeft,
+			visibleText);
 
 		y += RowHeight;
 	}
@@ -512,6 +534,24 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 	if (pageCount <= 1)
 		return;
 
+	// A scrollbar makes it immediately visible that more rows are available.
+	const QRectF scrollTrack(
+		m_width - 5,
+		HeaderHeight + 4,
+		3,
+		visibleRows * RowHeight - 8);
+	p->setPen(Qt::NoPen);
+	p->setBrush(QColor(255, 255, 255, 30));
+	p->drawRoundedRect(scrollTrack, 1.5, 1.5);
+	const qreal thumbHeight = qMax<qreal>(18.0, scrollTrack.height() / pageCount);
+	const qreal thumbTravel = scrollTrack.height() - thumbHeight;
+	const qreal thumbY = scrollTrack.top()
+		+ thumbTravel * m_page / qMax(1, pageCount - 1);
+	p->setBrush(QColor(147, 197, 253, 210));
+	p->drawRoundedRect(
+		QRectF(scrollTrack.left(), thumbY, scrollTrack.width(), thumbHeight),
+		1.5, 1.5);
+
 	QRectF footerRect(
 		0,
 		HeaderHeight + visibleRows * RowHeight,
@@ -535,17 +575,34 @@ void GraphicalNodeItem::drawSource(QPainter* p)
 	p->setPen(Qt::white);
 
 	QString pageText =
-		QString("◀  %1 / %2  ▶")
+		QObject::tr("Page %1/%2  •  scroll")
 			.arg(m_page + 1)
 			.arg(pageCount);
 
 	p->drawText(
-		footerRect,
+		QRectF(footerRect.left(), footerRect.top(), 34, footerRect.height()),
+		Qt::AlignCenter,
+		QStringLiteral("◀"));
+	p->drawText(
+		footerRect.adjusted(34, 0, -34, 0),
 		Qt::AlignCenter,
 		pageText
 	);
+	p->drawText(
+		QRectF(footerRect.right() - 34, footerRect.top(), 34, footerRect.height()),
+		Qt::AlignCenter,
+		QStringLiteral("▶"));
+}
 
-
+void GraphicalNodeItem::setPage(int page, int pageCount)
+{
+	const int nextPage = qBound(0, page, qMax(1, pageCount) - 1);
+	if (nextPage == m_page)
+		return;
+	m_page = nextPage;
+	update();
+	for (auto* edge : m_edges)
+		edge->updatePosition();
 }
 
 void GraphicalNodeItem::mousePressEvent(QGraphicsSceneMouseEvent *e) {
@@ -554,6 +611,8 @@ void GraphicalNodeItem::mousePressEvent(QGraphicsSceneMouseEvent *e) {
 		m_draggingHeader = true;
 		return QGraphicsItem::mousePressEvent(e);
 	}
+	if (e->button() != Qt::LeftButton)
+		return QGraphicsItem::mousePressEvent(e);
 
 	QVector<VisibleRow> rows;
 	for (auto &c : m_node->children)
@@ -567,11 +626,10 @@ void GraphicalNodeItem::mousePressEvent(QGraphicsSceneMouseEvent *e) {
 
 		if (y >= footerTop) {
 			if (e->pos().x() < m_width / 2)
-				m_page = qMax(0, m_page - 1);
+				setPage(m_page - 1, pageCount);
 			else
-				m_page = qMin(pageCount - 1, m_page + 1);
-
-			update();
+				setPage(m_page + 1, pageCount);
+			e->accept();
 			return;
 		}
 	}
@@ -588,6 +646,7 @@ void GraphicalNodeItem::mousePressEvent(QGraphicsSceneMouseEvent *e) {
 			else
 				m_expandedExpressionState.remove(n->fullPath());
 			m_page = 0; // reset pagina
+			recalculateWidth();
 			update();
 			for (auto* edge : m_edges)
 				edge->updatePosition();
@@ -595,6 +654,26 @@ void GraphicalNodeItem::mousePressEvent(QGraphicsSceneMouseEvent *e) {
 				m_onGeometryChanged();
 		}
 	}
+}
+
+void GraphicalNodeItem::wheelEvent(QGraphicsSceneWheelEvent* event)
+{
+	if (event->orientation() != Qt::Vertical || event->delta() == 0) {
+		event->ignore();
+		return;
+	}
+
+	QVector<VisibleRow> rows;
+	for (auto& child : m_node->children)
+		buildRows(child.get(), 0, m_expanded, rows);
+	const int pageCount = qMax(1, (rows.size() + RowsPerPage - 1) / RowsPerPage);
+	if (pageCount <= 1) {
+		event->ignore();
+		return;
+	}
+
+	setPage(m_page + (event->delta() < 0 ? 1 : -1), pageCount);
+	event->accept();
 }
 
 void GraphicalNodeItem::mouseReleaseEvent(QGraphicsSceneMouseEvent* event)
@@ -614,27 +693,25 @@ void GraphicalNodeItem::recalculateWidth()
 		? m_node->name
 		: QString("%1 : %2").arg(m_node->name, m_node->address)) + 32;
 
-	std::function<void(const DebugVariable*, int)> measure =
-		[&](const DebugVariable* value, int indent) {
-			if (!value) return;
-			const QString displayedValue = m_session
-				? m_session->formattedValue(value) : value->value;
-			const QString text = value->children.empty()
-				? QString("%1 = %2").arg(value->name, displayedValue)
-				: QString("%1 = []").arg(value->name);
-			w = qMax(w, fm.horizontalAdvance(text) + 32 + indent * IndentStep);
-			for (const auto& child : value->children)
-				measure(child.get(), indent + 1);
-		};
-
-	if (m_node->children.empty())
+	if (m_node->children.empty()) {
 		w = qMax(w, fm.horizontalAdvance(
 			m_session ? m_session->formattedValue(m_node) : m_node->value) + 24);
-	else
+	} else {
+		QVector<VisibleRow> rows;
 		for (const auto& child : m_node->children)
-			measure(child.get(), 0);
+			buildRows(child.get(), 0, m_expanded, rows);
+		for (const VisibleRow& row : rows) {
+			const DebugVariable* value = row.node;
+			const QString displayedValue = m_session
+				? m_session->formattedValue(value) : value->value;
+			const QString text = value->hasChildren
+				? QStringLiteral("%1 = []").arg(value->name)
+				: QStringLiteral("%1 = %2").arg(value->name, displayedValue);
+			w = qMax(w, fm.horizontalAdvance(text) + 32 + row.indent * IndentStep);
+		}
+	}
 
-	m_width = qMax(260, w);
+	m_width = qBound(MinimumNodeWidth, w, MaximumNodeWidth);
 }
 
 void GraphicalNodeItem::addEdge(GraphicalEdgeItem* e)
@@ -677,7 +754,9 @@ QPointF GraphicalNodeItem::outputPortFor(DebugVariable* child) const
 
 	for (int i = 0; i < rows.size(); ++i) {
 		if (rows[i].node == child) {
-			qreal y = HeaderHeight + i * RowHeight + RowHeight / 2;
+			const int start = m_page * RowsPerPage;
+			const int localRow = qBound(0, i - start, RowsPerPage - 1);
+			qreal y = HeaderHeight + localRow * RowHeight + RowHeight / 2;
 			return mapToScene(QPointF(m_width, y));
 		}
 	}
@@ -692,7 +771,12 @@ QPointF GraphicalNodeItem::outputPortForExpression(const QString& expression) co
 		buildRows(c.get(), 0, const_cast<QHash<DebugVariable*, bool>&>(m_expanded), rows);
 	for (int i = 0; i < rows.size(); ++i) {
 		if (rows[i].node->fullPath() == expression)
-			return mapToScene(QPointF(m_width, HeaderHeight + i * RowHeight + RowHeight / 2));
+			return mapToScene(QPointF(
+				m_width,
+				HeaderHeight
+					+ qBound(0, i - m_page * RowsPerPage, RowsPerPage - 1)
+						* RowHeight
+					+ RowHeight / 2));
 	}
 	return mapToScene(QPointF(m_width, HeaderHeight / 2));
 }
@@ -712,6 +796,8 @@ void GraphicalNodeItem::setExpandedRecursively(bool expanded, int maxDepth)
 		for (auto& child : value->children) visit(child.get(), depth + 1);
 	};
 	visit(m_node, 0);
+	m_page = 0;
+	recalculateWidth();
 	update();
 	for (auto* edge : m_edges)
 		edge->updatePosition();
@@ -736,6 +822,7 @@ void GraphicalNodeItem::restoreExpandedExpressions(const QSet<QString>& expressi
 			restore(child.get());
 	};
 	restore(m_node);
+	recalculateWidth();
 }
 
 QVariant GraphicalNodeItem::itemChange(GraphicsItemChange c,
@@ -945,7 +1032,7 @@ GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
 
 	connect(mk("+", tr("Zoom in (Ctrl/Command + scroll)")), &QToolButton::clicked, this, &GraphicalVariablesView::zoomIn);
 	connect(mk("-", tr("Zoom out")), &QToolButton::clicked, this, &GraphicalVariablesView::zoomOut);
-	connect(mk("ƒ+", tr("Create display expression")), &QToolButton::clicked,
+	connect(mk("ƒ+", tr("Add expression display")), &QToolButton::clicked,
 	        this, [this] { createDisplayExpression(); });
 	m_autoLayoutButton = mk("⇆", tr("Automatic layout: on"));
 	m_autoLayoutButton->setCheckable(true);
@@ -1288,9 +1375,20 @@ void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
 	auto* item = dynamic_cast<GraphicalNodeItem*>(itemAt(event->pos()));
 	if (!item) {
 		QMenu menu(this);
-		QAction* create = menu.addAction(tr("Create display expression…"));
-		if (menu.exec(event->globalPos()) == create)
+		menu.setToolTipsVisible(true);
+		QAction* create = menu.addAction(tr("Add expression display…"));
+		create->setToolTip(tr("Create a new card for an expression or variable."));
+		menu.addSeparator();
+		QAction* arrange = menu.addAction(tr("Arrange all cards automatically"));
+		arrange->setToolTip(tr("Recalculate positions and reduce crossed connections."));
+		QAction* fit = menu.addAction(tr("Fit all cards in view"));
+		QAction* selected = menu.exec(event->globalPos());
+		if (selected == create)
 			createDisplayExpression();
+		else if (selected == arrange)
+			autoLayout();
+		else if (selected == fit)
+			fitGraph();
 		return;
 	}
 
@@ -1301,14 +1399,26 @@ void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
 	DebugVariable* displayRoot = rootOf(selectedVariable);
 
 	QMenu menu(this);
-	auto* dependent = menu.addAction(tr("Create dependent display…"));
-	auto* editValue = menu.addAction(tr("Edit value…"));
+	menu.setToolTipsVisible(true);
+	QString selectedPath = selectedVariable
+		? selectedVariable->fullPath() : QString();
+	if (selectedPath.isEmpty() && selectedVariable)
+		selectedPath = selectedVariable->name;
+	menu.addSection(tr("Selected: %1").arg(
+		menu.fontMetrics().elidedText(selectedPath, Qt::ElideMiddle, 320)));
+	auto* dependent = menu.addAction(tr("Add connected expression…"));
+	dependent->setToolTip(tr("Create another display connected to this value."));
+	auto* editValue = menu.addAction(tr("Change value…"));
+	editValue->setToolTip(tr("Assign a new value through the debugger."));
 	editValue->setEnabled(selectedVariable && selectedVariable->enabled &&
 	                      !selectedVariable->hasChildren);
-	auto* dereference = menu.addAction(tr("Replace with dereference"));
+	auto* dereference = menu.addAction(tr("Show pointed value instead"));
+	dereference->setToolTip(
+		tr("Replace this display with the value referenced by the selected pointer."));
 	dereference->setEnabled(selectedVariable && selectedVariable->isPointer &&
 	                       displayRoot && displayRoot->isWatch && displayRoot->enabled);
-	auto* formatMenu = menu.addMenu(tr("Format"));
+	auto* formatMenu = menu.addMenu(tr("Display format"));
+	formatMenu->setToolTipsVisible(true);
 	const DebugValueFormat formats[] = {
 		DebugValueFormat::Natural,
 		DebugValueFormat::Hexadecimal,
@@ -1332,19 +1442,24 @@ void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
 	QAction* toggleEnabled = nullptr;
 	QAction* deleteDisplay = nullptr;
 	if (displayRoot && displayRoot->isWatch) {
-		menu.addSeparator();
+		menu.addSection(tr("Display"));
 		toggleEnabled = menu.addAction(displayRoot->enabled
-			? tr("Disable display") : tr("Enable display"));
-		deleteDisplay = menu.addAction(tr("Delete display"));
+			? tr("Pause updates") : tr("Resume updates"));
+		toggleEnabled->setToolTip(displayRoot->enabled
+			? tr("Keep this card visible but stop evaluating its expression.")
+			: tr("Evaluate this display again when execution stops."));
+		deleteDisplay = menu.addAction(tr("Remove this display"));
 	}
 
-	menu.addSeparator();
-	auto* expandOne = menu.addAction(tr("Expand one level"));
-	auto* expandAll = menu.addAction(tr("Expand recursively"));
-	auto* collapseOne = menu.addAction(tr("Collapse children"));
-	auto* collapseAll = menu.addAction(tr("Collapse recursively"));
-	menu.addSeparator();
-	auto* releasePosition = menu.addAction(tr("Release manual position"));
+	menu.addSection(tr("Card contents"));
+	auto* expandOne = menu.addAction(tr("Expand direct children"));
+	auto* expandAll = menu.addAction(tr("Expand all descendants"));
+	auto* collapseOne = menu.addAction(tr("Collapse direct children"));
+	auto* collapseAll = menu.addAction(tr("Collapse all descendants"));
+	menu.addSection(tr("Position"));
+	auto* releasePosition = menu.addAction(tr("Use automatic position"));
+	releasePosition->setToolTip(
+		tr("Allow automatic layout to position this card again."));
 	releasePosition->setEnabled(m_pinnedNodeKeys.contains(item->layoutKey()));
 	QAction* selected = menu.exec(event->globalPos());
 	if (selected && selected->property("debugValueFormat").toBool() && selectedVariable)
@@ -1378,8 +1493,9 @@ void GraphicalVariablesView::createDisplayExpression(const QString& dependsOn)
 	bool accepted = false;
 	const QString expression = QInputDialog::getText(
 		this,
-		dependsOn.isEmpty() ? tr("Create display") : tr("Create dependent display"),
-		tr("Expression:"), QLineEdit::Normal, {}, &accepted).trimmed();
+		dependsOn.isEmpty() ? tr("Add expression display")
+		                    : tr("Add connected expression"),
+		tr("Expression to display:"), QLineEdit::Normal, {}, &accepted).trimmed();
 	if (!accepted || expression.isEmpty())
 		return;
 	const bool alreadyExists = m_session->watchExpressions().contains(expression);
@@ -1460,7 +1576,19 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 	if (!m_session || pointerExpr.isEmpty() || !ptrVar || !fromItem)
 		return;
 
-	const QString key = RuntimeObjectGraph::identityFor(ptrVar->pointeeAddress, ptrVar->type, pointerExpr);
+	QString key = RuntimeObjectGraph::identityFor(
+		ptrVar->pointeeAddress, ptrVar->type, pointerExpr);
+	if (!ptrVar->pointeeAddress.isEmpty()) {
+		for (auto existing = m_dynamicRootByKey.cbegin();
+		     existing != m_dynamicRootByKey.cend(); ++existing) {
+			if (existing.value()
+			    && existing.value()->address.compare(
+				   ptrVar->pointeeAddress, Qt::CaseInsensitive) == 0) {
+				key = existing.key();
+				break;
+			}
+		}
+	}
 	if (m_dynamicRootByKey.contains(key)) {
 		DebugVariable* rootRaw = m_dynamicRootByKey.value(key);
 		if (!rootRaw)
@@ -1473,7 +1601,19 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 			configureNodeItem(existing);
 			m_scene->addItem(existing);
 			m_dynamicItems[rootRaw] = existing;
+		}
 
+		bool edgeExists = false;
+		for (QGraphicsItem* sceneItem : m_scene->items()) {
+			auto* edge = dynamic_cast<GraphicalEdgeItem*>(sceneItem);
+			if (edge && edge->sourceNode() == fromItem
+			    && edge->destinationNode() == existing
+			    && edge->sourceExpression() == pointerExpr) {
+				edgeExists = true;
+				break;
+			}
+		}
+		if (!edgeExists) {
 			auto* e = new GraphicalEdgeItem(fromItem, existing,
 				layoutKeyForVariable(rootOf(ptrVar)), pointerExpr, key);
 			m_scene->addItem(e);
@@ -1490,19 +1630,32 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 
 	const quint64 generation = m_refreshGeneration;
 	const QString pointerName = ptrVar->name;
+	const QString sourceLayoutKey = fromItem->layoutKey();
 	m_session->dereferencePointer(pointerExpr,
-		[this, key, pointerExpr, pointerName, generation](const QString& value, const QString& type) {
+		[this, key, pointerExpr, pointerName, sourceLayoutKey, generation]
+		(const QString& value, const QString& type) {
 			if (generation != m_refreshGeneration) return;
 			DebugVariable* ptrVar = nullptr;
 			GraphicalNodeItem* fromItem = nullptr;
 			for (auto& candidate : m_session->variables()) {
 				if (DebugVariable* found = findVariableByPath(candidate.get(), pointerExpr)) {
 					ptrVar = found;
-					const QString sourceKey = layoutKeyForVariable(rootOf(found));
-					for (QGraphicsItem* sceneItem : m_scene->items()) {
-						auto* nodeItem = dynamic_cast<GraphicalNodeItem*>(sceneItem);
-						if (nodeItem && nodeItem->layoutKey() == sourceKey) { fromItem = nodeItem; break; }
+					break;
+				}
+			}
+			if (!ptrVar) {
+				for (auto& candidate : m_dynamicRoots) {
+					if (DebugVariable* found =
+						findVariableByPath(candidate.get(), pointerExpr)) {
+						ptrVar = found;
+						break;
 					}
+				}
+			}
+			for (QGraphicsItem* sceneItem : m_scene->items()) {
+				auto* nodeItem = dynamic_cast<GraphicalNodeItem*>(sceneItem);
+				if (nodeItem && nodeItem->layoutKey() == sourceLayoutKey) {
+					fromItem = nodeItem;
 					break;
 				}
 			}
@@ -1515,6 +1668,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 			root->expression = QStringLiteral("*(%1)").arg(pointerExpr);
 			root->value = value.trimmed();
 			root->type = type;
+			root->address = ptrVar->pointeeAddress;
 			root->parent = nullptr;
 			root->isPointer = false;
 			root->hasChildren = isInlineStruct(root->value);

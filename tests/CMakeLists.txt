@@ -54,3 +54,22 @@ add_executable(runtime_graph_layout_tests
 target_include_directories(runtime_graph_layout_tests PRIVATE ../src)
 target_link_libraries(runtime_graph_layout_tests PRIVATE Qt5::Core)
 add_test(NAME runtime_graph_layout_tests COMMAND runtime_graph_layout_tests)
+
+# Standalone C++20 program used as a demanding manual debug target. It is also
+# executed by CTest so that its deterministic setup cannot silently regress.
+find_package(Threads REQUIRED)
+add_executable(debugger_stress_target DebuggerStressTarget.cpp)
+target_compile_features(debugger_stress_target PRIVATE cxx_std_20)
+target_link_libraries(debugger_stress_target PRIVATE Threads::Threads)
+set_target_properties(debugger_stress_target PROPERTIES AUTOMOC OFF)
+if(MSVC)
+	target_compile_options(debugger_stress_target PRIVATE /Od /Zi)
+else()
+	target_compile_options(debugger_stress_target PRIVATE
+		-O0 -g3 -fno-omit-frame-pointer)
+endif()
+add_test(NAME debugger_stress_target_smoke COMMAND debugger_stress_target)
+set_tests_properties(debugger_stress_target_smoke PROPERTIES
+	TIMEOUT 15
+	LABELS "debugger;stress;cxx20"
+)

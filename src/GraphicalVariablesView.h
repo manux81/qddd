@@ -44,6 +44,7 @@
 #include <vector>
 
 class GraphicalNodeItem;
+class QGraphicsSceneWheelEvent;
 class QToolButton;
 
 class GraphicalEdgeItem : public QGraphicsPathItem
@@ -59,6 +60,7 @@ public:
 	void updatePosition();
 	GraphicalNodeItem* sourceNode() const { return m_from; }
 	GraphicalNodeItem* destinationNode() const { return m_to; }
+	const QString& sourceExpression() const { return m_sourceExpression; }
 
 private:
 	GraphicalNodeItem* m_from;
@@ -111,12 +113,14 @@ public:
 protected:
 	void mousePressEvent(QGraphicsSceneMouseEvent*) override;
 	void mouseReleaseEvent(QGraphicsSceneMouseEvent*) override;
+	void wheelEvent(QGraphicsSceneWheelEvent*) override;
 	QVariant itemChange(GraphicsItemChange,
 						const QVariant&) override;
 
 private:
 	void drawHeader(QPainter* painter, const QRectF& r);
 	void drawSource(QPainter* painter);
+	void setPage(int page, int pageCount);
 
 private:
 	DebugVariable* m_node = nullptr;
