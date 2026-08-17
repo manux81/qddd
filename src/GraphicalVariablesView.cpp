@@ -1711,17 +1711,17 @@ QPointF GraphicalVariablesView::positionForNode(
 
 void GraphicalVariablesView::scheduleAutoLayout()
 {
-	// Several pointer cards can resolve in quick succession after a single
-	// step (each is its own GDB round trip). Without coalescing, every one
-	// of them would trigger its own immediate RuntimeGraphLayout::compute()
-	// pass, and the graph visibly resettles once per card instead of once
-	// per refresh -- the "flickers as if it keeps re-arranging" symptom.
-	if (m_layoutScheduled)
-		return;
-	m_layoutScheduled = true;
-	QTimer::singleShot(0, this, [this] {
-		m_layoutScheduled = false;
-		applyAutomaticLayout(false);
+	// Debounce asynchronous pointer updates: only the latest scheduled
+	// callback is allowed to run the automatic layout.
+	const char* propertyName = "_qddd_layout_debounce_token";
+	const quint64 token = property(propertyName).toULongLong() + 1;
+	setProperty(propertyName, QVariant::fromValue<qulonglong>(token));
+
+	QTimer::singleShot(80, this, [this, token, propertyName] {
+		if (property(propertyName).toULongLong() != token)
+			return;
+		if (m_autoLayoutEnabled && !m_refreshInProgress)
+			applyAutomaticLayout(false);
 	});
 }
 
@@ -2100,6 +2100,12 @@ void GraphicalVariablesView::reopenDependentPointerExpressions(
 	if (!target || !targetItem)
 		return;
 
+	// Prevent synchronous recursion on cyclic object graphs such as
+	// A->B->A. The guard is scoped to the current call chain: once an
+	// expression finishes reopening it may be processed normally again
+	// during a later refresh.
+	static thread_local QSet<QString> reopening;
+
 	// A pointer expression can only be resolved once the card of the value it
 	// dereferences from actually exists. Session-rooted pointers are reopened
 	// directly in refresh(); a pointer field living *inside* an already
@@ -2115,10 +2121,22 @@ void GraphicalVariablesView::reopenDependentPointerExpressions(
 		DebugVariable* field = findVariableByPath(target, expr);
 		if (!field || field == target || !field->isPointer)
 			continue;
+
+		const QString guardKey =
+			targetItem->layoutKey()
+			+ QStringLiteral("\x1f")
+			+ expr;
+		if (reopening.contains(guardKey))
+			continue;
+
+		reopening.insert(guardKey);
+
 		// Automatic reopen after a step: keep the viewport where the user
 		// left it instead of jumping to whichever nested pointer happened
 		// to resolve first.
 		ensurePointerNodeOpen(expr, field, targetItem, /*recenterView=*/false);
+
+		reopening.remove(guardKey);
 	}
 }
 
@@ -2288,6 +2306,60 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 			if (!ptrVar || !fromItem) return;
 			if (value.isEmpty())
 				return;
+
+			// A second asynchronous dereference may have completed while this
+			// request was in flight and already created a card for the same
+			// runtime object. Re-check by pointee address before creating one.
+			if (!ptrVar->pointeeAddress.isEmpty()) {
+				GraphicalNodeItem* existingTarget = nullptr;
+				for (QGraphicsItem* sceneItem : m_scene->items()) {
+					auto* nodeItem =
+						qgraphicsitem_cast<GraphicalNodeItem*>(sceneItem);
+					if (!nodeItem || nodeItem == fromItem || !nodeItem->node())
+						continue;
+					if (nodeItem->node()->address.compare(
+							ptrVar->pointeeAddress,
+							Qt::CaseInsensitive) == 0) {
+						existingTarget = nodeItem;
+						break;
+					}
+				}
+
+				if (existingTarget) {
+					bool edgeExists = false;
+					for (QGraphicsItem* sceneItem : m_scene->items()) {
+						auto* edge =
+							qgraphicsitem_cast<GraphicalEdgeItem*>(sceneItem);
+						if (edge
+							&& edge->sourceNode() == fromItem
+							&& edge->destinationNode() == existingTarget
+							&& edge->sourceExpression() == pointerExpr) {
+							edgeExists = true;
+							break;
+						}
+					}
+
+					if (!edgeExists) {
+						auto* edge = new GraphicalEdgeItem(
+							fromItem,
+							existingTarget,
+							layoutKeyForVariable(rootOf(ptrVar)),
+							pointerExpr,
+							layoutKeyForVariable(existingTarget->node()));
+						m_scene->addItem(edge);
+						fromItem->addEdge(edge);
+						existingTarget->addEdge(edge);
+						edge->updatePosition();
+					}
+
+					scheduleAutoLayout();
+					if (recenterView)
+						centerOn(existingTarget);
+					reopenDependentPointerExpressions(
+						existingTarget->node(), existingTarget);
+					return;
+				}
+			}
 
 			auto root = std::make_unique<DebugVariable>();
 			root->name = QString("*%1").arg(pointerName);
