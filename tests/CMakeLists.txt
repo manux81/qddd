@@ -55,6 +55,15 @@ target_include_directories(runtime_graph_layout_tests PRIVATE ../src)
 target_link_libraries(runtime_graph_layout_tests PRIVATE Qt5::Core)
 add_test(NAME runtime_graph_layout_tests COMMAND runtime_graph_layout_tests)
 
+add_executable(orthogonal_edge_router_tests
+	OrthogonalEdgeRouterTests.cpp
+	../src/OrthogonalEdgeRouter.cpp
+	../src/OrthogonalEdgeRouter.h
+)
+target_include_directories(orthogonal_edge_router_tests PRIVATE ../src)
+target_link_libraries(orthogonal_edge_router_tests PRIVATE Qt5::Core Qt5::Gui)
+add_test(NAME orthogonal_edge_router_tests COMMAND orthogonal_edge_router_tests)
+
 # Standalone C++20 program used as a demanding manual debug target. It is also
 # executed by CTest so that its deterministic setup cannot silently regress.
 find_package(Threads REQUIRED)

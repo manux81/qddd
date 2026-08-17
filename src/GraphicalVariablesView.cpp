@@ -29,6 +29,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include "GraphicalVariablesView.h"
+#include "OrthogonalEdgeRouter.h"
 
 #include <QPainter>
 #include <QWheelEvent>
@@ -79,11 +80,6 @@ namespace Style {
 // ------------------------------------------------------------
 // helpers
 // ------------------------------------------------------------
-
-struct VisibleRow {
-	DebugVariable* node;
-	int indent;
-};
 
 static void applyBoundedZoom(QGraphicsView* view, qreal factor)
 {
@@ -409,6 +405,19 @@ GraphicalNodeItem::GraphicalNodeItem(DebugVariable* node,
 	recalculateWidth();
 }
 
+const QVector<VisibleRow>& GraphicalNodeItem::cachedRows() const
+{
+	if (m_rowsDirty) {
+		m_cachedRows.clear();
+		for (auto& c : m_node->children)
+			buildRows(c.get(), 0,
+					  const_cast<QHash<DebugVariable*, bool>&>(m_expanded),
+					  m_cachedRows);
+		m_rowsDirty = false;
+	}
+	return m_cachedRows;
+}
+
 DebugVariable* GraphicalNodeItem::variableAt(const QPointF& localPos) const
 {
 	if (!m_node)
@@ -417,11 +426,7 @@ DebugVariable* GraphicalNodeItem::variableAt(const QPointF& localPos) const
 	if (localPos.y() < HeaderHeight)
 		return nullptr;
 
-	QVector<VisibleRow> rows;
-	for (auto& c : m_node->children)
-		buildRows(c.get(), 0,
-				  const_cast<QHash<DebugVariable*, bool>&>(m_expanded),
-				  rows);
+	const QVector<VisibleRow>& rows = cachedRows();
 
 	if (rows.isEmpty()) {
 		// Single value row (used for leaf values / pointers)
@@ -445,12 +450,8 @@ DebugVariable* GraphicalNodeItem::variableAt(const QPointF& localPos) const
 
 QRectF GraphicalNodeItem::boundingRect() const
 {
-	QVector<VisibleRow> rows;
+	const QVector<VisibleRow>& rows = cachedRows();
 
-	for (auto& c : m_node->children)
-		buildRows(c.get(), 0,
-				  const_cast<QHash<DebugVariable*, bool>&>(m_expanded),
-				  rows);
 	int totalRows = qMax(1, rows.size());
 	int visibleRows = qMin(totalRows, RowsPerPage);
 	int pageCount =
@@ -555,10 +556,7 @@ void GraphicalNodeItem::drawHeader(QPainter* p, const QRectF& r)
 
 void GraphicalNodeItem::drawSource(QPainter* p)
 {
-	QVector<VisibleRow> rows;
-
-	for (auto& c : m_node->children)
-		buildRows(c.get(), 0, m_expanded, rows);
+	const QVector<VisibleRow>& rows = cachedRows();
 
 	const int totalRows = qMax(1, rows.size());
 	const int visibleRows = qMin(totalRows, RowsPerPage);
@@ -747,9 +745,7 @@ void GraphicalNodeItem::mousePressEvent(QGraphicsSceneMouseEvent *e) {
 	if (e->button() != Qt::LeftButton)
 		return QGraphicsItem::mousePressEvent(e);
 
-	QVector<VisibleRow> rows;
-	for (auto &c : m_node->children)
-		buildRows(c.get(), 0, m_expanded, rows);
+	const QVector<VisibleRow>& rows = cachedRows();
 
 	int pageCount = qMax(1, (rows.size() + RowsPerPage - 1) / RowsPerPage);
 
@@ -773,6 +769,7 @@ void GraphicalNodeItem::mousePressEvent(QGraphicsSceneMouseEvent *e) {
 		DebugVariable *n = rows[idx].node;
 		if (n->hasChildren) {
 			prepareGeometryChange();
+			m_rowsDirty = true;
 			m_expanded[n] = !m_expanded.value(n, false);
 			if (m_expanded.value(n))
 				m_expandedExpressionState.insert(n->fullPath());
@@ -796,9 +793,7 @@ void GraphicalNodeItem::wheelEvent(QGraphicsSceneWheelEvent* event)
 		return;
 	}
 
-	QVector<VisibleRow> rows;
-	for (auto& child : m_node->children)
-		buildRows(child.get(), 0, m_expanded, rows);
+	const QVector<VisibleRow>& rows = cachedRows();
 	const int pageCount = qMax(1, (rows.size() + RowsPerPage - 1) / RowsPerPage);
 	if (pageCount <= 1) {
 		event->ignore();
@@ -830,9 +825,7 @@ void GraphicalNodeItem::recalculateWidth()
 		w = qMax(w, fm.horizontalAdvance(
 			m_session ? m_session->formattedValue(m_node) : m_node->value) + 24);
 	} else {
-		QVector<VisibleRow> rows;
-		for (const auto& child : m_node->children)
-			buildRows(child.get(), 0, m_expanded, rows);
+		const QVector<VisibleRow>& rows = cachedRows();
 		for (const VisibleRow& row : rows) {
 			const DebugVariable* value = row.node;
 			const QString displayedValue = m_session
@@ -878,8 +871,7 @@ QPointF GraphicalNodeItem::outputPortFor(DebugVariable* child) const
 {
 	Q_UNUSED(child);
 
-	// References are visually attached to the card header rather than to
-	// individual rows. The hollow socket touches the right edge of the card.
+	// Keep one stable hollow socket in the right side of the header.
 	return mapToScene(
 		QPointF(m_width - (SocketRadius * 2.0),
 				HeaderHeight / 2.0));
@@ -889,8 +881,8 @@ QPointF GraphicalNodeItem::outputPortForExpression(const QString& expression) co
 {
 	Q_UNUSED(expression);
 
-	// Keep the expression as the semantic edge identity while using one stable
-	// visual anchor for the whole card.
+	// The expression remains the semantic edge identity, while every
+	// connection uses the same visual socket in the card header.
 	return mapToScene(
 		QPointF(m_width - (SocketRadius * 2.0),
 				HeaderHeight / 2.0));
@@ -899,6 +891,7 @@ QPointF GraphicalNodeItem::outputPortForExpression(const QString& expression) co
 void GraphicalNodeItem::setExpandedRecursively(bool expanded, int maxDepth)
 {
 	prepareGeometryChange();
+	m_rowsDirty = true;
 	std::function<void(DebugVariable*, int)> visit = [&](DebugVariable* value, int depth) {
 		if (!value || depth > maxDepth) return;
 		if (value->hasChildren) {
@@ -927,6 +920,7 @@ QSet<QString> GraphicalNodeItem::expandedExpressions() const
 
 void GraphicalNodeItem::restoreExpandedExpressions(const QSet<QString>& expressions)
 {
+	m_rowsDirty = true;
 	m_expandedExpressionState = expressions;
 	std::function<void(DebugVariable*)> restore = [&](DebugVariable* value) {
 		if (!value)
@@ -1020,18 +1014,15 @@ static QPointF pointOnRectToward(const QRectF& rect, const QPointF& toward)
 
 void GraphicalEdgeItem::updatePosition()
 {
+	const QRectF targetRect = visibleCardRect(m_to);
 	m_pos[0] = m_from->outputPortForExpression(m_sourceExpression);
 
 	if (m_from == m_to) {
-		// Self references select their destination point while building the loop.
 		m_targetEnd = m_pos[0];
 	} else {
-		// Let the arrow slide along the destination perimeter according to
-		// the direction from which the connection approaches the card.
-		m_targetEnd =
-			pointOnRectToward(
-				visibleCardRect(m_to),
-				m_pos[0]);
+		// Keep the destination attachment on the natural perimeter point.
+		// The router enforces the final segment perpendicular to that side.
+		m_targetEnd = pointOnRectToward(targetRect, m_pos[0]);
 	}
 
 	if (!m_timer.isActive())
@@ -1242,81 +1233,72 @@ void GraphicalEdgeItem::tick()
 
 	const QPointF start = m_pos[0];
 	const QPointF end = m_pos[SEGMENTS - 1];
-
-	QPainterPath p;
-
-	const QPointF chord = end - start;
-	const qreal length = std::hypot(chord.x(), chord.y());
 	const qreal sourceGap = SocketRadius + 1.5;
 
-	if (m_from == m_to) {
-		const QRectF cardRect = visibleCardRect(m_from);
-		const QPointF loopStart = start;
-		const QPointF loopEnd(
-			cardRect.right() - qMin<qreal>(36.0, cardRect.width() * 0.18),
-			cardRect.top());
-		const qreal loopOffset =
-			qMax<qreal>(70.0, cardRect.height() * 0.65);
-		const QPointF hint(
-			cardRect.right() + loopOffset,
-			cardRect.top() - loopOffset);
+	OrthogonalEdgeRouter::Request request;
+	request.source = start;
+	request.target = end;
+	request.sourceNormal = QPointF(1.0, 0.0);
+	request.sourceGap = sourceGap;
+	request.laneOffset = m_routeOffset;
+	request.stabilityKey = RuntimeObjectGraph::referenceIdentity(
+		m_sourceObjectId, m_sourceExpression);
 
-		m_pos[SEGMENTS - 1] = loopEnd;
-		appendCircularArc(
-			p, loopStart, hint, loopEnd, sourceGap);
-	} else if (length < 1.0) {
-		p.moveTo(start);
-		p.lineTo(end);
-	} else {
-		QRectF blockingRect;
-		bool blocked = false;
-		qreal closestBlocker = -1.0;
+	if (m_from != m_to) {
+		const QRectF targetRect = visibleCardRect(m_to);
+		const qreal distances[] = {
+			std::abs(end.x() - targetRect.left()),
+			std::abs(end.x() - targetRect.right()),
+			std::abs(end.y() - targetRect.top()),
+			std::abs(end.y() - targetRect.bottom())
+		};
 
-		if (scene()) {
-			for (QGraphicsItem* item : scene()->items()) {
-				auto* node =
-					dynamic_cast<GraphicalNodeItem*>(item);
-				if (!node || node == m_from || node == m_to)
-					continue;
+		int side = 0;
+		for (int i = 1; i < 4; ++i)
+			if (distances[i] < distances[side])
+				side = i;
 
-				const QRectF candidate =
-					visibleCardRect(node).adjusted(
-						-10.0, -10.0, 10.0, 10.0);
-
-				if (!segmentIntersectsRect(start, end, candidate))
-					continue;
-
-				const qreal distance =
-					QLineF(start, candidate.center()).length();
-
-				if (closestBlocker < 0.0
-				    || distance < closestBlocker) {
-					closestBlocker = distance;
-					blockingRect = candidate;
-					blocked = true;
-				}
-			}
-		}
-
-		if (!blocked) {
-			appendStraightEdge(p, start, end, sourceGap);
-		} else {
-			// Try compact detours around all four sides and select the
-			// shortest valid route.
-			const QVector<QPointF> detour =
-				shortestDetour(
-					start, end, blockingRect, m_routeOffset);
-
-			if (detour.isEmpty())
-				appendStraightEdge(
-					p, start, end, sourceGap);
-			else
-				appendRoundedRoute(
-					p, start, detour, end, sourceGap);
+		switch (side) {
+		case 0: request.targetNormal = QPointF(-1.0, 0.0); break;
+		case 1: request.targetNormal = QPointF( 1.0, 0.0); break;
+		case 2: request.targetNormal = QPointF( 0.0,-1.0); break;
+		default: request.targetNormal = QPointF(0.0, 1.0); break;
 		}
 	}
 
-	setPath(p);
+	if (scene()) {
+		for (QGraphicsItem* item : scene()->items()) {
+			if (auto* node = qgraphicsitem_cast<GraphicalNodeItem*>(item)) {
+				const QRectF cardRect = visibleCardRect(node);
+				if (!request.routingBounds.isValid()
+				    || request.routingBounds.isEmpty())
+					request.routingBounds = cardRect;
+				else
+					request.routingBounds =
+						request.routingBounds.united(cardRect);
+
+				if (node != m_from && node != m_to)
+					request.obstacles.push_back(cardRect);
+				continue;
+			}
+
+			auto* edge = qgraphicsitem_cast<GraphicalEdgeItem*>(item);
+			if (edge && edge != this && !edge->path().isEmpty())
+				request.existingEdges.push_back(edge->path());
+		}
+	}
+
+	OrthogonalEdgeRouter::Result result;
+	if (m_from == m_to) {
+		result = OrthogonalEdgeRouter::routeSelfLoop(
+			request, visibleCardRect(m_from));
+		m_pos[SEGMENTS - 1] = result.endPoint;
+	} else {
+		result = OrthogonalEdgeRouter::route(request);
+	}
+
+	m_labelPosition = result.labelPosition;
+	setPath(result.path);
 	m_timer.stop();
 }
 
@@ -1370,76 +1352,36 @@ void GraphicalEdgeItem::paint(
 	if (edgePath.isEmpty())
 		return;
 
-	// Show the field name on the connection so parallel references remain
-	// distinguishable without displaying the full debugger expression.
 	QString edgeLabel;
 	const QString expression = m_sourceExpression.trimmed();
-
 	if (!expression.isEmpty()) {
 		static const QRegularExpression fieldPattern(
-			QStringLiteral(
-				R"(([A-Za-z_][A-Za-z0-9_]*)\s*(?:\)|\])*\s*$)"));
-		const QRegularExpressionMatch fieldMatch =
-			fieldPattern.match(expression);
-
-		edgeLabel =
-			fieldMatch.hasMatch()
-				? fieldMatch.captured(1)
-				: expression;
+			QStringLiteral(R"(([A-Za-z_][A-Za-z0-9_]*)\s*(?:\)|\])*\s*$)"));
+		const QRegularExpressionMatch match = fieldPattern.match(expression);
+		edgeLabel = match.hasMatch() ? match.captured(1) : expression;
 	}
 
 	if (!edgeLabel.isEmpty()) {
-		const qreal labelPercent = 0.38;
-		const QPointF labelPoint =
-			edgePath.pointAtPercent(labelPercent);
-		const QPointF tangent =
-			edgePath.pointAtPercent(
-				qMin<qreal>(1.0, labelPercent + 0.02))
-			- edgePath.pointAtPercent(
-				qMax<qreal>(0.0, labelPercent - 0.02));
-
-		QPointF normal(-tangent.y(), tangent.x());
-		const qreal normalLength =
-			std::hypot(normal.x(), normal.y());
-
-		if (normalLength > 0.001) {
-			normal /= normalLength;
-			if (normal.y() > 0.0)
-				normal = -normal;
-		}
-
 		QFont labelFont = painter->font();
-		if (labelFont.pointSizeF() > 0.0) {
+		if (labelFont.pointSizeF() > 0.0)
 			labelFont.setPointSizeF(
-				qMax<qreal>(
-					8.0,
-					labelFont.pointSizeF() - 1.0));
-		}
-		painter->setFont(labelFont);
+				qMax<qreal>(8.0, labelFont.pointSizeF() - 1.0));
 
-		const QFontMetricsF metrics(labelFont);
-		const QSizeF textSize(
-			metrics.horizontalAdvance(edgeLabel),
-			metrics.height());
-
-		const QPointF center =
-			labelPoint + normal * 13.0;
+		const QFontMetricsF fm(labelFont);
+		const QSizeF size(fm.horizontalAdvance(edgeLabel), fm.height());
 		const QRectF labelRect(
-			center.x() - textSize.width() * 0.5 - 5.0,
-			center.y() - textSize.height() * 0.5 - 2.0,
-			textSize.width() + 10.0,
-			textSize.height() + 4.0);
+			m_labelPosition.x() - size.width() * 0.5 - 5.0,
+			m_labelPosition.y() - size.height() * 0.5 - 2.0,
+			size.width() + 10.0,
+			size.height() + 4.0);
 
 		painter->save();
+		painter->setFont(labelFont);
 		painter->setPen(Qt::NoPen);
-		painter->setBrush(QColor(30, 30, 30, 220));
-		painter->drawRoundedRect(
-			labelRect, 4.0, 4.0);
-		painter->setPen(QColor(220, 220, 220));
-		painter->drawText(
-			labelRect,
-			Qt::AlignCenter,
-			edgeLabel);
+		painter->setBrush(QColor(30, 30, 30, 225));
+		painter->drawRoundedRect(labelRect, 4.0, 4.0);
+		painter->setPen(QColor(225, 225, 225));
+		painter->drawText(labelRect, Qt::AlignCenter, edgeLabel);
 		painter->restore();
 	}
 
@@ -1810,7 +1752,7 @@ void GraphicalVariablesView::applyAutomaticLayout(bool fitAfterLayout)
 	QVector<RuntimeLayoutEdge> edges;
 
 	for (QGraphicsItem* sceneItem : m_scene->items()) {
-		if (auto* nodeItem = dynamic_cast<GraphicalNodeItem*>(sceneItem)) {
+		if (auto* nodeItem = qgraphicsitem_cast<GraphicalNodeItem*>(sceneItem)) {
 			const QString key = nodeItem->layoutKey();
 			if (key.isEmpty() || itemsByKey.contains(key))
 				continue;
@@ -1826,7 +1768,7 @@ void GraphicalVariablesView::applyAutomaticLayout(bool fitAfterLayout)
 	}
 
 	for (QGraphicsItem* sceneItem : m_scene->items()) {
-		auto* edgeItem = dynamic_cast<GraphicalEdgeItem*>(sceneItem);
+		auto* edgeItem = qgraphicsitem_cast<GraphicalEdgeItem*>(sceneItem);
 		if (!edgeItem || !edgeItem->sourceNode() || !edgeItem->destinationNode())
 			continue;
 		const QString source = edgeItem->sourceNode()->layoutKey();
@@ -1917,7 +1859,7 @@ void GraphicalVariablesView::wheelEvent(QWheelEvent* event)
 void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent* event)
 {
 	auto* item =
-		dynamic_cast<GraphicalNodeItem*>(itemAt(event->pos()));
+		qgraphicsitem_cast<GraphicalNodeItem*>(itemAt(event->pos()));
 
 	if (item) {
 		const QPointF scenePos = mapToScene(event->pos());
@@ -1939,7 +1881,7 @@ void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent* event)
 
 void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
 {
-	auto* item = dynamic_cast<GraphicalNodeItem*>(itemAt(event->pos()));
+	auto* item = qgraphicsitem_cast<GraphicalNodeItem*>(itemAt(event->pos()));
 	if (!item) {
 		QMenu menu(this);
 		menu.setToolTipsVisible(true);
@@ -2135,6 +2077,32 @@ void GraphicalVariablesView::openPointerNode(DebugVariable* ptrVar, GraphicalNod
 	ensurePointerNodeOpen(expr, ptrVar, fromItem);
 }
 
+void GraphicalVariablesView::reopenDependentPointerExpressions(
+	DebugVariable* target,
+	GraphicalNodeItem* targetItem)
+{
+	if (!target || !targetItem)
+		return;
+
+	// A pointer expression can only be resolved once the card of the value it
+	// dereferences from actually exists. Session-rooted pointers are reopened
+	// directly in refresh(); a pointer field living *inside* an already
+	// dereferenced pointer's card (e.g. walking head->next->next) is not part
+	// of DebuggerSession::variables() at all, so it can only be found here,
+	// once its own parent card has just been created below it.
+	//
+	// Snapshot first: ensurePointerNodeOpen() below may itself append to
+	// m_openPointerExprs synchronously (double-click) or trigger further
+	// dereferences whose completion re-enters this function.
+	const QSet<QString> pending = m_openPointerExprs;
+	for (const QString& expr : pending) {
+		DebugVariable* field = findVariableByPath(target, expr);
+		if (!field || field == target || !field->isPointer)
+			continue;
+		ensurePointerNodeOpen(expr, field, targetItem);
+	}
+}
+
 void GraphicalVariablesView::ensurePointerNodeOpen(
 	const QString& pointerExpr,
 	DebugVariable* ptrVar,
@@ -2154,7 +2122,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 
 		GraphicalNodeItem* existingTarget = nullptr;
 		for (QGraphicsItem* sceneItem : m_scene->items()) {
-			auto* nodeItem = dynamic_cast<GraphicalNodeItem*>(sceneItem);
+			auto* nodeItem = qgraphicsitem_cast<GraphicalNodeItem*>(sceneItem);
 			if (!nodeItem || nodeItem == fromItem || !nodeItem->node())
 				continue;
 
@@ -2182,7 +2150,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 		if (existingTarget) {
 			bool edgeExists = false;
 			for (QGraphicsItem* sceneItem : m_scene->items()) {
-				auto* edge = dynamic_cast<GraphicalEdgeItem*>(sceneItem);
+				auto* edge = qgraphicsitem_cast<GraphicalEdgeItem*>(sceneItem);
 				if (edge && edge->sourceNode() == fromItem
 				    && edge->destinationNode() == existingTarget
 				    && edge->sourceExpression() == pointerExpr) {
@@ -2206,6 +2174,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 
 			applyAutomaticLayout(false);
 			centerOn(existingTarget);
+			reopenDependentPointerExpressions(existingTarget->node(), existingTarget);
 			return;
 		}
 	}
@@ -2239,7 +2208,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 
 		bool edgeExists = false;
 		for (QGraphicsItem* sceneItem : m_scene->items()) {
-			auto* edge = dynamic_cast<GraphicalEdgeItem*>(sceneItem);
+			auto* edge = qgraphicsitem_cast<GraphicalEdgeItem*>(sceneItem);
 			if (edge && edge->sourceNode() == fromItem
 			    && edge->destinationNode() == existing
 			    && edge->sourceExpression() == pointerExpr) {
@@ -2259,6 +2228,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 		existing->setPos(positionForNode(layoutKey, fromItem->pos() + QPointF(340, 0)));
 		applyAutomaticLayout(false);
 		centerOn(existing);
+		reopenDependentPointerExpressions(rootRaw, existing);
 		return;
 	}
 
@@ -2287,7 +2257,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 				}
 			}
 			for (QGraphicsItem* sceneItem : m_scene->items()) {
-				auto* nodeItem = dynamic_cast<GraphicalNodeItem*>(sceneItem);
+				auto* nodeItem = qgraphicsitem_cast<GraphicalNodeItem*>(sceneItem);
 				if (nodeItem && nodeItem->layoutKey() == sourceLayoutKey) {
 					fromItem = nodeItem;
 					break;
@@ -2330,5 +2300,6 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 
 			applyAutomaticLayout(false);
 			centerOn(item);
+			reopenDependentPointerExpressions(rootRaw, item);
 		});
 }

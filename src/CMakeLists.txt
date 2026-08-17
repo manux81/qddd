@@ -14,6 +14,8 @@ add_executable(qddd WIN32 MACOSX_BUNDLE
     RuntimeObjectGraph.h
 	RuntimeGraphLayout.cpp
 	RuntimeGraphLayout.h
+	OrthogonalEdgeRouter.cpp
+	OrthogonalEdgeRouter.h
     SourceEditor.cpp
     SourceEditor.h
     SourceBrowserDialog.cpp

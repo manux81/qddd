@@ -47,9 +47,17 @@ class GraphicalNodeItem;
 class QGraphicsSceneWheelEvent;
 class QToolButton;
 
+struct VisibleRow {
+	DebugVariable* node;
+	int indent;
+};
+
 class GraphicalEdgeItem : public QGraphicsPathItem
 {
 public:
+	enum { Type = UserType + 1 };
+	int type() const override { return Type; }
+
 	GraphicalEdgeItem(GraphicalNodeItem* from,
 					  GraphicalNodeItem* to,
 					  QString sourceObjectId,
@@ -78,6 +86,7 @@ private:
 	QPointF m_pos[SEGMENTS]{};
 	QPointF m_vel[SEGMENTS]{};
 	QPointF m_targetEnd;
+	QPointF m_labelPosition;
 	qreal   m_routeOffset = 0.0;
 	QTimer  m_timer;
 
@@ -88,6 +97,9 @@ private:
 class GraphicalNodeItem : public QGraphicsItem
 {
 public:
+	enum { Type = UserType + 2 };
+	int type() const override { return Type; }
+
 	explicit GraphicalNodeItem(DebugVariable* node,
 	                           DebuggerSession* session,
 	                           QString layoutKey = {});
@@ -125,6 +137,7 @@ private:
 	void drawHeader(QPainter* painter, const QRectF& r);
 	void drawSource(QPainter* painter);
 	void setPage(int page, int pageCount);
+	const QVector<VisibleRow>& cachedRows() const;
 
 private:
 	DebugVariable* m_node = nullptr;
@@ -141,6 +154,8 @@ private:
 	int m_page = 0;
 	QPointF m_dragStartPosition;
 	bool m_draggingHeader = false;
+	mutable QVector<VisibleRow> m_cachedRows;
+	mutable bool m_rowsDirty = true;
 
 	static constexpr int HeaderHeight = 30;
 	static constexpr int RowHeight    = 26;
@@ -180,6 +195,8 @@ private:
 	void ensurePointerNodeOpen(const QString& pointerExpr,
 							   DebugVariable* ptrVar,
 							   GraphicalNodeItem* fromItem);
+	void reopenDependentPointerExpressions(DebugVariable* target,
+	                                       GraphicalNodeItem* targetItem);
 	void rememberNodePosition(const QString& key, const QPointF& pos);
 	QPointF positionForNode(const QString& key, const QPointF& defaultPos) const;
 	void configureNodeItem(GraphicalNodeItem* item);
