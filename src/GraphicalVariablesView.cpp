@@ -1633,7 +1633,7 @@ void GraphicalVariablesView::refresh()
 		if (!fromItem)
 			continue;
 
-		ensurePointerNodeOpen(expr, ptrVar, fromItem);
+		ensurePointerNodeOpen(expr, ptrVar, fromItem, /*recenterView=*/false);
 	}
 
 	for (auto it = nodeMap.begin(); it != nodeMap.end(); ++it) {
@@ -1709,6 +1709,22 @@ QPointF GraphicalVariablesView::positionForNode(
 	return m_nodePositions.value(key, defaultPos);
 }
 
+void GraphicalVariablesView::scheduleAutoLayout()
+{
+	// Several pointer cards can resolve in quick succession after a single
+	// step (each is its own GDB round trip). Without coalescing, every one
+	// of them would trigger its own immediate RuntimeGraphLayout::compute()
+	// pass, and the graph visibly resettles once per card instead of once
+	// per refresh -- the "flickers as if it keeps re-arranging" symptom.
+	if (m_layoutScheduled)
+		return;
+	m_layoutScheduled = true;
+	QTimer::singleShot(0, this, [this] {
+		m_layoutScheduled = false;
+		applyAutomaticLayout(false);
+	});
+}
+
 void GraphicalVariablesView::configureNodeItem(GraphicalNodeItem* item)
 {
 	if (!item)
@@ -1729,7 +1745,7 @@ void GraphicalVariablesView::configureNodeItem(GraphicalNodeItem* item)
 			m_nodeExpandedExpressions.insert(
 				item->layoutKey(), item->expandedExpressions());
 		if (m_autoLayoutEnabled && !m_refreshInProgress)
-			QTimer::singleShot(0, this, &GraphicalVariablesView::autoLayout);
+			scheduleAutoLayout();
 	});
 }
 
@@ -2074,7 +2090,7 @@ void GraphicalVariablesView::openPointerNode(DebugVariable* ptrVar, GraphicalNod
 		return;
 
 	m_openPointerExprs.insert(expr);
-	ensurePointerNodeOpen(expr, ptrVar, fromItem);
+	ensurePointerNodeOpen(expr, ptrVar, fromItem, /*recenterView=*/true);
 }
 
 void GraphicalVariablesView::reopenDependentPointerExpressions(
@@ -2099,14 +2115,18 @@ void GraphicalVariablesView::reopenDependentPointerExpressions(
 		DebugVariable* field = findVariableByPath(target, expr);
 		if (!field || field == target || !field->isPointer)
 			continue;
-		ensurePointerNodeOpen(expr, field, targetItem);
+		// Automatic reopen after a step: keep the viewport where the user
+		// left it instead of jumping to whichever nested pointer happened
+		// to resolve first.
+		ensurePointerNodeOpen(expr, field, targetItem, /*recenterView=*/false);
 	}
 }
 
 void GraphicalVariablesView::ensurePointerNodeOpen(
 	const QString& pointerExpr,
 	DebugVariable* ptrVar,
-	GraphicalNodeItem* fromItem)
+	GraphicalNodeItem* fromItem,
+	bool recenterView)
 {
 	if (!m_session || pointerExpr.isEmpty() || !ptrVar || !fromItem)
 		return;
@@ -2172,8 +2192,9 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 				edge->updatePosition();
 			}
 
-			applyAutomaticLayout(false);
-			centerOn(existingTarget);
+			scheduleAutoLayout();
+			if (recenterView)
+				centerOn(existingTarget);
 			reopenDependentPointerExpressions(existingTarget->node(), existingTarget);
 			return;
 		}
@@ -2226,8 +2247,9 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 		}
 
 		existing->setPos(positionForNode(layoutKey, fromItem->pos() + QPointF(340, 0)));
-		applyAutomaticLayout(false);
-		centerOn(existing);
+		scheduleAutoLayout();
+		if (recenterView)
+			centerOn(existing);
 		reopenDependentPointerExpressions(rootRaw, existing);
 		return;
 	}
@@ -2236,7 +2258,7 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 	const QString pointerName = ptrVar->name;
 	const QString sourceLayoutKey = fromItem->layoutKey();
 	m_session->dereferencePointer(pointerExpr,
-		[this, key, pointerExpr, pointerName, sourceLayoutKey, generation]
+		[this, key, pointerExpr, pointerName, sourceLayoutKey, generation, recenterView]
 		(const QString& value, const QString& type) {
 			if (generation != m_refreshGeneration) return;
 			DebugVariable* ptrVar = nullptr;
@@ -2298,8 +2320,9 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 			item->addEdge(e);
 			e->updatePosition();
 
-			applyAutomaticLayout(false);
-			centerOn(item);
+			scheduleAutoLayout();
+			if (recenterView)
+				centerOn(item);
 			reopenDependentPointerExpressions(rootRaw, item);
 		});
 }

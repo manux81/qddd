@@ -194,9 +194,11 @@ private:
 	void openPointerNode(DebugVariable* ptrVar, GraphicalNodeItem* fromItem);
 	void ensurePointerNodeOpen(const QString& pointerExpr,
 							   DebugVariable* ptrVar,
-							   GraphicalNodeItem* fromItem);
+							   GraphicalNodeItem* fromItem,
+							   bool recenterView = true);
 	void reopenDependentPointerExpressions(DebugVariable* target,
 	                                       GraphicalNodeItem* targetItem);
+	void scheduleAutoLayout();
 	void rememberNodePosition(const QString& key, const QPointF& pos);
 	QPointF positionForNode(const QString& key, const QPointF& defaultPos) const;
 	void configureNodeItem(GraphicalNodeItem* item);
@@ -219,4 +221,5 @@ private:
 	bool m_autoLayoutEnabled = true;
 	bool m_refreshInProgress = false;
 	bool m_refreshPending = false;
+	bool m_layoutScheduled = false;
 };
