@@ -1,92 +1,32 @@
-# qddd — Qt Debugger Development Dashboard
+# qddd — Visual Debugger for C/C++
 
-qddd is an experimental debugger UI focused on
-**visualizing complex runtime state**, not just stepping through code.
+**qddd** is a graphical debugger for C and C++ focused on **visualizing runtime data structures, pointers and object relationships**.
 
-It is not a full IDE debugger replacement,
-but a tool to **understand object graphs, pointers, and relationships**
-when traditional variable views break down.
+Instead of inspecting complex program state only through traditional variable trees, qddd can turn runtime objects into an **interactive graph** backed by GDB.
 
-Instead of presenting variables as plain text,
-qddd aims to provide a **structural and graphical view of runtime data**,
-making it easier to understand relationships between objects,
-pointers, and nested structures.
+<p align="center">
+  <img src="docs/qddd-demo.gif" alt="qddd live graphical debugging demo" width="1000">
+</p>
 
-The project communicates with **GDB through the Machine Interface (MI)** and
-is designed with a strict separation between the UI layer and the debugging backend.
-
-> ⚠️ Work in progress / experimental project
+> **See your data structures while they are running.**
 
 ---
 
 ## Why qddd?
 
-Traditional debuggers are excellent for stepping through code,
-but they often become hard to use when dealing with:
+Traditional debuggers are excellent at showing:
 
-- deeply nested structures
-- pointer-heavy data models
-- complex object graphs
-- runtime relationships between variables
+- source code
+- stack frames
+- variables
+- registers
+- breakpoints
 
-qddd focuses on **understanding program state**, not only execution flow.
+But understanding a pointer-heavy structure often still means mentally reconstructing relationships from addresses and nested trees.
 
----
+qddd takes a different approach.
 
-## ✨ Features
-
-- Qt-based desktop UI
-- Direct communication with **GDB / MI**
-- Interactive debugger console
-- Structured variable model
-- Expandable hierarchical data visualization
-- Graph-style rendering of related variables
-- Clear separation between UI and debugger backend
-
----
-
-## 📸 Screenshot
-
-<p align="center">
-  <img src="docs/screenshots/main.png" width="700">
-</p>
-
-*UI and layout are evolving as the project develops.*
-
----
-
-## 🧩 Architecture Overview
-
-The project is structured around a few core components:
-
-### DebugSession
-- Manages the GDB process lifecycle
-- Handles MI protocol communication
-- Translates debugger events into Qt signals
-
-### ConsoleWidget
-- Interactive MI command console
-- Displays raw debugger input and output
-
-### Variable Model
-- Tree-based representation of debugger variables
-- Designed to reflect real memory layouts
-- Supports hierarchical expansion and future graph-based extensions
-
-This architecture allows the UI to remain largely independent
-from the underlying debugging engine.
-
-### Runtime object graph
-
-The graphical variables view represents pointer relationships by runtime
-identity, rather than creating a separate object for every expression that
-reaches it. A normalized address plus the concrete debugger type forms the
-stable object key. Consequently, aliases share one node, cycles terminate when
-an already-known key is encountered, and opening the same object through a
-different pointer reuses its saved position. If an address is unavailable,
-qddd uses an expression-based fallback key and treats it as less stable.
-
-For example:
+Given something as simple as:
 
 ```cpp
 struct Node {
@@ -95,61 +35,151 @@ struct Node {
 };
 ```
 
-If `head` and `selected` point to the same `Node`, the graph contains one
-runtime object and two labeled references. A refresh is diffed by object,
-member, and logical reference identity: new objects, changed scalar members,
-and retargeted edges can be highlighted without rebuilding identity from UI
-text. Recursive expansion is bounded (currently eight levels in the context
-menu) and identity-based traversal provides cycle protection in the graph
-model.
+qddd can represent the runtime objects and their relationships graphically:
+
+```text
+┌──────────────┐        next        ┌──────────────┐
+│ Node         │ ─────────────────> │ Node         │
+│ value = 10   │                    │ value = 20   │
+└──────────────┘                    └──────────────┘
+```
+
+The goal is not only to answer:
+
+> What is the value of this variable?
+
+but also:
+
+> What does the program state actually look like?
 
 ---
 
-## 🛠️ Build Requirements
+## ✨ Highlights
 
-- Qt 5 (Core, Gui, Widgets and Network modules)
+- **Graphical runtime object visualization**
+- Pointer and object relationship tracking
+- Runtime identity based on address and debugger type
+- Alias detection: multiple references can point to the same graph object
+- Cycle protection for recursive data structures
+- Interactive hierarchical variable exploration
+- Source-level debugging
+- Breakpoints, stepping and execution control
+- Interactive GDB/MI console
+- Local and remote debugging
+- Embedded target support
+- Qt desktop interface
+- C++17 codebase
+
+---
+
+## 📸 Interface
+
+<p align="center">
+  <img src="docs/screenshots/main.png" alt="qddd debugger interface" width="900">
+</p>
+
+The graphical Data Display is designed to complement traditional debugger views rather than replace them.
+
+---
+
+## 🧠 Runtime Object Graph
+
+qddd identifies runtime objects using their normalized memory address together with their concrete debugger type.
+
+This means that if two expressions point to the same object, qddd can represent them as **one runtime object with multiple references**, instead of creating duplicate nodes.
+
+For example:
+
+```cpp
+Node *head = ...;
+Node *selected = head;
+```
+
+`head` and `selected` refer to the same runtime object.
+
+This also makes it possible to handle:
+
+- linked lists
+- trees
+- graphs
+- object hierarchies
+- aliases
+- cyclic structures
+
+Graph refreshes are diffed using object, member and logical reference identity, allowing qddd to track changes without rebuilding the graph purely from UI text.
+
+---
+
+## 🔌 Debugger Backends
+
+| Backend / target | Status | Notes |
+| --- | --- | --- |
+| **GDB/MI** | ✅ Supported | Primary debugger backend using MI2 |
+| **gdbserver** | ✅ Supported | Remote debugging through GDB |
+| **LLDB-MI** | 🧪 Experimental | Requires a separately installed `lldb-mi` |
+| **ST-Link** | 🧪 Experimental | Can launch `ST-LINK_gdbserver` |
+| **SEGGER J-Link** | 🧪 Experimental | Managed GDB-server profile |
+| **MPLAB MDB** | 🧪 Experimental | PICkit Basic / PICkit 5 and dsPIC support |
+
+---
+
+## 🎯 Embedded & Remote Debugging
+
+qddd can connect to remote targets through GDB using:
+
+```text
+target remote
+```
+
+or:
+
+```text
+extended-remote
+```
+
+Supported workflows include:
+
+- generic `gdbserver`
+- STMicroelectronics ST-Link
+- SEGGER J-Link
+- MPLAB MDB / PICkit
+
+For a remote GDB target:
+
+```text
+File → Settings… → Target
+```
+
+Select:
+
+```text
+Remote gdbserver
+```
+
+or:
+
+```text
+J-Link
+```
+
+then configure the target host and port.
+
+Open the local ELF file to load symbols and start debugging.
+
+---
+
+## 🛠 Build Requirements
+
+- Qt 5
+  - Core
+  - Gui
+  - Widgets
+  - Network
 - C++17 compatible compiler
 - GDB with MI support
 - CMake
 
-Qt 6 is not currently selected by the CMake build and is therefore not a
-documented target yet.
-
-## Debugger backends
-
-| Backend / target | Status | Notes |
-| --- | --- | --- |
-| GDB/MI | Supported | Primary local debugger transport, using MI2. |
-| LLDB-MI | Experimental | Requires a separately installed `lldb-mi`; availability and MI compatibility vary by platform. |
-| gdbserver | Supported | Remote connection through GDB/MI using `target remote` or `extended-remote`. |
-| ST-Link | Experimental | QDDD can launch `ST-LINK_gdbserver`; hardware is not exercised by automated tests. |
-| SEGGER J-Link | Experimental | Configurable managed GDB-server profile; hardware is not exercised by automated tests. |
-| MPLAB MDB | Experimental | Command-line integration for PICkit Basic/PICkit 5 and dsPIC targets; the process protocol is tested with a fake MDB only. |
-
-## 🎯 Remote targets (gdbserver / SEGGER J-Link)
-
-qddd can connect to a remote target through GDB using `-target-select remote host:port`.
-
-- `File → Settings… → Target`
-  - `Type`: `Remote gdbserver` or `J-Link`
-  - `Remote host` / `Remote port`: endpoint of your GDB server
-- Start your GDB server separately (example, SEGGER):
-  - `JLinkGDBServer -if SWD -speed auto -port 2331 -device <MCU>`
-- Open your local ELF (`File → Open Program…`) to load symbols, then `Run` to continue execution on the target.
-
-### MPLAB PICkit Basic / dsPIC
-
-Hardware Debug profiles also support the MPLAB MDB command-line debugger used
-by PICkit Basic and dsPIC targets. Select `MPLAB MDB / PICkit Basic`, then set:
-
-- the `mdb.sh` (`mdb.bat` on Windows) executable installed with MPLAB X;
-- the exact dsPIC device name;
-- the hardware tool (`PICKitBasic` or `PICkit5`);
-- an optional probe serial number and the XC16 ELF image.
-
-QDDD launches MDB directly and maps Run, Continue, Halt, Step Into and Step Over
-to documented MDB commands. The dsPIC target must use external power because
-PICkit Basic does not power it.
+Qt 6 is not currently a documented build target.
 
 ---
 
@@ -158,45 +188,134 @@ PICkit Basic does not power it.
 ```bash
 git clone https://github.com/manux81/qddd.git
 cd qddd
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON
+
 cmake --build build --parallel
+```
+
+Run on Linux:
+
+```bash
 ./build/src/qddd
 ```
 
-On macOS the executable is inside `build/src/qddd.app`; on multi-configuration
-Windows generators, select the desired configuration when building.
+On macOS the application is built inside:
 
-### Automated tests
+```text
+build/src/qddd.app
+```
+
+---
+
+## 📦 Releases
+
+Pre-built packages are available from the GitHub **Releases** section.
+
+Release builds are generated for:
+
+- Linux
+- Windows
+- macOS
+
+Windows and macOS archives include the Qt runtime.
+
+The current Linux archive expects Qt 5 runtime libraries to already be installed.
+
+macOS packages are currently unsigned and not notarized.
+
+---
+
+## 🧪 Tests
+
+Run the automated test suite with:
 
 ```bash
 ctest --test-dir build --output-on-failure
 ```
 
-The test suite covers MI stream reconstruction and command lifecycle with a
-fake GDB, the MPLAB MDB process protocol with a fake MDB on Unix, and the
-runtime object graph. It requires no debugger hardware or network access.
+Tests currently cover areas including:
 
-GitHub Actions performs the same configure, build and test sequence on Linux
-with Qt 5 for every push and pull request.
+- GDB/MI stream reconstruction
+- debugger command lifecycle
+- runtime object graph
+- MPLAB MDB process protocol
 
-## AI assistant credentials
+The automated tests do not require debugger hardware.
 
-For the OpenAI provider, set `OPENAI_API_KEY` in the environment that launches
-QDDD. This value takes precedence over the legacy API-key field in Settings.
-That fallback is retained for compatibility but is stored by `QSettings` in
-plain text and must not be treated as secure credential storage. API keys and
-Authorization headers are not written to the application log.
+GitHub Actions builds and tests qddd on every push and pull request.
 
-## 📦 Creating a release
+---
 
-Pushing a semantic version tag builds and tests qddd on Linux, Windows and
-macOS, then publishes the resulting archives in a GitHub Release:
+## 🏗 Architecture
 
-```bash
-git tag -a v1.0.0 -m "qddd 1.0.0"
-git push origin v1.0.0
-```
+qddd keeps the debugger backend separated from the UI.
 
-Windows and macOS packages include the Qt runtime. The initial Linux archive
-expects Qt 5 runtime libraries to be installed by the distribution. macOS
-packages are currently unsigned and are not notarized by Apple.
+### DebugSession
+
+Responsible for:
+
+- GDB process lifecycle
+- MI protocol communication
+- debugger commands
+- debugger events
+
+### Variable Model
+
+Provides:
+
+- hierarchical debugger variables
+- runtime object identity
+- member relationships
+- graph representation
+
+### ConsoleWidget
+
+Provides direct access to debugger communication and MI commands.
+
+This separation makes it possible to evolve the graphical debugger independently from the underlying debugging transport.
+
+---
+
+## 🤝 Contributing
+
+qddd is under active development and contributions are welcome.
+
+Useful contributions include:
+
+- testing qddd on different Linux distributions
+- testing remote GDB targets
+- testing embedded hardware
+- improving the graphical Data Display
+- UI/UX improvements
+- debugger backend improvements
+- bug reports
+- documentation
+
+If you find something interesting, broken or confusing, please **open an issue**.
+
+Even small bug reports and test results are useful.
+
+---
+
+## ⭐ Help the Project
+
+If qddd looks useful to you:
+
+- ⭐ Star the repository
+- 🐛 Open an issue
+- 🧪 Try it on your project
+- 💬 Share feedback
+- 🔧 Submit a pull request
+
+qddd is still evolving, and real-world debugger use cases are particularly valuable.
+
+---
+
+## Status
+
+qddd is currently an **experimental but usable project under active development**.
+
+The focus is on exploring a more visual way to understand complex C/C++ runtime state while retaining the power of GDB underneath.
