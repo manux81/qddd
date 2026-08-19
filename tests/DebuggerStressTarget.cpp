@@ -310,9 +310,9 @@ int main()
 
 	std::latch workersReady{2};
 	std::counting_semaphore<2> releaseWorkers{0};
-	std::array<std::jthread, 2> workers;
+	std::array<std::thread, 2> workers;
 	for (int worker = 0; worker < 2; ++worker) {
-		workers[worker] = std::jthread([&, worker] {
+		workers[worker] = std::thread([&, worker] {
 			for (int index = worker; index < 8; index += 2)
 				snapshot.workerResults[index] = index * index;
 			snapshot.completedWorkers->fetch_add(1);
@@ -323,7 +323,7 @@ int main()
 	workersReady.wait();
 	debuggerCheckpoint("threads-waiting", snapshot);
 	releaseWorkers.release(2);
-	for (std::jthread& worker : workers)
+	for (std::thread& worker : workers)
 		worker.join();
 
 	std::span<const int> firstHalf{snapshot.workerResults.data(), 4};
