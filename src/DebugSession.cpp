@@ -1,3 +1,4 @@
+#include <QDateTime>
 #include "MiParser.h"
 /*
  * Copyright (c) 2026, Manuele Conti
@@ -1041,7 +1042,9 @@ const QVector<BreakpointInfo>& DebuggerSession::breakpoints() const
 void DebuggerSession::selectStackFrame(int frameIndex)
 {
     enqueueCommand(QString("-stack-select-frame %1").arg(frameIndex),
-        [this](const QString&) {
+        [this, frameIndex](const QString& reply) {
+            if (reply.contains("^error")) return;
+            m_selectedFrame = frameIndex;
             requestStopState();
         });
 }
@@ -1813,8 +1816,15 @@ void DebuggerSession::captureExecutionSnapshot()
 	snapshot.line = m_lastStopLine;
 	snapshot.function = m_lastStopFunction;
 
-    for (const auto& var : m_variables)
+    snapshot.timestampNs = QDateTime::currentMSecsSinceEpoch() * 1000000;
+    snapshot.threadId = m_currentThreadId;
+    snapshot.frame = m_selectedFrame;
+    std::function<void(const DebugVariable*)> capture = [&](const DebugVariable* var) {
+        if (!var) return;
         snapshot.variableValues.insert(var->fullPath(), var->value);
+        for (const auto& child : var->children) capture(child.get());
+    };
+    for (const auto& var : m_variables) capture(var.get());
 
     m_executionHistory.push_back(snapshot);
 	m_historyCursor = m_executionHistory.size() - 1;
@@ -1827,6 +1837,8 @@ void DebuggerSession::captureExecutionSnapshot()
         );
     }
 
+    m_executionHistory.back().changedPaths = m_changedPaths;
+    snapshot.changedPaths = m_changedPaths;
     emit snapshotCaptured(snapshot);
 	emit variablesUpdated();
 }
@@ -1886,6 +1898,12 @@ void DebuggerSession::computeVariableChanges(const ExecutionSnapshot& previous,
         }
     }
 
+    for (auto it = previous.variableValues.cbegin(); it != previous.variableValues.cend(); ++it) {
+        if (!current.variableValues.contains(it.key())) {
+            changes.push_back({it.key(), it.value(), {}});
+            m_changedPaths.insert(it.key());
+        }
+    }
     emit variableChangesDetected(changes, previous.stepIndex, current.stepIndex);
 }
 

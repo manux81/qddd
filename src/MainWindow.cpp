@@ -1,3 +1,4 @@
+#include "DataHistoryView.h"
 /*
  * Copyright (c) 2026, Manuele Conti
  * All rights reserved.
@@ -324,6 +325,12 @@ void MainWindow::setupUi() {
     m_graphicalView = new GraphicalVariablesView(m_dataDock);
     m_dataDock->setWidget(m_graphicalView);
 	addDockWidget(Qt::BottomDockWidgetArea, m_dataDock);
+
+    auto* historyDock = new QDockWidget(tr("Data timeline"), this);
+    historyDock->setObjectName("DataTimelineDock");
+    historyDock->setWidget(new DataHistoryView(m_session.get(), historyDock));
+    addDockWidget(Qt::BottomDockWidgetArea, historyDock);
+    tabifyDockWidget(m_dataDock, historyDock);
 
 	m_consoleDock = new QDockWidget(tr("Console"), this);
 	m_consoleWidget = new ConsoleWidget(m_consoleDock);

@@ -158,6 +158,9 @@ struct ExecutionSnapshot
 	QString file;
 	int line = 0;
 	QString function;
+	QString threadId;
+	int frame = 0;
+	QSet<QString> changedPaths;
 
 	QHash<QString, QString> variableValues;
 };
@@ -372,6 +375,7 @@ private:
 	int m_lastStopLine = 0;
 	QString m_lastStopAddr;
 	QString m_currentThreadId;
+	int m_selectedFrame = 0;
 
 	bool m_captureDisassembly = false;
 	QString m_disassemblyBuffer;
