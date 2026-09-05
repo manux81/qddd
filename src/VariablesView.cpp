@@ -43,6 +43,7 @@
 #include <QHash>
 #include <QMenu>
 #include <QLineEdit>
+#include <QSignalBlocker>
 
 static constexpr int ChangedRole = Qt::UserRole + 1;
 static constexpr int WatchRole = Qt::UserRole + 2;
@@ -191,9 +192,12 @@ QString itemPath(QStandardItem *item) {
 }
 
 QString childPath(const QString& parentPath, const QString& childName) {
+	const QString base = parentPath.trimmed().startsWith(QStringLiteral("*("))
+		? QStringLiteral("(%1)").arg(parentPath)
+		: parentPath;
 	return childName.startsWith('[')
-		? parentPath + childName
-		: parentPath + "." + childName;
+		? base + childName
+		: base + "." + childName;
 }
 
 } // namespace
@@ -237,8 +241,11 @@ class ValueDelegate : public QStyledItemDelegate {
 	                  const QModelIndex& index) const override {
 		if (auto* lineEdit = qobject_cast<QLineEdit*>(editor)) {
 			const QString value = lineEdit->text();
+			{
+				QSignalBlocker blocker(model);
+				model->setData(index, value, RawValueRole);
+			}
 			model->setData(index, value, Qt::DisplayRole);
-			model->setData(index, value, RawValueRole);
 			return;
 		}
 		QStyledItemDelegate::setModelData(editor, model, index);
