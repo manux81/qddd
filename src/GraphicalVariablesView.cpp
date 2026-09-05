@@ -1563,7 +1563,20 @@ void GraphicalVariablesView::setSession(DebuggerSession* s)
 {
 	if (m_session == s)
 		return;
+
+	if (m_session) {
+		disconnect(m_session, &DebuggerSession::variablesUpdated,
+		           this, &GraphicalVariablesView::refresh);
+	}
+
 	m_session = s;
+
+	if (m_session) {
+		connect(m_session, &DebuggerSession::variablesUpdated,
+		        this, &GraphicalVariablesView::refresh,
+		        Qt::UniqueConnection);
+	}
+
 	m_openPointerExprs.clear();
 	m_displayDependencies.clear();
 	m_dynamicRootByKey.clear();
