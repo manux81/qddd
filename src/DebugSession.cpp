@@ -1,3 +1,4 @@
+#include "MiParser.h"
 /*
  * Copyright (c) 2026, Manuele Conti
  * All rights reserved.
@@ -117,17 +118,10 @@ QString formatDebugValue(const QString& value, DebugValueFormat format)
 	return value;
 }
 
-static QString decodeCString(QString s)
+static QString decodeCString(const QString& s)
 {
-    if (s.startsWith('"') && s.endsWith('"'))
-        s = s.mid(1, s.size() - 2);
-
-    s.replace("\\n", "\n");
-    s.replace("\\t", "\t");
-    s.replace("\\\"", "\"");
-    s.replace("\\r", "\r");
-    s.replace("\\\\", "\\");
-    return s;
+    const auto record = MiParser::parse(QStringLiteral("~") + s);
+    return record.valid() ? record.payload.text : QString();
 }
 
 static QString extractHexAddress(const QString& s)
@@ -159,15 +153,23 @@ static bool looksLikeStruct(const QString& v)
 	return false;
 }
 
+static const MiValue* findMiField(const MiValue& value, const QString& key)
+{
+    if (const auto* direct = value.field(key)) return direct;
+    for (const auto& child : value.children)
+        if (const auto* found = findMiField(child, key)) return found;
+    return nullptr;
+}
+
 static QString miGet(const QString& blob, const QString& key)
 {
-    QRegularExpression re(
-        QRegularExpression::escape(key) + R"(="((?:\\.|[^"])*)"")"
-    );
-    auto m = re.match(blob);
-    if (!m.hasMatch())
-        return {};
-    return decodeCString('"' + m.captured(1) + '"');
+    auto record = MiParser::parse(blob);
+    // Legacy callers also supply tuple bodies, without their outer braces.
+    if (!record.valid())
+        record = MiParser::parse(QStringLiteral("^done,") + blob);
+    if (!record.valid()) return {};
+    const auto* field = findMiField(record.payload, key);
+    return field ? field->text : QString();
 }
 
 static QString miQuote(const QString& s)
@@ -197,8 +199,13 @@ static QVector<QString> miExtractBraceObjects(const QString& s)
     QVector<QString> out;
     int depth = 0;
     int start = -1;
+    bool quoted = false, escaped = false;
     for (int i = 0; i < s.size(); ++i) {
         const QChar c = s[i];
+        if (escaped) { escaped = false; continue; }
+        if (quoted && c == '\\') { escaped = true; continue; }
+        if (c == '"') { quoted = !quoted; continue; }
+        if (quoted) continue;
         if (c == '{') {
             if (depth == 0) start = i;
             ++depth;
@@ -1189,6 +1196,13 @@ void DebuggerSession::dispatchDebuggerMessage(const QString& rawLine)
 	if (line == "(gdb)" || line == "(lldb)" || line == ">")
 		return;
 
+    const auto parsed = MiParser::parse(line);
+    if (!parsed.valid() && (line.startsWith('^') || line.startsWith('*') ||
+        line.startsWith('=') || line.startsWith('+') || line.startsWith('~') ||
+        line.startsWith('@') || line.startsWith('&') || line.front().isDigit())) {
+        qWarning().noquote() << "[MI protocol]" << parsed.error;
+        return;
+    }
 	qDebug().noquote() << "[MI RECV]" << rawLine;
 	// ------------------------------------------------------------
 	// 1) Strip MI token (if present)

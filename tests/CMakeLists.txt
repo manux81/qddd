@@ -82,3 +82,8 @@ set_tests_properties(debugger_stress_target_smoke PROPERTIES
 	TIMEOUT 15
 	LABELS "debugger;stress;cxx20"
 )
+
+add_executable(mi_parser_tests MiParserTests.cpp)
+target_include_directories(mi_parser_tests PRIVATE ../src)
+target_link_libraries(mi_parser_tests PRIVATE Qt5::Core)
+add_test(NAME mi_parser_tests COMMAND mi_parser_tests)

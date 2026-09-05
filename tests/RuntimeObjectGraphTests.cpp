@@ -42,5 +42,8 @@ int main(int argc, char** argv)
 	CHECK(diff.removedReferences.contains(nextId)); CHECK(diff.addedReferences.contains(nextId));
 	CHECK(diff.modifiedMembers[oldA.id].contains("value"));
 	CHECK(!diff.addedObjects.contains(oldA.id)); CHECK(diff.addedObjects.contains(newC.id));
+    before.setMember(oldA.id, "removed", "5", "int");
+    diff = diffRuntimeGraphs(before, after);
+    CHECK(diff.modifiedMembers[oldA.id].contains("removed"));
 	return EXIT_SUCCESS;
 }

@@ -74,6 +74,12 @@ RuntimeGraphDiff diffRuntimeGraphs(const RuntimeObjectGraph& before,
 	for (const auto& entry : after.objects()) {
 		const RuntimeObject* oldObject = before.object(entry.first);
 		if (!oldObject) { diff.addedObjects.insert(entry.first); continue; }
+        for (auto member = oldObject->members.cbegin(); member != oldObject->members.cend(); ++member) {
+            if (!entry.second->members.contains(member.key())) {
+                diff.modifiedObjects.insert(entry.first);
+                diff.modifiedMembers[entry.first].insert(member.key());
+            }
+        }
 		for (auto member = entry.second->members.cbegin(); member != entry.second->members.cend(); ++member) {
 			auto oldMember = oldObject->members.constFind(member.key());
 			if (oldMember == oldObject->members.cend() || oldMember->value != member->value || oldMember->type != member->type) {
