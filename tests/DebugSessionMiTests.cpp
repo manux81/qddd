@@ -1,3 +1,4 @@
+#include "GdbMiSession.h"
 #include "DebugSession.h"
 
 #include <QCoreApplication>
@@ -125,7 +126,7 @@ int main(int argc, char** argv)
 		return 3;
 	inferiorFile.close();
 
-	DebuggerSession session;
+	GdbMiSession session;
 	session.setBackend(DebuggerSession::Backend::GdbMi);
 	session.setGdbExecutable(fakeGdb);
 	session.setCommandTimeoutMs(1000);

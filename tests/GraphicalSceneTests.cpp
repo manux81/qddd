@@ -1,10 +1,11 @@
+#include "GdbMiSession.h"
 #include "GraphicalVariablesView.h"
 #include <QApplication>
 #include <QImage>
 #include <QPainter>
 int main(int argc, char** argv) {
     QApplication app(argc,argv);
-    DebuggerSession session;
+    GdbMiSession session;
     GraphicalVariablesView view;
     view.setSession(&session);
     session.replaceExternalVariables({{"counter","1"},{"other","2"}});

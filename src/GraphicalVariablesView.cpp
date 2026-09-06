@@ -1,3 +1,4 @@
+#include "SemanticValueView.h"
 #include "MemoryView.h"
 #include <QDialog>
 /*
@@ -2029,6 +2030,8 @@ void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
 	releasePosition->setToolTip(
 		tr("Allow automatic layout to position this card again."));
 	releasePosition->setEnabled(m_pinnedNodeKeys.contains(item->layoutKey()));
+    auto* semantic = menu.addAction(tr("Inspect logical value / container"));
+    semantic->setEnabled(selectedVariable && m_session);
     auto* memory = menu.addAction(tr("Inspect memory"));
     memory->setEnabled(selectedVariable && m_session);
 	QAction* selected = menu.exec(event->globalPos());
@@ -2038,6 +2041,14 @@ void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
 			static_cast<DebugValueFormat>(selected->data().toInt()));
 	else if (selected == dependent && selectedVariable)
 		createDisplayExpression(selectedVariable->fullPath());
+    else if (selected == semantic && selectedVariable) {
+        auto* dialog = new QDialog(this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setWindowTitle(tr("Logical value"));
+        auto* layout = new QVBoxLayout(dialog);
+        layout->addWidget(new SemanticValueView(m_session, selectedVariable->fullPath(), dialog));
+        dialog->resize(650,400); dialog->show();
+    }
     else if (selected == memory && selectedVariable) {
         auto* dialog = new QDialog(this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);

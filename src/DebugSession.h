@@ -1,3 +1,4 @@
+#include "TypeVisualizer.h"
 #include "RuntimeObjectGraph.h"
 #include "MemoryRead.h"
 /*
@@ -35,15 +36,10 @@
 #pragma once
 
 #include <QObject>
-#include <QProcess>
 #include <QVector>
 #include <QHash>
 #include <QSet>
 #include <QString>
-#include <QQueue>
-#include <QRegularExpression>
-#include <QTimer>
-#include "MiStreamBuffer.h"
 #include <memory>
 #include <vector>
 #include <functional>
@@ -194,10 +190,9 @@ struct VariableChange
 // Debugger session controller
 // ============================================================================
 
-class DebuggerSession final : public QObject
+class DebuggerSession : public QObject
 {
 	Q_OBJECT
-
 public:
 	enum class Backend {
 		GdbMi,
@@ -217,92 +212,93 @@ public:
 		FullRecord
 	};
 
-	explicit DebuggerSession(QObject* parent = nullptr);
-	~DebuggerSession() override;
+	explicit DebuggerSession(QObject* parent = nullptr) : QObject(parent) {}
+	~DebuggerSession() override = default;
 
-	void setBackend(Backend backend);
-	void setGdbExecutable(const QString& path);
-	void setLldbMiExecutable(const QString& path);
-	void setTargetType(TargetType type);
-	void setReverseMode(ReverseMode mode);
-	void setRemoteEndpoint(const QString& host, int port);
-	void setRemoteConnectCommands(const QStringList& commands, bool extendedRemote = false);
-	void setStlinkServerPath(const QString& path);
-	void setStlinkGdbPort(int port);
-	void setCommandTimeoutMs(int timeoutMs);
-	void startSession(const QString& executablePath);
-	void terminateSession();
+	virtual void setBackend(Backend backend) = 0;
+	virtual void setGdbExecutable(const QString& path) = 0;
+	virtual void setLldbMiExecutable(const QString& path) = 0;
+	virtual void setTargetType(TargetType type) = 0;
+	virtual void setReverseMode(ReverseMode mode) = 0;
+	virtual void setRemoteEndpoint(const QString& host, int port) = 0;
+	virtual void setRemoteConnectCommands(const QStringList& commands, bool extendedRemote = false) = 0;
+	virtual void setStlinkServerPath(const QString& path) = 0;
+	virtual void setStlinkGdbPort(int port) = 0;
+	virtual void setCommandTimeoutMs(int timeoutMs) = 0;
+	virtual void startSession(const QString& executablePath) = 0;
+	virtual void terminateSession() = 0;
 
-	[[nodiscard]] bool isRunning() const;
+	virtual bool isRunning() const = 0;
 
 	// Execution control
-	void run();
-	void continueExecution();
-	void stepInto();
-	void stepOver();
-	void stepOut();
-	void interruptExecution();
-	void runToCursor(const QString& location);
-	void reverseContinueExecution();
-	void reverseStepInto();
-	void reverseStepOver();
-	[[nodiscard]] bool supportsReverseExecution() const;
+	virtual void run() = 0;
+	virtual void continueExecution() = 0;
+	virtual void stepInto() = 0;
+	virtual void stepOver() = 0;
+	virtual void stepOut() = 0;
+	virtual void interruptExecution() = 0;
+	virtual void runToCursor(const QString& location) = 0;
+	virtual void reverseContinueExecution() = 0;
+	virtual void reverseStepInto() = 0;
+	virtual void reverseStepOver() = 0;
+	virtual bool supportsReverseExecution() const = 0;
 
 	// Breakpoints
-	void insertBreakpoint(const BreakpointRequest& request);
-	void insertBreakpoint(const QString& location);
-	void removeBreakpoint(int breakpointId);
-	void clearAllBreakpoints();
-	void setBreakpointEnabled(int breakpointId, bool enabled);
-	void toggleBreakpoint(const QString& location);
-	void updateBreakpointCondition(int breakpointId, const QString& expr);
-	void updateBreakpointIgnoreCount(int breakpointId, int ignoreCount);
-	void updateBreakpointTemporary(int breakpointId, bool temporary);
+	virtual void insertBreakpoint(const BreakpointRequest& request) = 0;
+	virtual void insertBreakpoint(const QString& location) = 0;
+	virtual void removeBreakpoint(int breakpointId) = 0;
+	virtual void clearAllBreakpoints() = 0;
+	virtual void setBreakpointEnabled(int breakpointId, bool enabled) = 0;
+	virtual void toggleBreakpoint(const QString& location) = 0;
+	virtual void updateBreakpointCondition(int breakpointId, const QString& expr) = 0;
+	virtual void updateBreakpointIgnoreCount(int breakpointId, int ignoreCount) = 0;
+	virtual void updateBreakpointTemporary(int breakpointId, bool temporary) = 0;
 
 	// Stack navigation
-	void selectStackFrame(int frameIndex);
-	void selectThread(const QString& id);
-	const QVector<DebugThread>& threads() const { return m_threads; }
-	QString selectedThread() const { return m_currentThreadId; }
+	virtual void selectStackFrame(int frameIndex) = 0;
+	virtual void selectThread(const QString& id) = 0;
+	virtual const QVector<DebugThread>& threads() const  = 0;
+	virtual QString selectedThread() const  = 0;
 
 	// State access
-	[[nodiscard]] const QVector<StackFrame>& stackFrames() const;
-	[[nodiscard]] const std::vector<std::unique_ptr<DebugVariable>>& variables() const;
-	[[nodiscard]] const QVector<ExecutionSnapshot>& executionHistory() const;
-	[[nodiscard]] const ExecutionSnapshot* snapshotAt(int index) const;
-	[[nodiscard]] const RuntimeObjectGraph& objectGraph() const { return m_objectGraph; }
-	[[nodiscard]] const RuntimeGraphDiff& graphChanges() const { return m_graphChanges; }
-	[[nodiscard]] const QSet<QString>& changedPaths() const;
-	[[nodiscard]] const QVector<BreakpointInfo>& breakpoints() const;
+	virtual const QVector<StackFrame>& stackFrames() const = 0;
+	virtual const std::vector<std::unique_ptr<DebugVariable>>& variables() const = 0;
+	virtual const QVector<ExecutionSnapshot>& executionHistory() const = 0;
+	virtual const ExecutionSnapshot* snapshotAt(int index) const = 0;
+	virtual const RuntimeObjectGraph& objectGraph() const  = 0;
+	virtual const RuntimeGraphDiff& graphChanges() const  = 0;
+	virtual const QSet<QString>& changedPaths() const = 0;
+	virtual const QVector<BreakpointInfo>& breakpoints() const = 0;
 
 	// Expression evaluation / raw MI
-	void readMemory(const QString& address, int byteCount, std::function<void(MemoryRead)> callback);
-	void evaluateExpression(const QString& expression);
-	void addWatchExpression(const QString& expression);
-	void removeWatchExpression(const QString& expression);
-	void replaceWatchExpression(const QString& oldExpression,
-	                            const QString& newExpression);
-	void setWatchExpressionEnabled(const QString& expression, bool enabled);
-	[[nodiscard]] bool isWatchExpressionEnabled(const QString& expression) const;
-	[[nodiscard]] const QStringList& watchExpressions() const;
-	void setValueFormat(const QString& expression, DebugValueFormat format);
-	[[nodiscard]] DebugValueFormat valueFormat(const QString& expression) const;
-	[[nodiscard]] QString formattedValue(const DebugVariable* variable) const;
-	void sendRawCommand(const QString& cmd,
-	                    std::function<void(const QString&)> cb = nullptr);
-	void setVariable(const QString& fullPath, const QString& newValue);
-	void requestDisassembly(const QString& file, int line, int instructionCount = 80);
-	void requestDisassemblyAtLastStop(int instructionCount = 80);
-	void dereferencePointer(const QString& pointerExpr,
+	virtual void inspectValue(const QString& expression, std::function<void(SemanticValue)> callback) = 0;
+	virtual void readMemory(const QString& address, int byteCount, std::function<void(MemoryRead)> callback) = 0;
+	virtual void evaluateExpression(const QString& expression) = 0;
+	virtual void addWatchExpression(const QString& expression) = 0;
+	virtual void removeWatchExpression(const QString& expression) = 0;
+	virtual void replaceWatchExpression(const QString& oldExpression,
+	                            const QString& newExpression) = 0;
+	virtual void setWatchExpressionEnabled(const QString& expression, bool enabled) = 0;
+	virtual bool isWatchExpressionEnabled(const QString& expression) const = 0;
+	virtual const QStringList& watchExpressions() const = 0;
+	virtual void setValueFormat(const QString& expression, DebugValueFormat format) = 0;
+	virtual DebugValueFormat valueFormat(const QString& expression) const = 0;
+	virtual QString formattedValue(const DebugVariable* variable) const = 0;
+	virtual void sendRawCommand(const QString& cmd,
+	                    std::function<void(const QString&)> cb = nullptr) = 0;
+	virtual void setVariable(const QString& fullPath, const QString& newValue) = 0;
+	virtual void requestDisassembly(const QString& file, int line, int instructionCount = 80) = 0;
+	virtual void requestDisassemblyAtLastStop(int instructionCount = 80) = 0;
+	virtual void dereferencePointer(const QString& pointerExpr,
 							std::function<void(const QString& value,
-											   const QString& type)> cb);
-	void evaluateExpressionValue(const QString& expr,
+											   const QString& type)> cb) = 0;
+	virtual void evaluateExpressionValue(const QString& expr,
 								 std::function<void(const QString& value,
-													const QString& type)> cb);
+													const QString& type)> cb) = 0;
 	// Supplies variables from a non-GDB backend while keeping every variables
 	// UI (tree, graphical display and assistant) on the same model.
-	void replaceExternalVariables(const QMap<QString, QString>& values);
-	void replaceExternalStackFrames(const QVector<StackFrame>& frames);
+	virtual void replaceExternalVariables(const QMap<QString, QString>& values) = 0;
+	virtual void replaceExternalStackFrames(const QVector<StackFrame>& frames) = 0;
 
 signals:
 	void targetRunning();
@@ -332,130 +328,5 @@ signals:
 	void disassemblyUpdated(const QString& text);
 	void reverseExecutionAvailabilityChanged();
 
-private:
-	Q_DISABLE_COPY_MOVE(DebuggerSession)
-
-	// =======================
-	// Command queue (tokened)
-	// =======================
-	struct PendingCommand {
-		int token = 0;
-		quint64 generation = 0;
-		QString command;                         // without token prefix
-		std::function<void(const QString&)> cb;  // receives full reply blob
-	};
-
-	void enqueueCommand(const QString& command,
-						std::function<void(const QString&)> cb = nullptr);
-
-	void processCommandQueue();
-
-	void onDebuggerOutputReady();
-	void onDebuggerFinished(int exitCode, QProcess::ExitStatus status);
-	void onCommandTimeout();
-	void consumeDebuggerOutput(const QByteArray& data);
-	void resetSessionState();
-	void abortCommandChannel(const QString& reason);
-
-	void dispatchDebuggerMessage(const QString& line);
-	void handleResultRecord(int token, const QString& resultLine);
-	void onTargetStoppedInternal(const QString& stopMessage);
-	void handleBreakpointDeleted(const QString& resultLine);
-	void handleBreakpointEvent(const QString& resultLine);
-	void ensureReverseRecording();
-	void executeReverseCommand(const QString& command);
-	bool canStartExecutionCommand(const QString& command);
-
-	// state requests
-	void requestStopState();
-
-	// parsing helpers
-	void parseStackFromReply(const QString& replyBlob);
-	void parseVarsFromReply(const QString& replyBlob);
-	void requestWatchValues();
-	void requestWatchValue(const QString& expression);
-	void upsertWatchVariable(const QString& expression,
-	                        const QString& value,
-	                        const QString& type,
-	                        bool enabled);
-
-	// snapshot
-	void finalizeSnapshotIfReady();
-	void captureExecutionSnapshot();
-	bool restoreHistoricalVariables();
-	void computeVariableChanges(const ExecutionSnapshot& previous,
-								const ExecutionSnapshot& current);
-
-	[[nodiscard]] bool isRemoteTarget() const;
-	[[nodiscard]] QString remoteSpec() const;
-
-private:
-	Backend m_backend = Backend::LldbMi;
-
-	QString m_lastStopFile;
-	QString m_lastStopFunction;
-	int m_lastStopLine = 0;
-	QString m_lastStopAddr;
-	QString m_currentThreadId;
-	int m_selectedFrame = 0;
-
-	bool m_captureDisassembly = false;
-	QString m_disassemblyBuffer;
-
-	QString m_gdbExecutable = "gdb";
-	QString m_lldbMiExecutable = "/usr/local/bin/lldb-mi";
-
-	TargetType m_targetType = TargetType::Local;
-	ReverseMode m_reverseMode = ReverseMode::Auto;
-	QStringList m_remoteConnectCommands;
-	bool m_useExtendedRemote = false;
-	QString m_remoteHost = "127.0.0.1";
-	int m_remotePort = 3333;
-
-	QString m_stlinkServerPath = "ST-LINK_gdbserver";
-	int m_stlinkGdbPort = 4242;
-
-	QProcess m_debuggerProcess;
-	QProcess m_stlinkProcess;
-	MiStreamBuffer m_debuggerOutputBuffer;
-	QTimer m_commandTimeoutTimer;
-	bool m_targetExecuting = false;
-	bool m_commandChannelReliable = true;
-	quint64 m_sessionGeneration = 0;
-	int m_commandTimeoutMs = 15000;
-
-	bool m_commandInFlight = false;
-	int  m_nextToken = 1;
-
-	QQueue<PendingCommand> m_commandQueue;
-	PendingCommand m_inFlight;
-	QString m_inFlightReply;
-
-	QVector<DebugThread> m_threads;
-	QVector<StackFrame> m_stackFrames;
-	std::vector<std::unique_ptr<DebugVariable>> m_variables;
-	QStringList m_watchExpressions;
-	QSet<QString> m_disabledWatchExpressions;
-	QHash<QString, QString> m_watchValueCache;
-	QHash<QString, QString> m_watchTypeCache;
-	QHash<QString, DebugValueFormat> m_valueFormats;
-
-	RuntimeObjectGraph m_objectGraph;
-	RuntimeGraphDiff m_graphChanges;
-	QVector<ExecutionSnapshot> m_executionHistory;
-	enum class ReplayDirection { None, Backward, Forward };
-	ReplayDirection m_replayDirection = ReplayDirection::None;
-	int m_historyCursor = -1;
-	bool m_restoredHistoricalVariables = false;
-	QVector<BreakpointInfo> m_breakpoints;
-	QSet<QString> m_changedPaths;
-	bool m_reverseRecordingRequested = false;
-	bool m_reverseRecordingFailed = false;
-	bool m_reverseRecordingReady = false;
-
-	int m_stepCounter = 0;
-	bool m_pendingStack = false;
-	bool m_pendingVariables = false;
-	int m_pendingPointerExpansions = 0;
-	int m_pendingAddressRequests = 0;
 };
+

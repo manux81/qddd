@@ -14,5 +14,7 @@ int main() {
     QString deep = "^done,a=";
     deep += QString(140, '['); deep += "\"x\""; deep += QString(140, ']');
     CHECK(!MiParser::parse(deep).valid());
+    CHECK(MiParser::parse(R"(~"\303\251")").payload.text == QString::fromUtf8("é"));
+    CHECK(MiParser::parse(R"(~"\x41")").payload.text == "A");
     return 0;
 }

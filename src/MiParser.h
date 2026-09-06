@@ -1,5 +1,6 @@
 #pragma once
 #include <QString>
+#include <QByteArray>
 #include <QVector>
 #include <limits>
 
@@ -9,6 +10,22 @@ struct MiValue {
     QString name;
     QString text;
     QVector<MiValue> children;
+    QString encoded() const {
+        if (kind == String) {
+            QString result = text;
+            result.replace("\\", "\\\\"); result.replace("\"", "\\\"");
+            result.replace("\n", "\\n"); result.replace("\r", "\\r"); result.replace("\t", "\\t");
+            return "\"" + result + "\"";
+        }
+        QString result = kind == Tuple ? "{" : "[";
+        bool first = true;
+        for (const auto& child : children) {
+            if (!first) result += ','; first = false;
+            if (!child.name.isEmpty()) result += child.name + '=';
+            result += child.encoded();
+        }
+        return result + (kind == Tuple ? '}' : ']');
+    }
     const MiValue* field(const QString& key) const {
         for (const auto& child : children) if (child.name == key) return &child;
         return nullptr;
@@ -74,23 +91,39 @@ private:
         const QChar opening = peek();
         if (opening == '"') {
             v.kind = MiValue::String; ++pos;
+            QByteArray bytes;
             while (!peek().isNull() && peek() != '"' && error.isEmpty()) {
                 QChar c = s[pos++];
-                if (c != '\\') { v.text += c; continue; }
+                if (c != '\\') {
+                    QString literal(c);
+                    if (c.isHighSurrogate() && peek().isLowSurrogate()) literal += s[pos++];
+                    bytes += literal.toUtf8(); continue;
+                }
                 if (peek().isNull()) { fail("Incomplete escape"); break; }
                 c = s[pos++];
                 const QString codes = QStringLiteral("abfnrtv\\\"'");
                 const QString decoded = QStringLiteral("\a\b\f\n\r\t\v\\\"'");
                 const int index = codes.indexOf(c);
-                if (index >= 0) v.text += decoded[index];
+                if (index >= 0) bytes += QString(decoded[index]).toUtf8();
                 else if (c >= '0' && c <= '7') {
                     ushort n = c.unicode() - '0';
                     for (int i = 1; i < 3 && peek() >= '0' && peek() <= '7'; ++i)
                         n = n * 8 + s[pos++].unicode() - '0';
-                    v.text += QChar(n);
+                    bytes += char(n & 255);
+                } else if (c == 'x') {
+                    int count = 0; unsigned int n = 0;
+                    while (!peek().isNull()) {
+                        const auto digit = peek().toLower();
+                        const int d = digit >= '0' && digit <= '9' ? digit.unicode()-'0' :
+                            digit >= 'a' && digit <= 'f' ? digit.unicode()-'a'+10 : -1;
+                        if (d < 0) break;
+                        n = (n * 16 + unsigned(d)) & 255; ++pos; ++count;
+                    }
+                    if (!count) fail("Empty hexadecimal escape"); else bytes += char(n);
                 } else { fail("Invalid C string escape"); }
             }
             if (peek() != '"') fail("Unterminated string"); else ++pos;
+            v.text = QString::fromUtf8(bytes);
             return v;
         }
         if (opening != '{' && opening != '[') { fail("Expected MI value"); return v; }

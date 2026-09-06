@@ -1,3 +1,4 @@
+#include <QTimer>
 #pragma once
 #include "DebugSession.h"
 #include <QWidget>

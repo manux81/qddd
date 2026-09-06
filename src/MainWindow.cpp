@@ -1,3 +1,4 @@
+#include "GdbMiSession.h"
 #include "ThreadsView.h"
 #include "MemoryView.h"
 #include "DataHistoryView.h"
@@ -72,7 +73,7 @@ constexpr int kLocalTarget = -1;
 }
 
 MainWindow::MainWindow(const QString &initialProgram, QWidget *parent)
-    : QMainWindow(parent), m_session(std::make_unique<DebuggerSession>(this)),
+    : QMainWindow(parent), m_session(std::make_unique<GdbMiSession>(this)),
       m_hardwareSession(std::make_unique<HardwareDebugSession>(this)),
       m_currentProgram(initialProgram) {
 	setupUi();

@@ -1,3 +1,4 @@
+#include "GdbMiSession.h"
 #include "RuntimeGraphBuilder.h"
 #include <QDateTime>
 #include "MiParser.h"
@@ -179,6 +180,9 @@ static QString miQuote(const QString& s)
 	QString out = s;
 	out.replace("\\", "\\\\");
 	out.replace("\"", "\\\"");
+	out.replace("\n", "\\n");
+	out.replace("\r", "\\r");
+	out.replace("\t", "\\t");
 	return QString("\"%1\"").arg(out);
 }
 
@@ -376,56 +380,56 @@ QString DebugVariable::fullPath() const
 // DebuggerSession
 // ============================================================================
 
-DebuggerSession::DebuggerSession(QObject* parent)
-    : QObject(parent)
+GdbMiSession::GdbMiSession(QObject* parent)
+    : DebuggerSession(parent)
 {
     connect(&m_debuggerProcess,
             &QProcess::readyReadStandardOutput,
             this,
-            &DebuggerSession::onDebuggerOutputReady);
+            &GdbMiSession::onDebuggerOutputReady);
 
     connect(&m_debuggerProcess,
             QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             this,
-            &DebuggerSession::onDebuggerFinished);
+            &GdbMiSession::onDebuggerFinished);
 
 	m_commandTimeoutTimer.setSingleShot(true);
 	connect(&m_commandTimeoutTimer, &QTimer::timeout,
-	        this, &DebuggerSession::onCommandTimeout);
+	        this, &GdbMiSession::onCommandTimeout);
 
 }
 
-DebuggerSession::~DebuggerSession() = default;
+GdbMiSession::~GdbMiSession() = default;
 
-void DebuggerSession::setBackend(Backend backend)
+void GdbMiSession::setBackend(Backend backend)
 {
     m_backend = backend;
 }
 
-void DebuggerSession::setGdbExecutable(const QString& path)
+void GdbMiSession::setGdbExecutable(const QString& path)
 {
 	if (!path.trimmed().isEmpty())
 		m_gdbExecutable = path.trimmed();
 }
 
-void DebuggerSession::setLldbMiExecutable(const QString& path)
+void GdbMiSession::setLldbMiExecutable(const QString& path)
 {
 	if (!path.trimmed().isEmpty())
 		m_lldbMiExecutable = path.trimmed();
 }
 
-void DebuggerSession::setTargetType(TargetType type)
+void GdbMiSession::setTargetType(TargetType type)
 {
 	m_targetType = type;
 }
 
-void DebuggerSession::setReverseMode(ReverseMode mode)
+void GdbMiSession::setReverseMode(ReverseMode mode)
 {
 	m_reverseMode = mode;
 	emit reverseExecutionAvailabilityChanged();
 }
 
-void DebuggerSession::setRemoteEndpoint(const QString& host, int port)
+void GdbMiSession::setRemoteEndpoint(const QString& host, int port)
 {
 	const QString h = host.trimmed();
 	if (!h.isEmpty())
@@ -434,43 +438,43 @@ void DebuggerSession::setRemoteEndpoint(const QString& host, int port)
 		m_remotePort = port;
 }
 
-void DebuggerSession::setRemoteConnectCommands(const QStringList& commands,
+void GdbMiSession::setRemoteConnectCommands(const QStringList& commands,
                                                bool extendedRemote)
 {
 	m_remoteConnectCommands = commands;
 	m_useExtendedRemote = extendedRemote;
 }
 
-void DebuggerSession::setStlinkServerPath(const QString& path)
+void GdbMiSession::setStlinkServerPath(const QString& path)
 {
 	if (!path.trimmed().isEmpty())
 		m_stlinkServerPath = path.trimmed();
 }
 
-void DebuggerSession::setStlinkGdbPort(int port)
+void GdbMiSession::setStlinkGdbPort(int port)
 {
 	if (port > 0 && port <= 65535)
 		m_stlinkGdbPort = port;
 }
 
-void DebuggerSession::setCommandTimeoutMs(int timeoutMs)
+void GdbMiSession::setCommandTimeoutMs(int timeoutMs)
 {
 	m_commandTimeoutMs = qMax(1, timeoutMs);
 }
 
-bool DebuggerSession::isRemoteTarget() const
+bool GdbMiSession::isRemoteTarget() const
 {
 	return m_targetType == TargetType::RemoteGdbserver
 		|| m_targetType == TargetType::JLink
 		|| m_targetType == TargetType::Stlink;
 }
 
-QString DebuggerSession::remoteSpec() const
+QString GdbMiSession::remoteSpec() const
 {
 	return QString("%1:%2").arg(m_remoteHost).arg(m_remotePort);
 }
 
-void DebuggerSession::startSession(const QString& executablePath)
+void GdbMiSession::startSession(const QString& executablePath)
 {
 	// QProcess::start() is ignored when a previous debugger is still alive.
 	// Make target/profile switches deterministic and prevent commands intended
@@ -607,7 +611,7 @@ void DebuggerSession::startSession(const QString& executablePath)
 	               });
 }
 
-void DebuggerSession::terminateSession()
+void GdbMiSession::terminateSession()
 {
 	resetSessionState();
 
@@ -622,7 +626,7 @@ void DebuggerSession::terminateSession()
     }
 }
 
-bool DebuggerSession::isRunning() const
+bool GdbMiSession::isRunning() const
 {
     return m_debuggerProcess.state() != QProcess::NotRunning;
 }
@@ -631,7 +635,7 @@ bool DebuggerSession::isRunning() const
 // Execution control
 // ============================================================================
 
-void DebuggerSession::run()
+void GdbMiSession::run()
 {
 	if (!canStartExecutionCommand(QStringLiteral("Run")))
 		return;
@@ -642,14 +646,14 @@ void DebuggerSession::run()
 	else
 		enqueueCommand("-exec-run");
 }
-void DebuggerSession::continueExecution()   {
+void GdbMiSession::continueExecution()   {
 	if (!canStartExecutionCommand(QStringLiteral("Continue")))
 		return;
 	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
 		? ReplayDirection::Forward : ReplayDirection::None;
 	enqueueCommand("-exec-continue");
 }
-void DebuggerSession::stepInto()            {
+void GdbMiSession::stepInto()            {
 	if (!canStartExecutionCommand(QStringLiteral("Step Into")))
 		return;
 	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
@@ -658,7 +662,7 @@ void DebuggerSession::stepInto()            {
 		? QString() : QStringLiteral(" --thread %1").arg(m_currentThreadId);
 	enqueueCommand(QStringLiteral("-exec-step%1").arg(thread));
 }
-void DebuggerSession::stepOver()            {
+void GdbMiSession::stepOver()            {
 	if (!canStartExecutionCommand(QStringLiteral("Next")))
 		return;
 	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
@@ -667,7 +671,7 @@ void DebuggerSession::stepOver()            {
 		? QString() : QStringLiteral(" --thread %1").arg(m_currentThreadId);
 	enqueueCommand(QStringLiteral("-exec-next%1").arg(thread));
 }
-void DebuggerSession::stepOut()             {
+void GdbMiSession::stepOut()             {
 	if (!canStartExecutionCommand(QStringLiteral("Step Out")))
 		return;
 	m_replayDirection = m_historyCursor + 1 < m_executionHistory.size()
@@ -676,14 +680,14 @@ void DebuggerSession::stepOut()             {
 		? QString() : QStringLiteral(" --thread %1 --frame 0").arg(m_currentThreadId);
 	enqueueCommand(QStringLiteral("-exec-finish%1").arg(context));
 }
-void DebuggerSession::interruptExecution()
+void GdbMiSession::interruptExecution()
 {
 	if (!m_targetExecuting)
 		return;
 	enqueueCommand("-exec-interrupt --all");
 }
 
-bool DebuggerSession::canStartExecutionCommand(const QString& command)
+bool GdbMiSession::canStartExecutionCommand(const QString& command)
 {
 	if (m_targetExecuting) {
 		emit debuggerOutput(tr("%1 ignored: the target is already running.\n").arg(command));
@@ -694,11 +698,11 @@ bool DebuggerSession::canStartExecutionCommand(const QString& command)
 	m_targetExecuting = true;
 	return true;
 }
-void DebuggerSession::reverseContinueExecution() { executeReverseCommand("-exec-continue --reverse"); }
-void DebuggerSession::reverseStepInto()          { executeReverseCommand("-exec-step --reverse"); }
-void DebuggerSession::reverseStepOver()          { executeReverseCommand("-exec-next --reverse"); }
+void GdbMiSession::reverseContinueExecution() { executeReverseCommand("-exec-continue --reverse"); }
+void GdbMiSession::reverseStepInto()          { executeReverseCommand("-exec-step --reverse"); }
+void GdbMiSession::reverseStepOver()          { executeReverseCommand("-exec-next --reverse"); }
 
-void DebuggerSession::executeReverseCommand(const QString& command)
+void GdbMiSession::executeReverseCommand(const QString& command)
 {
 	if (!supportsReverseExecution() || command.isEmpty())
 		return;
@@ -709,7 +713,7 @@ void DebuggerSession::executeReverseCommand(const QString& command)
 	enqueueCommand(command);
 }
 
-void DebuggerSession::ensureReverseRecording()
+void GdbMiSession::ensureReverseRecording()
 {
 	if (m_backend != Backend::GdbMi || m_reverseMode == ReverseMode::Disabled
 	    || m_reverseRecordingRequested || m_reverseRecordingFailed)
@@ -751,14 +755,14 @@ void DebuggerSession::ensureReverseRecording()
 	});
 }
 
-bool DebuggerSession::supportsReverseExecution() const
+bool GdbMiSession::supportsReverseExecution() const
 {
 	// Conservative: GDB MI supports reverse-* when process recording is enabled.
 	// LLDB MI support varies; keep disabled by default.
 	return m_backend == Backend::GdbMi && m_reverseRecordingReady
 		&& !m_reverseRecordingFailed;
 }
-void DebuggerSession::runToCursor(const QString& location)
+void GdbMiSession::runToCursor(const QString& location)
 {
 	if (location.isEmpty())
 		return;
@@ -823,7 +827,7 @@ void DebuggerSession::runToCursor(const QString& location)
 // Breakpoints
 // ============================================================================
 
-void DebuggerSession::insertBreakpoint(const QString& location)
+void GdbMiSession::insertBreakpoint(const QString& location)
 {
     enqueueCommand(QString("-break-insert %1").arg(location),
         [this](const QString& reply) {
@@ -831,50 +835,41 @@ void DebuggerSession::insertBreakpoint(const QString& location)
         });
 }
 
-void DebuggerSession::removeBreakpoint(int breakpointId)
+void GdbMiSession::removeBreakpoint(int breakpointId)
 {
-	bool removed = false;
-	for (int i = 0; i < m_breakpoints.size(); ) {
-		if (m_breakpoints[i].number == breakpointId) {
-			m_breakpoints.removeAt(i);
-			removed = true;
-		} else {
-			++i;
-		}
-	}
-
-
-	if (!removed)
-		return;
-
-	emit breakpointsUpdated();
-
-	enqueueCommand(QString("-break-delete %1").arg(breakpointId),
-		[](const QString&) {
-			// Nothing here!
-		});
+    enqueueCommand(QString("-break-delete %1").arg(breakpointId), [this, breakpointId](const QString& reply) {
+        if (MiParser::parse(reply).resultClass != "done") return;
+        for (int i=m_breakpoints.size()-1; i>=0; --i)
+            if (m_breakpoints[i].number == breakpointId) m_breakpoints.removeAt(i);
+        emit breakpointsUpdated();
+    });
 }
 
 
-void DebuggerSession::clearAllBreakpoints()
+void GdbMiSession::clearAllBreakpoints()
 {
     enqueueCommand("-break-delete",
-        [this](const QString&) {
+        [this](const QString& reply) {
+            if (MiParser::parse(reply).resultClass != "done") return;
+            m_breakpoints.clear();
             emit breakpointsUpdated();
         });
 }
 
-void DebuggerSession::setBreakpointEnabled(int breakpointId, bool enabled)
+void GdbMiSession::setBreakpointEnabled(int breakpointId, bool enabled)
 {
     enqueueCommand(QString("-break-%1 %2")
                        .arg(enabled ? "enable" : "disable")
                        .arg(breakpointId),
-        [this](const QString&) {
+        [this, breakpointId, enabled](const QString& reply) {
+            if (MiParser::parse(reply).resultClass != "done") return;
+            for (auto& breakpoint : m_breakpoints)
+                if (breakpoint.number == breakpointId) breakpoint.enabled = enabled;
             emit breakpointsUpdated();
         });
 }
 
-void DebuggerSession::toggleBreakpoint(const QString& location)
+void GdbMiSession::toggleBreakpoint(const QString& location)
 {
 	int line = -1;
 	QString file;
@@ -913,7 +908,7 @@ void DebuggerSession::toggleBreakpoint(const QString& location)
 	}
 }
 
-void DebuggerSession::updateBreakpointCondition(int breakpointId, const QString& expr)
+void GdbMiSession::updateBreakpointCondition(int breakpointId, const QString& expr)
 {
 	const QString e = expr.trimmed();
 
@@ -933,7 +928,7 @@ void DebuggerSession::updateBreakpointCondition(int breakpointId, const QString&
 	}
 }
 
-void DebuggerSession::updateBreakpointIgnoreCount(int breakpointId, int ignoreCount)
+void GdbMiSession::updateBreakpointIgnoreCount(int breakpointId, int ignoreCount)
 {
 	const int v = qMax(0, ignoreCount);
 
@@ -947,7 +942,7 @@ void DebuggerSession::updateBreakpointIgnoreCount(int breakpointId, int ignoreCo
 	                   .arg(breakpointId));
 }
 
-void DebuggerSession::updateBreakpointTemporary(int breakpointId, bool temporary)
+void GdbMiSession::updateBreakpointTemporary(int breakpointId, bool temporary)
 {
 	int idx = -1;
 	for (int i = 0; i < m_breakpoints.size(); ++i) {
@@ -982,7 +977,7 @@ void DebuggerSession::updateBreakpointTemporary(int breakpointId, bool temporary
 	}
 }
 
-void DebuggerSession::requestDisassembly(const QString& file, int line, int instructionCount)
+void GdbMiSession::requestDisassembly(const QString& file, int line, int instructionCount)
 {
 	if (file.trimmed().isEmpty() || line <= 0 || instructionCount <= 0)
 		return;
@@ -1028,7 +1023,7 @@ void DebuggerSession::requestDisassembly(const QString& file, int line, int inst
 	});
 }
 
-void DebuggerSession::requestDisassemblyAtLastStop(int instructionCount)
+void GdbMiSession::requestDisassemblyAtLastStop(int instructionCount)
 {
 	if (m_lastStopFile.isEmpty() || m_lastStopLine <= 0)
 		return;
@@ -1036,7 +1031,7 @@ void DebuggerSession::requestDisassemblyAtLastStop(int instructionCount)
 }
 
 
-const QVector<BreakpointInfo>& DebuggerSession::breakpoints() const
+const QVector<BreakpointInfo>& GdbMiSession::breakpoints() const
 {
 	return m_breakpoints;
 }
@@ -1045,7 +1040,7 @@ const QVector<BreakpointInfo>& DebuggerSession::breakpoints() const
 // Stack nav
 // ============================================================================
 
-void DebuggerSession::selectStackFrame(int frameIndex)
+void GdbMiSession::selectStackFrame(int frameIndex)
 {
     enqueueCommand(QString("-stack-select-frame %1").arg(frameIndex),
         [this, frameIndex](const QString& reply) {
@@ -1059,7 +1054,7 @@ void DebuggerSession::selectStackFrame(int frameIndex)
 // Command queue (tokened)
 // ============================================================================
 
-void DebuggerSession::enqueueCommand(const QString& command,
+void GdbMiSession::enqueueCommand(const QString& command,
                                     std::function<void(const QString&)> cb)
 {
 	if (m_debuggerProcess.state() == QProcess::NotRunning || !m_commandChannelReliable) {
@@ -1077,7 +1072,7 @@ void DebuggerSession::enqueueCommand(const QString& command,
     processCommandQueue();
 }
 
-void DebuggerSession::processCommandQueue()
+void GdbMiSession::processCommandQueue()
 {
 	if (m_commandInFlight || m_commandQueue.isEmpty() || !m_commandChannelReliable
 	    || m_debuggerProcess.state() == QProcess::NotRunning)
@@ -1102,12 +1097,12 @@ void DebuggerSession::processCommandQueue()
 	m_commandTimeoutTimer.start(m_commandTimeoutMs);
 }
 
-void DebuggerSession::onDebuggerOutputReady()
+void GdbMiSession::onDebuggerOutputReady()
 {
 	consumeDebuggerOutput(m_debuggerProcess.readAllStandardOutput());
 }
 
-void DebuggerSession::onDebuggerFinished(int exitCode,
+void GdbMiSession::onDebuggerFinished(int exitCode,
                                          QProcess::ExitStatus)
 {
 	consumeDebuggerOutput(m_debuggerProcess.readAllStandardOutput());
@@ -1120,7 +1115,7 @@ void DebuggerSession::onDebuggerFinished(int exitCode,
     emit targetExited(exitCode);
 }
 
-void DebuggerSession::consumeDebuggerOutput(const QByteArray& data)
+void GdbMiSession::consumeDebuggerOutput(const QByteArray& data)
 {
 	const QList<QByteArray> lines = m_debuggerOutputBuffer.append(data);
 	for (const QByteArray& bytes : lines) {
@@ -1130,7 +1125,7 @@ void DebuggerSession::consumeDebuggerOutput(const QByteArray& data)
 	}
 }
 
-void DebuggerSession::resetSessionState()
+void GdbMiSession::resetSessionState()
 {
 	++m_sessionGeneration;
 	m_commandTimeoutTimer.stop();
@@ -1167,7 +1162,7 @@ void DebuggerSession::resetSessionState()
 	emit reverseExecutionAvailabilityChanged();
 }
 
-void DebuggerSession::abortCommandChannel(const QString& reason)
+void GdbMiSession::abortCommandChannel(const QString& reason)
 {
 	if (!m_commandChannelReliable)
 		return;
@@ -1178,7 +1173,7 @@ void DebuggerSession::abortCommandChannel(const QString& reason)
 		m_debuggerProcess.kill();
 }
 
-void DebuggerSession::onCommandTimeout()
+void GdbMiSession::onCommandTimeout()
 {
 	if (!m_commandInFlight)
 		return;
@@ -1193,7 +1188,7 @@ void DebuggerSession::onCommandTimeout()
 // ============================================================================
 // Dispatcher
 // ============================================================================
-void DebuggerSession::dispatchDebuggerMessage(const QString& rawLine)
+void GdbMiSession::dispatchDebuggerMessage(const QString& rawLine)
 {
 	QString line = rawLine.trimmed();
 	if (line.isEmpty())
@@ -1314,7 +1309,7 @@ void DebuggerSession::dispatchDebuggerMessage(const QString& rawLine)
 }
 
 
-void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
+void GdbMiSession::handleResultRecord(int token, const QString& resultLine)
 {
 	// Accumula solo se è la risposta del comando in flight
 	if (m_commandInFlight && token == m_inFlight.token) {
@@ -1372,7 +1367,7 @@ void DebuggerSession::handleResultRecord(int token, const QString& resultLine)
 // Stop handling
 // ============================================================================
 
-void DebuggerSession::onTargetStoppedInternal(const QString& stopMsg)
+void GdbMiSession::onTargetStoppedInternal(const QString& stopMsg)
 {
 	m_targetExecuting = false;
 	const QString stoppedThread = miGet(stopMsg, QStringLiteral("thread-id"));
@@ -1440,37 +1435,18 @@ static bool parseEnabled(const QString& s)
 	return (v == "y" || v == "yes" || v == "true" || v == "1");
 }
 
-void DebuggerSession::handleBreakpointEvent(const QString& line)
+void GdbMiSession::handleBreakpointEvent(const QString& line)
 {
 	// Example:
 	// =breakpoint-created,bkpt={number="1",type="breakpoint",disp="keep",enabled="y",addr="0x...",func="main",file="x.cpp",fullname="/.../x.cpp",line="12"}
 	// =breakpoint-modified,bkpt={...}
 
-	const int bkptPos = line.indexOf("bkpt={");
-	if (bkptPos < 0) {
-		// Alcuni backend potrebbero mandare formati diversi.
-		qDebug().noquote() << "[MI WARN] breakpoint event without bkpt={}: " << line;
-		return;
-	}
-
-	const int bracePos = line.indexOf('{', bkptPos);
-	if (bracePos < 0)
-		return;
-
-	// Trova la chiusura della graffa corrispondente (come fai nello stop handler)
-	int depth = 0;
-	int end = -1;
-	for (int i = bracePos; i < line.size(); ++i) {
-		if (line[i] == '{') ++depth;
-		else if (line[i] == '}') {
-			--depth;
-			if (depth == 0) { end = i; break; }
-		}
-	}
-	if (end <= bracePos)
-		return;
-
-	const QString bkptBlob = line.mid(bracePos + 1, end - bracePos - 1);
+    const auto record = MiParser::parse(line);
+    const MiValue* breakpoint = record.payload.field("bkpt");
+    for (const QString& name : {QString("wpt"), QString("hw-rwpt"), QString("hw-awpt")})
+        if (!breakpoint) breakpoint = record.payload.field(name);
+    if (!record.valid() || !breakpoint) return;
+    const QString bkptBlob = "^done,bkpt=" + breakpoint->encoded();
 
 	// In GDB MI è "number", in altri può essere "id"
 	QString idStr = miGet(bkptBlob, "number");
@@ -1539,7 +1515,7 @@ void DebuggerSession::handleBreakpointEvent(const QString& line)
 	emit breakpointsUpdated();
 }
 
-void DebuggerSession::handleBreakpointDeleted(const QString& line)
+void GdbMiSession::handleBreakpointDeleted(const QString& line)
 {
 	// Example:
 	// =breakpoint-deleted,id="1"
@@ -1593,7 +1569,7 @@ void DebuggerSession::handleBreakpointDeleted(const QString& line)
 // State fetch
 // ============================================================================
 
-void DebuggerSession::requestStopState()
+void GdbMiSession::requestStopState()
 {
     enqueueCommand("-thread-info", [this](const QString& reply) {
         const auto record = MiParser::parse(reply);
@@ -1634,7 +1610,7 @@ void DebuggerSession::requestStopState()
         });
 }
 
-void DebuggerSession::requestWatchValues()
+void GdbMiSession::requestWatchValues()
 {
 	for (const QString& expression : std::as_const(m_watchExpressions)) {
 		if (m_disabledWatchExpressions.contains(expression)) {
@@ -1647,7 +1623,7 @@ void DebuggerSession::requestWatchValues()
 	}
 }
 
-void DebuggerSession::requestWatchValue(const QString& expression)
+void GdbMiSession::requestWatchValue(const QString& expression)
 {
 	if (!m_watchExpressions.contains(expression) ||
 	    m_disabledWatchExpressions.contains(expression) || !isRunning() ||
@@ -1675,7 +1651,7 @@ void DebuggerSession::requestWatchValue(const QString& expression)
 		});
 }
 
-void DebuggerSession::upsertWatchVariable(const QString& expression,
+void GdbMiSession::upsertWatchVariable(const QString& expression,
 	                                       const QString& value,
 	                                       const QString& type,
 	                                       bool enabled)
@@ -1704,7 +1680,7 @@ void DebuggerSession::upsertWatchVariable(const QString& expression,
 		*existing = std::move(watch);
 }
 
-void DebuggerSession::parseStackFromReply(const QString& replyBlob)
+void GdbMiSession::parseStackFromReply(const QString& replyBlob)
 {
     m_stackFrames.clear();
 
@@ -1733,7 +1709,7 @@ void DebuggerSession::parseStackFromReply(const QString& replyBlob)
     }
 }
 
-void DebuggerSession::parseVarsFromReply(const QString& replyBlob)
+void GdbMiSession::parseVarsFromReply(const QString& replyBlob)
 {
     m_variables.clear();
 	m_restoredHistoricalVariables = false;
@@ -1818,7 +1794,7 @@ void DebuggerSession::parseVarsFromReply(const QString& replyBlob)
 // Snapshot
 // ============================================================================
 
-void DebuggerSession::finalizeSnapshotIfReady()
+void GdbMiSession::finalizeSnapshotIfReady()
 {
     if (m_pendingStack || m_pendingVariables)
         return;
@@ -1831,7 +1807,7 @@ void DebuggerSession::finalizeSnapshotIfReady()
 	captureExecutionSnapshot();
 }
 
-void DebuggerSession::captureExecutionSnapshot()
+void GdbMiSession::captureExecutionSnapshot()
 {
     auto graph = buildRuntimeGraph(m_variables);
     m_graphChanges = diffRuntimeGraphs(m_objectGraph, graph);
@@ -1870,7 +1846,7 @@ void DebuggerSession::captureExecutionSnapshot()
 	emit variablesUpdated();
 }
 
-bool DebuggerSession::restoreHistoricalVariables()
+bool GdbMiSession::restoreHistoricalVariables()
 {
 	if (m_replayDirection == ReplayDirection::None || m_executionHistory.isEmpty())
 		return false;
@@ -1903,7 +1879,7 @@ bool DebuggerSession::restoreHistoricalVariables()
 	return false;
 }
 
-void DebuggerSession::computeVariableChanges(const ExecutionSnapshot& previous,
+void GdbMiSession::computeVariableChanges(const ExecutionSnapshot& previous,
                                             const ExecutionSnapshot& current)
 {
     QVector<VariableChange> changes;
@@ -1938,7 +1914,7 @@ void DebuggerSession::computeVariableChanges(const ExecutionSnapshot& previous,
 // Expression / raw
 // ============================================================================
 
-void DebuggerSession::evaluateExpression(const QString& expression)
+void GdbMiSession::evaluateExpression(const QString& expression)
 {
     enqueueCommand(QString("-data-evaluate-expression \"%1\"").arg(expression),
         [this](const QString& reply) {
@@ -1946,7 +1922,7 @@ void DebuggerSession::evaluateExpression(const QString& expression)
         });
 }
 
-void DebuggerSession::addWatchExpression(const QString& expression)
+void GdbMiSession::addWatchExpression(const QString& expression)
 {
 	const QString trimmed = expression.trimmed();
 	if (trimmed.isEmpty() || m_watchExpressions.contains(trimmed))
@@ -1956,7 +1932,7 @@ void DebuggerSession::addWatchExpression(const QString& expression)
 		requestWatchValue(trimmed);
 }
 
-void DebuggerSession::removeWatchExpression(const QString& expression)
+void GdbMiSession::removeWatchExpression(const QString& expression)
 {
 	m_watchExpressions.removeAll(expression);
 	m_disabledWatchExpressions.remove(expression);
@@ -1972,7 +1948,7 @@ void DebuggerSession::removeWatchExpression(const QString& expression)
 	emit variablesUpdated();
 }
 
-void DebuggerSession::replaceWatchExpression(const QString& oldExpression,
+void GdbMiSession::replaceWatchExpression(const QString& oldExpression,
 	                                          const QString& newExpression)
 {
 	const QString replacement = newExpression.trimmed();
@@ -2011,7 +1987,7 @@ void DebuggerSession::replaceWatchExpression(const QString& oldExpression,
 	emit variablesUpdated();
 }
 
-void DebuggerSession::setWatchExpressionEnabled(const QString& expression, bool enabled)
+void GdbMiSession::setWatchExpressionEnabled(const QString& expression, bool enabled)
 {
 	if (!m_watchExpressions.contains(expression) ||
 	    isWatchExpressionEnabled(expression) == enabled)
@@ -2041,18 +2017,18 @@ void DebuggerSession::setWatchExpressionEnabled(const QString& expression, bool 
 	emit variablesUpdated();
 }
 
-bool DebuggerSession::isWatchExpressionEnabled(const QString& expression) const
+bool GdbMiSession::isWatchExpressionEnabled(const QString& expression) const
 {
 	return m_watchExpressions.contains(expression) &&
 	       !m_disabledWatchExpressions.contains(expression);
 }
 
-const QStringList& DebuggerSession::watchExpressions() const
+const QStringList& GdbMiSession::watchExpressions() const
 {
 	return m_watchExpressions;
 }
 
-void DebuggerSession::setValueFormat(const QString& expression, DebugValueFormat format)
+void GdbMiSession::setValueFormat(const QString& expression, DebugValueFormat format)
 {
 	if (expression.isEmpty())
 		return;
@@ -2063,19 +2039,19 @@ void DebuggerSession::setValueFormat(const QString& expression, DebugValueFormat
 	emit variablesUpdated();
 }
 
-DebugValueFormat DebuggerSession::valueFormat(const QString& expression) const
+DebugValueFormat GdbMiSession::valueFormat(const QString& expression) const
 {
 	return m_valueFormats.value(expression, DebugValueFormat::Natural);
 }
 
-QString DebuggerSession::formattedValue(const DebugVariable* variable) const
+QString GdbMiSession::formattedValue(const DebugVariable* variable) const
 {
 	if (!variable)
 		return {};
 	return formatDebugValue(variable->value, valueFormat(variable->fullPath()));
 }
 
-void DebuggerSession::sendRawCommand(const QString& cmd,
+void GdbMiSession::sendRawCommand(const QString& cmd,
 	                                  std::function<void(const QString&)> cb)
 {
     enqueueCommand(cmd,
@@ -2086,7 +2062,7 @@ void DebuggerSession::sendRawCommand(const QString& cmd,
         });
 }
 
-void DebuggerSession::setVariable(const QString& fullPath,
+void GdbMiSession::setVariable(const QString& fullPath,
 								 const QString& newValue)
 {
 	if (fullPath.isEmpty())
@@ -2134,7 +2110,7 @@ void DebuggerSession::setVariable(const QString& fullPath,
 	);
 }
 
-void DebuggerSession::dereferencePointer(
+void GdbMiSession::dereferencePointer(
 	const QString& pointerExpr,
 	std::function<void(const QString& value, const QString& type)> cb)
 {
@@ -2157,7 +2133,7 @@ void DebuggerSession::dereferencePointer(
 	);
 }
 
-void DebuggerSession::evaluateExpressionValue(
+void GdbMiSession::evaluateExpressionValue(
 	const QString& expr,
 	std::function<void(const QString& value, const QString& type)> cb)
 {
@@ -2180,7 +2156,7 @@ void DebuggerSession::evaluateExpressionValue(
 	);
 }
 
-void DebuggerSession::replaceExternalVariables(const QMap<QString, QString>& values)
+void GdbMiSession::replaceExternalVariables(const QMap<QString, QString>& values)
 {
 	m_variables.clear();
 	for (auto it = values.cbegin(); it != values.cend(); ++it) {
@@ -2197,7 +2173,7 @@ void DebuggerSession::replaceExternalVariables(const QMap<QString, QString>& val
 	emit variablesUpdated();
 }
 
-void DebuggerSession::replaceExternalStackFrames(const QVector<StackFrame>& frames)
+void GdbMiSession::replaceExternalStackFrames(const QVector<StackFrame>& frames)
 {
 	m_stackFrames = frames;
 	emit stackFramesUpdated();
@@ -2208,20 +2184,20 @@ void DebuggerSession::replaceExternalStackFrames(const QVector<StackFrame>& fram
 // Accessors
 // ============================================================================
 
-const QVector<StackFrame>& DebuggerSession::stackFrames() const { return m_stackFrames; }
-const std::vector<std::unique_ptr<DebugVariable>>& DebuggerSession::variables() const { return m_variables; }
-const QVector<ExecutionSnapshot>& DebuggerSession::executionHistory() const { return m_executionHistory; }
+const QVector<StackFrame>& GdbMiSession::stackFrames() const { return m_stackFrames; }
+const std::vector<std::unique_ptr<DebugVariable>>& GdbMiSession::variables() const { return m_variables; }
+const QVector<ExecutionSnapshot>& GdbMiSession::executionHistory() const { return m_executionHistory; }
 
-const ExecutionSnapshot* DebuggerSession::snapshotAt(int index) const
+const ExecutionSnapshot* GdbMiSession::snapshotAt(int index) const
 {
     if (index < 0 || index >= m_executionHistory.size())
         return nullptr;
     return &m_executionHistory[index];
 }
 
-const QSet<QString>& DebuggerSession::changedPaths() const { return m_changedPaths; }
+const QSet<QString>& GdbMiSession::changedPaths() const { return m_changedPaths; }
 
-void DebuggerSession::readMemory(const QString& address, int byteCount,
+void GdbMiSession::readMemory(const QString& address, int byteCount,
                                  std::function<void(MemoryRead)> callback)
 {
     if (!callback) return;
@@ -2253,7 +2229,7 @@ void DebuggerSession::readMemory(const QString& address, int byteCount,
         });
 }
 
-void DebuggerSession::selectThread(const QString& id)
+void GdbMiSession::selectThread(const QString& id)
 {
     if (m_targetExecuting || !QRegularExpression("^[0-9]+$").match(id).hasMatch()) return;
     enqueueCommand("-thread-select " + id, [this, id](const QString& reply) {
@@ -2264,7 +2240,7 @@ void DebuggerSession::selectThread(const QString& id)
     });
 }
 
-void DebuggerSession::insertBreakpoint(const BreakpointRequest& request)
+void GdbMiSession::insertBreakpoint(const BreakpointRequest& request)
 {
     if (request.location.trimmed().isEmpty() || request.ignoreCount < 0) return;
     QString command;
@@ -2278,7 +2254,10 @@ void DebuggerSession::insertBreakpoint(const BreakpointRequest& request)
         }
         enqueueCommand("-interpreter-exec console " + miQuote("catch " + request.location),
             [this](const QString&) { enqueueCommand("-break-list", [this](const QString& reply) {
-                for (const auto& object : miExtractBraceObjects(reply)) handleBreakpointEvent("^done,bkpt={"+object+"}");
+                const auto record = MiParser::parse(reply);
+                const auto* table = record.payload.field("BreakpointTable");
+                const auto* body = table ? table->field("body") : nullptr;
+                if (body) for (const auto& object : body->children) handleBreakpointEvent("^done,bkpt="+object.encoded());
             }); });
         return;
     default:
@@ -2292,10 +2271,47 @@ void DebuggerSession::insertBreakpoint(const BreakpointRequest& request)
     enqueueCommand(command + miQuote(request.location), [this](const QString& reply) {
         const auto record = MiParser::parse(reply);
         if (record.resultClass == "error") { emit debuggerOutput(miGet(reply, "msg")+"\n"); return; }
-        QString event = reply;
-        event.replace("hw-awpt={", "bkpt={");
-        event.replace("hw-rwpt={", "bkpt={");
-        event.replace("wpt={", "bkpt={");
-        handleBreakpointEvent(event);
+        handleBreakpointEvent(reply);
+    });
+}
+
+void GdbMiSession::inspectValue(const QString& expression, std::function<void(SemanticValue)> callback)
+{
+    if (!callback) return;
+    if (m_targetExecuting || m_debuggerProcess.state() == QProcess::NotRunning || !m_commandChannelReliable) {
+        SemanticValue value; value.error = tr("Stop the debugger before inspecting a value."); callback(value); return;
+    }
+    enqueueCommand("-enable-pretty-printing");
+    enqueueCommand("-var-create - * " + miQuote(expression), [this, callback](const QString& reply) {
+        const auto record = MiParser::parse(reply);
+        const auto* name = record.payload.field("name");
+        if (!record.valid() || record.resultClass != "done" || !name) {
+            SemanticValue value; value.error = miGet(reply, "msg");
+            if (value.error.isEmpty()) value.error = tr("Value is unavailable.");
+            callback(value); return;
+        }
+        const QString objectName = name->text;
+        const QString type = miGet(reply, "type");
+        const QString summary = miGet(reply, "value");
+        const QString hint = miGet(reply, "displayhint");
+        enqueueCommand("-var-list-children --all-values " + miQuote(objectName) + " 0 200",
+            [this, objectName, type, summary, hint, callback](const QString& childrenReply) {
+                const auto childrenRecord = MiParser::parse(childrenReply);
+                QVector<SemanticChild> children;
+                if (const auto* values = childrenRecord.payload.field("children")) {
+                    for (const auto& value : values->children) {
+                        auto field = [&](const QString& key) { const auto* p = value.field(key); return p ? p->text : QString(); };
+                        children.append({field("exp"), field("value"), field("type"), {}});
+                    }
+                }
+                const QString displayHint = miGet(childrenReply, "displayhint");
+                auto value = TypeVisualizerRegistry().visualize(type, summary, children, displayHint.isEmpty() ? hint : displayHint);
+                value.truncated = miGet(childrenReply,"has_more") == "1";
+                if (value.truncated) value.logicalSize = -1;
+                if (!childrenRecord.valid()) value.error = childrenRecord.error;
+                else if (childrenRecord.resultClass == "error") value.error = miGet(childrenReply,"msg");
+                enqueueCommand("-var-delete " + miQuote(objectName));
+                callback(value);
+            });
     });
 }
