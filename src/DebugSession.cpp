@@ -1,3 +1,4 @@
+#include "RuntimeGraphBuilder.h"
 #include <QDateTime>
 #include "MiParser.h"
 /*
@@ -478,7 +479,12 @@ void DebuggerSession::startSession(const QString& executablePath)
 		terminateSession();
 	resetSessionState();
 	m_commandChannelReliable = true;
+	m_threads.clear();
+	emit threadsUpdated();
 	m_currentThreadId.clear();
+	m_selectedFrame = 0;
+	m_objectGraph = RuntimeObjectGraph{};
+	m_graphChanges = {};
 
 	m_reverseRecordingRequested = false;
 	m_reverseRecordingFailed = false;
@@ -1589,6 +1595,23 @@ void DebuggerSession::handleBreakpointDeleted(const QString& line)
 
 void DebuggerSession::requestStopState()
 {
+    enqueueCommand("-thread-info", [this](const QString& reply) {
+        const auto record = MiParser::parse(reply);
+        const auto* threads = record.payload.field("threads");
+        if (!record.valid() || record.resultClass != "done" || !threads) return;
+        QVector<DebugThread> updated;
+        for (const auto& value : threads->children) {
+            const auto* id = value.field("id");
+            if (!id) continue;
+            const auto* name = value.field("name");
+            const auto* state = value.field("state");
+            updated.append({id->text, name ? name->text : QString(), state ? state->text : QString()});
+        }
+        m_threads = updated;
+        if (const auto* selected = record.payload.field("current-thread-id")) m_currentThreadId = selected->text;
+        emit threadsUpdated();
+    });
+
     m_pendingStack = true;
     m_pendingVariables = true;
 
@@ -1810,6 +1833,9 @@ void DebuggerSession::finalizeSnapshotIfReady()
 
 void DebuggerSession::captureExecutionSnapshot()
 {
+    auto graph = buildRuntimeGraph(m_variables);
+    m_graphChanges = diffRuntimeGraphs(m_objectGraph, graph);
+    m_objectGraph = std::move(graph);
     ExecutionSnapshot snapshot;
     snapshot.stepIndex = m_stepCounter;
 	snapshot.file = m_lastStopFile;
@@ -1822,6 +1848,7 @@ void DebuggerSession::captureExecutionSnapshot()
     std::function<void(const DebugVariable*)> capture = [&](const DebugVariable* var) {
         if (!var) return;
         snapshot.variableValues.insert(var->fullPath(), var->value);
+        snapshot.objectIds.insert(var->fullPath(), RuntimeObjectGraph::identityFor(var->address, var->type, var->fullPath()));
         for (const auto& child : var->children) capture(child.get());
     };
     for (const auto& var : m_variables) capture(var.get());
@@ -2193,3 +2220,82 @@ const ExecutionSnapshot* DebuggerSession::snapshotAt(int index) const
 }
 
 const QSet<QString>& DebuggerSession::changedPaths() const { return m_changedPaths; }
+
+void DebuggerSession::readMemory(const QString& address, int byteCount,
+                                 std::function<void(MemoryRead)> callback)
+{
+    if (!callback) return;
+    if (address.trimmed().isEmpty() || byteCount < 1 || byteCount > 65536) {
+        callback({address, {}, tr("Specify an address and 1–65536 bytes.")}); return;
+    }
+    if (m_targetExecuting || m_debuggerProcess.state() == QProcess::NotRunning || !m_commandChannelReliable) {
+        callback({address, {}, tr("Memory is available only while the debugger is stopped.")}); return;
+    }
+    enqueueCommand(QString("-data-read-memory-bytes %1 %2").arg(miQuote(address)).arg(byteCount),
+        [address, callback](const QString& reply) {
+            MemoryRead result; result.address = address;
+            const auto record = MiParser::parse(reply);
+            const auto* blocks = record.payload.field("memory");
+            if (!record.valid() || record.resultClass != "done" || !blocks || blocks->children.size() != 1) {
+                const auto* message = record.payload.field("msg");
+                result.error = message ? message->text : QObject::tr("Memory is unreadable or the reply is incomplete.");
+            } else {
+                const auto& block = blocks->children.front();
+                const auto* contents = block.field("contents");
+                const auto* begin = block.field("begin");
+                if (begin) result.address = begin->text;
+                if (!contents || contents->text.size()%2 ||
+                    !QRegularExpression("^[0-9a-fA-F]*$").match(contents->text).hasMatch())
+                    result.error = QObject::tr("Invalid memory bytes returned by debugger.");
+                else result.bytes = QByteArray::fromHex(contents->text.toLatin1());
+            }
+            callback(result);
+        });
+}
+
+void DebuggerSession::selectThread(const QString& id)
+{
+    if (m_targetExecuting || !QRegularExpression("^[0-9]+$").match(id).hasMatch()) return;
+    enqueueCommand("-thread-select " + id, [this, id](const QString& reply) {
+        const auto record = MiParser::parse(reply);
+        if (!record.valid() || record.resultClass != "done") return;
+        m_currentThreadId = id; m_selectedFrame = 0;
+        requestStopState();
+    });
+}
+
+void DebuggerSession::insertBreakpoint(const BreakpointRequest& request)
+{
+    if (request.location.trimmed().isEmpty() || request.ignoreCount < 0) return;
+    QString command;
+    switch (request.kind) {
+    case BreakpointRequest::WriteWatch: command = "-break-watch "; break;
+    case BreakpointRequest::ReadWatch: command = "-break-watch -r "; break;
+    case BreakpointRequest::AccessWatch: command = "-break-watch -a "; break;
+    case BreakpointRequest::Catch:
+        if (!QStringList{"throw", "catch", "fork", "vfork", "exec", "load", "unload"}.contains(request.location)) {
+            emit debuggerOutput(tr("Unsupported catchpoint kind.\n")); return;
+        }
+        enqueueCommand("-interpreter-exec console " + miQuote("catch " + request.location),
+            [this](const QString&) { enqueueCommand("-break-list", [this](const QString& reply) {
+                for (const auto& object : miExtractBraceObjects(reply)) handleBreakpointEvent("^done,bkpt={"+object+"}");
+            }); });
+        return;
+    default:
+        command = "-break-insert ";
+        if (request.kind == BreakpointRequest::Hardware) command += "-h ";
+        if (request.temporary) command += "-t ";
+        if (!request.condition.isEmpty()) command += "-c " + miQuote(request.condition) + " ";
+        if (request.ignoreCount) command += "-i " + QString::number(request.ignoreCount) + " ";
+        break;
+    }
+    enqueueCommand(command + miQuote(request.location), [this](const QString& reply) {
+        const auto record = MiParser::parse(reply);
+        if (record.resultClass == "error") { emit debuggerOutput(miGet(reply, "msg")+"\n"); return; }
+        QString event = reply;
+        event.replace("hw-awpt={", "bkpt={");
+        event.replace("hw-rwpt={", "bkpt={");
+        event.replace("wpt={", "bkpt={");
+        handleBreakpointEvent(event);
+    });
+}

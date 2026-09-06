@@ -15,6 +15,7 @@ add_test(NAME mi_stream_buffer_tests COMMAND mi_stream_buffer_tests)
 if(UNIX)
 	add_executable(debug_session_mi_tests
 		DebugSessionMiTests.cpp
+		../src/RuntimeObjectGraph.cpp
 		../src/DebugSession.cpp
 		../src/DebugSession.h
 		../src/MiStreamBuffer.cpp
@@ -91,3 +92,19 @@ add_executable(value_history_tests ValueHistoryTests.cpp)
 target_include_directories(value_history_tests PRIVATE ../src)
 target_link_libraries(value_history_tests PRIVATE Qt5::Core)
 add_test(NAME value_history_tests COMMAND value_history_tests)
+add_executable(memory_read_tests MemoryReadTests.cpp)
+target_include_directories(memory_read_tests PRIVATE ../src)
+target_link_libraries(memory_read_tests PRIVATE Qt5::Core)
+add_test(NAME memory_read_tests COMMAND memory_read_tests)
+add_executable(runtime_graph_builder_tests RuntimeGraphBuilderTests.cpp ../src/RuntimeObjectGraph.cpp)
+target_include_directories(runtime_graph_builder_tests PRIVATE ../src)
+target_link_libraries(runtime_graph_builder_tests PRIVATE Qt5::Core)
+add_test(NAME runtime_graph_builder_tests COMMAND runtime_graph_builder_tests)
+add_executable(graphical_scene_tests GraphicalSceneTests.cpp
+    ../src/GraphicalVariablesView.cpp ../src/GraphicalVariablesView.h
+    ../src/DebugSession.cpp ../src/DebugSession.h ../src/MiStreamBuffer.cpp
+    ../src/RuntimeObjectGraph.cpp ../src/RuntimeGraphLayout.cpp ../src/OrthogonalEdgeRouter.cpp)
+target_include_directories(graphical_scene_tests PRIVATE ../src)
+target_link_libraries(graphical_scene_tests PRIVATE Qt5::Core Qt5::Gui Qt5::Widgets)
+add_test(NAME graphical_scene_tests COMMAND graphical_scene_tests)
+set_tests_properties(graphical_scene_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

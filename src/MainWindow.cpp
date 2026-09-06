@@ -1,3 +1,5 @@
+#include "ThreadsView.h"
+#include "MemoryView.h"
 #include "DataHistoryView.h"
 /*
  * Copyright (c) 2026, Manuele Conti
@@ -315,6 +317,12 @@ void MainWindow::setupUi() {
 	connect(watchEdit, &QLineEdit::returnPressed, this, submitWatch);
 	addDockWidget(Qt::RightDockWidgetArea, m_varsDock);
 
+    auto* threadsDock = new QDockWidget(tr("Threads"), this);
+    threadsDock->setObjectName("ThreadsDock");
+    threadsDock->setWidget(new ThreadsView(m_session.get(), threadsDock));
+    addDockWidget(Qt::RightDockWidgetArea, threadsDock);
+    tabifyDockWidget(m_varsDock, threadsDock);
+
 	m_stackDock = new QDockWidget(tr("Stack"), this);
 	m_stackView = new StackView(m_stackDock);
 	m_stackDock->setWidget(m_stackView);
@@ -325,6 +333,12 @@ void MainWindow::setupUi() {
     m_graphicalView = new GraphicalVariablesView(m_dataDock);
     m_dataDock->setWidget(m_graphicalView);
 	addDockWidget(Qt::BottomDockWidgetArea, m_dataDock);
+
+    auto* memoryDock = new QDockWidget(tr("Memory"), this);
+    memoryDock->setObjectName("MemoryDock");
+    memoryDock->setWidget(new MemoryView(m_session.get(), memoryDock));
+    addDockWidget(Qt::BottomDockWidgetArea, memoryDock);
+    tabifyDockWidget(m_dataDock, memoryDock);
 
     auto* historyDock = new QDockWidget(tr("Data timeline"), this);
     historyDock->setObjectName("DataTimelineDock");

@@ -7,6 +7,8 @@
 #include <memory>
 #include <map>
 
+enum class RuntimeRelationship { Pointer, Reference, Member, Element, Alias, Ownership };
+
 enum class RuntimeChangeState { Unchanged, Added, Modified, Removed };
 
 struct RuntimeMember
@@ -23,6 +25,7 @@ struct RuntimeReference
 	QString sourceObjectId;
 	QString sourceExpression;
 	QString destinationObjectId;
+	RuntimeRelationship relationship = RuntimeRelationship::Pointer;
 	RuntimeChangeState change = RuntimeChangeState::Unchanged;
 };
 
@@ -41,6 +44,7 @@ struct RuntimeObject
 class RuntimeObjectGraph
 {
 public:
+	static QString normalizedType(QString type);
 	static QString identityFor(const QString& address, const QString& type,
 	                           const QString& fallbackExpression = {});
 	static QString referenceIdentity(const QString& sourceObjectId,
@@ -51,7 +55,8 @@ public:
 	void setMember(const QString& objectId, const QString& expression,
 	               const QString& value, const QString& type = {});
 	void setReference(const QString& sourceObjectId, const QString& expression,
-	                  const QString& destinationObjectId);
+	                  const QString& destinationObjectId,
+	                  RuntimeRelationship relationship = RuntimeRelationship::Pointer);
 
 	const RuntimeObject* object(const QString& id) const;
 	const RuntimeReference* reference(const QString& id) const;

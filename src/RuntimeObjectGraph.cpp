@@ -1,3 +1,4 @@
+#include <QRegularExpression>
 #include "RuntimeObjectGraph.h"
 
 namespace {
@@ -6,8 +7,23 @@ QString normalizedAddress(QString address)
 	address = address.trimmed().toLower();
 	bool ok = false;
 	const qulonglong numeric = address.toULongLong(&ok, 0);
-	return ok ? QStringLiteral("0x%1").arg(numeric, 0, 16) : address;
+	return ok && numeric != 0 ? QStringLiteral("0x%1").arg(numeric, 0, 16) : QString();
 }
+}
+
+QString RuntimeObjectGraph::normalizedType(QString type)
+{
+    type = type.simplified();
+    // References qualify the access path, not the referred object's identity.
+    while (type.endsWith('&')) type.chop(1);
+    type = type.trimmed();
+    if (!type.contains('*')) {
+        type.remove(QRegularExpression("^(?:(?:const|volatile)\\s+)+"));
+        type.remove(QRegularExpression("(?:\\s+(?:const|volatile))+$"));
+        type.remove(QRegularExpression("^(struct|class|union)\\s+"));
+    }
+    type.replace(QRegularExpression("\\s*([<>,*&])\\s*"), "\\1");
+    return type.simplified();
 }
 
 QString RuntimeObjectGraph::identityFor(const QString& address, const QString& type,
@@ -15,8 +31,8 @@ QString RuntimeObjectGraph::identityFor(const QString& address, const QString& t
 {
 	const QString normalized = normalizedAddress(address);
 	if (!normalized.isEmpty())
-		return QStringLiteral("object:%1:%2").arg(normalized, type.trimmed());
-	return QStringLiteral("expression:%1:%2").arg(fallbackExpression, type.trimmed());
+		return QStringLiteral("object:%1:%2").arg(normalized, normalizedType(type));
+	return QStringLiteral("expression:%1:%2").arg(fallbackExpression, normalizedType(type));
 }
 
 QString RuntimeObjectGraph::referenceIdentity(const QString& sourceObjectId,
@@ -49,10 +65,10 @@ void RuntimeObjectGraph::setMember(const QString& objectId, const QString& expre
 }
 
 void RuntimeObjectGraph::setReference(const QString& sourceObjectId, const QString& expression,
-	                                   const QString& destinationObjectId)
+	                                   const QString& destinationObjectId, RuntimeRelationship relationship)
 {
 	const QString id = referenceIdentity(sourceObjectId, expression);
-	m_references.insert(id, RuntimeReference{id, sourceObjectId, expression, destinationObjectId});
+	m_references.insert(id, RuntimeReference{id, sourceObjectId, expression, destinationObjectId, relationship});
 }
 
 const RuntimeObject* RuntimeObjectGraph::object(const QString& id) const
@@ -94,7 +110,7 @@ RuntimeGraphDiff diffRuntimeGraphs(const RuntimeObjectGraph& before,
 	for (auto it = after.references().cbegin(); it != after.references().cend(); ++it) {
 		const RuntimeReference* oldReference = before.reference(it.key());
 		if (!oldReference) diff.addedReferences.insert(it.key());
-		else if (oldReference->destinationObjectId != it->destinationObjectId) {
+		else if (oldReference->destinationObjectId != it->destinationObjectId || oldReference->relationship != it->relationship) {
 			diff.retargetedReferences.insert(it.key());
 			// Retargeting is both the disappearance of the old directed edge and
 			// the appearance of the new one, while retaining logical identity.

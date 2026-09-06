@@ -1,3 +1,5 @@
+#include "MemoryView.h"
+#include <QDialog>
 /*
  * Copyright (c) 2026, Manuele Conti
  * All rights reserved.
@@ -814,6 +816,19 @@ void GraphicalNodeItem::mouseReleaseEvent(QGraphicsSceneMouseEvent* event)
 	m_draggingHeader = false;
 }
 
+void GraphicalNodeItem::rebind(DebugVariable* node)
+{
+    // The session may already have released the previous DebugVariable tree.
+    // Install the new pointer before anything can lazily access cached rows.
+    m_node = node;
+    prepareGeometryChange();
+    m_expanded.clear();
+    m_cachedRows.clear();
+    m_rowsDirty = true;
+    restoreExpandedExpressions(m_expandedExpressionState);
+    update();
+}
+
 void GraphicalNodeItem::recalculateWidth()
 {
 	QFontMetrics fm{QFont()};
@@ -1597,11 +1612,14 @@ void GraphicalVariablesView::refresh()
 	setUpdatesEnabled(false);
 	const QPointF previousCenter = mapToScene(viewport()->rect().center());
 
-	// Do not inspect the old scene here: DebuggerSession replaces its owned
-	// DebugVariable objects before emitting variablesUpdated(), so those items
-	// may already contain obsolete non-owning pointers.  Expansion state is
-	// captured at the moment the user changes it in configureNodeItem().
-	m_scene->clear();
+    // Edges are detached before rebinding cards: their endpoints hold old
+    // variable paths, while retained cards keep only their canonical layout key.
+    for (auto* sceneItem : m_scene->items()) {
+        if (auto* node = qgraphicsitem_cast<GraphicalNodeItem*>(sceneItem)) node->clearEdges();
+        else if (auto* edge = qgraphicsitem_cast<GraphicalEdgeItem*>(sceneItem)) delete edge;
+    }
+    for (auto* item : m_dynamicItems) delete item;
+    QSet<QString> currentKeys;
 	m_dynamicItems.clear();
 	m_dynamicRootByKey.clear();
 	m_dynamicRoots.clear();
@@ -1614,10 +1632,17 @@ void GraphicalVariablesView::refresh()
 	int y = 0;
 	for (auto& v : m_session->variables()) {
 		const QString layoutKey = layoutKeyForVariable(v.get());
-		auto* item = new GraphicalNodeItem(v.get(), m_session, layoutKey);
-		configureNodeItem(item);
-		m_scene->addItem(item);
-		item->setPos(positionForNode(layoutKey, QPointF(0, y)));
+        auto* item = m_rootItems.value(layoutKey, nullptr);
+        if (!item) {
+            item = new GraphicalNodeItem(v.get(), m_session, layoutKey);
+            configureNodeItem(item);
+            m_scene->addItem(item);
+            item->setPos(positionForNode(layoutKey, QPointF(0, y)));
+            m_rootItems.insert(layoutKey, item);
+        } else if (!currentKeys.contains(layoutKey)) {
+            item->rebind(v.get());
+        }
+        currentKeys.insert(layoutKey);
 		nodeMap[v.get()] = item;
 		rootItemByExpression.insert(v->fullPath(), item);
 		indexVariablePaths(v.get(), varByPath);
@@ -1631,6 +1656,11 @@ void GraphicalVariablesView::refresh()
 
 		y += 150;
 	}
+
+    for (auto it = m_rootItems.begin(); it != m_rootItems.end();) {
+        if (!currentKeys.contains(it.key())) { delete it.value(); it = m_rootItems.erase(it); }
+        else ++it;
+    }
 
 	// Re-open pointer cards after a refresh (e.g. when stepping).
 	for (const QString& expr : std::as_const(m_openPointerExprs)) {
@@ -1999,6 +2029,8 @@ void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
 	releasePosition->setToolTip(
 		tr("Allow automatic layout to position this card again."));
 	releasePosition->setEnabled(m_pinnedNodeKeys.contains(item->layoutKey()));
+    auto* memory = menu.addAction(tr("Inspect memory"));
+    memory->setEnabled(selectedVariable && m_session);
 	QAction* selected = menu.exec(event->globalPos());
 	if (selected && selected->property("debugValueFormat").toBool() && selectedVariable)
 		m_session->setValueFormat(
@@ -2006,6 +2038,16 @@ void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
 			static_cast<DebugValueFormat>(selected->data().toInt()));
 	else if (selected == dependent && selectedVariable)
 		createDisplayExpression(selectedVariable->fullPath());
+    else if (selected == memory && selectedVariable) {
+        auto* dialog = new QDialog(this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setWindowTitle(tr("Object memory"));
+        auto* layout = new QVBoxLayout(dialog);
+        auto* view = new MemoryView(m_session, dialog); layout->addWidget(view);
+        const QString address = selectedVariable->isPointer ? selectedVariable->fullPath() :
+            (!selectedVariable->address.isEmpty() ? selectedVariable->address : QString("&(%1)").arg(selectedVariable->fullPath()));
+        view->openAddress(address); dialog->resize(850, 350); dialog->show();
+    }
 	else if (selected == editValue)
 		editVariableValue(selectedVariable);
 	else if (selected == dereference)

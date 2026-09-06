@@ -41,6 +41,9 @@ while IFS= read -r line; do
       sleep 0.03
       printf 'ne\r\n'
       ;;
+    -data-read-memory-bytes*)
+      printf '%s^done,memory=[{begin="0x1000",offset="0x0",end="0x1004",contents="00417fff"}]\n' "$token"
+      ;;
     -test-multi)
       printf '~"hello\\n"\n=thread-created,id="1"\r\n%s^done,value="ok"\n' "$token"
       ;;
@@ -215,6 +218,14 @@ int main(int argc, char** argv)
 	if (!waitFor([&] { return longDone; }))
 		return 7;
 
+    bool memoryDone = false;
+    session.readMemory("0x1000", 4, [&](MemoryRead result) {
+        memoryDone = result.success() && result.bytes == QByteArray::fromHex("00417fff");
+    });
+    if (!waitFor([&] { return memoryDone; })) return 30;
+    bool invalidMemory = false;
+    session.readMemory("0x1000", 100000, [&](MemoryRead result) { invalidMemory = !result.success(); });
+    if (!invalidMemory) return 31;
 	bool staleCrashCallback = false;
 	const int exitsBeforeCrash = exits;
 	session.sendRawCommand(QStringLiteral("-test-crash"),

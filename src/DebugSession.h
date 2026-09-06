@@ -1,3 +1,5 @@
+#include "RuntimeObjectGraph.h"
+#include "MemoryRead.h"
 /*
  * Copyright (c) 2026, Manuele Conti
  * All rights reserved.
@@ -109,6 +111,17 @@ struct BreakpointInfo
 
 
 
+struct DebugThread { QString id; QString name; QString state; };
+
+struct BreakpointRequest {
+    enum Kind { Source, Function, Hardware, WriteWatch, ReadWatch, AccessWatch, Catch };
+    Kind kind = Source;
+    QString location;
+    QString condition;
+    int ignoreCount = 0;
+    bool temporary = false;
+};
+
 struct StackFrame
 {
 	QString level;
@@ -159,6 +172,7 @@ struct ExecutionSnapshot
 	int line = 0;
 	QString function;
 	QString threadId;
+	QHash<QString, QString> objectIds;
 	int frame = 0;
 	QSet<QString> changedPaths;
 
@@ -235,6 +249,7 @@ public:
 	[[nodiscard]] bool supportsReverseExecution() const;
 
 	// Breakpoints
+	void insertBreakpoint(const BreakpointRequest& request);
 	void insertBreakpoint(const QString& location);
 	void removeBreakpoint(int breakpointId);
 	void clearAllBreakpoints();
@@ -246,16 +261,22 @@ public:
 
 	// Stack navigation
 	void selectStackFrame(int frameIndex);
+	void selectThread(const QString& id);
+	const QVector<DebugThread>& threads() const { return m_threads; }
+	QString selectedThread() const { return m_currentThreadId; }
 
 	// State access
 	[[nodiscard]] const QVector<StackFrame>& stackFrames() const;
 	[[nodiscard]] const std::vector<std::unique_ptr<DebugVariable>>& variables() const;
 	[[nodiscard]] const QVector<ExecutionSnapshot>& executionHistory() const;
 	[[nodiscard]] const ExecutionSnapshot* snapshotAt(int index) const;
+	[[nodiscard]] const RuntimeObjectGraph& objectGraph() const { return m_objectGraph; }
+	[[nodiscard]] const RuntimeGraphDiff& graphChanges() const { return m_graphChanges; }
 	[[nodiscard]] const QSet<QString>& changedPaths() const;
 	[[nodiscard]] const QVector<BreakpointInfo>& breakpoints() const;
 
 	// Expression evaluation / raw MI
+	void readMemory(const QString& address, int byteCount, std::function<void(MemoryRead)> callback);
 	void evaluateExpression(const QString& expression);
 	void addWatchExpression(const QString& expression);
 	void removeWatchExpression(const QString& expression);
@@ -292,6 +313,7 @@ signals:
 	void stoppedAt(const QString& file, int line, const QString& function);
 	void stoppedAtAddress(const QString& address);
 
+	void threadsUpdated();
 	void stackFramesUpdated();
 	void variablesUpdated();
 	void breakpointsUpdated();
@@ -409,6 +431,7 @@ private:
 	PendingCommand m_inFlight;
 	QString m_inFlightReply;
 
+	QVector<DebugThread> m_threads;
 	QVector<StackFrame> m_stackFrames;
 	std::vector<std::unique_ptr<DebugVariable>> m_variables;
 	QStringList m_watchExpressions;
@@ -417,6 +440,8 @@ private:
 	QHash<QString, QString> m_watchTypeCache;
 	QHash<QString, DebugValueFormat> m_valueFormats;
 
+	RuntimeObjectGraph m_objectGraph;
+	RuntimeGraphDiff m_graphChanges;
 	QVector<ExecutionSnapshot> m_executionHistory;
 	enum class ReplayDirection { None, Backward, Forward };
 	ReplayDirection m_replayDirection = ReplayDirection::None;

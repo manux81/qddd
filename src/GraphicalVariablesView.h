@@ -119,6 +119,8 @@ public:
 	QSet<QString> expandedExpressions() const;
 	void restoreExpandedExpressions(const QSet<QString>& expressions);
 
+	void rebind(DebugVariable* node);
+	void clearEdges() { m_edges.clear(); }
 	void recalculateWidth();
 	void addEdge(GraphicalEdgeItem* e);
 	DebugVariable* variableAt(const QPointF& localPos) const;
@@ -208,6 +210,7 @@ private:
 	QGraphicsScene*  m_scene   = nullptr;
 	DebuggerSession* m_session = nullptr;
 
+	QHash<QString, GraphicalNodeItem*> m_rootItems;
 	QHash<QString, QPointF> m_nodePositions;
 	QHash<QString, QSet<QString>> m_nodeExpandedExpressions;
 	QSet<QString> m_pinnedNodeKeys;
