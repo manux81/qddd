@@ -66,6 +66,9 @@ public:
 					  RuntimeChangeState change = RuntimeChangeState::Unchanged);
 
 	void updatePosition();
+	void rerouteNow();
+	void setDisplayExpressions(const QStringList& expressions) { m_displayExpressions = expressions; setToolTip(expressions.join("\n")); }
+	QString routingKey() const { return m_sourceObjectId + "::" + m_sourceExpression + "::" + m_destinationObjectId; }
 	QRectF boundingRect() const override;
 	void paint(QPainter* painter,
 			   const QStyleOptionGraphicsItem* option,
@@ -79,6 +82,7 @@ private:
 	GraphicalNodeItem* m_to;
 	QString m_sourceObjectId;
 	QString m_sourceExpression;
+	QStringList m_displayExpressions;
 	QString m_destinationObjectId;
 	RuntimeChangeState m_change;
 
@@ -90,6 +94,7 @@ private:
 	qreal   m_routeOffset = 0.0;
 	QTimer  m_timer;
 
+	void updateEndpoints();
 	void tick();
 };
 
@@ -181,6 +186,7 @@ public slots:
 	void resetZoom();
 	void fitGraph();
 	void autoLayout();
+	void scheduleEdgeRouting();
 
 protected:
 	void wheelEvent(QWheelEvent*) override;
@@ -222,7 +228,9 @@ private:
 	quint64 m_refreshGeneration = 0;
 	QToolButton* m_autoLayoutButton = nullptr;
 	bool m_autoLayoutEnabled = true;
+	bool m_compactLayout = false;
 	bool m_refreshInProgress = false;
 	bool m_refreshPending = false;
 	bool m_layoutScheduled = false;
+	bool m_routingScheduled = false;
 };

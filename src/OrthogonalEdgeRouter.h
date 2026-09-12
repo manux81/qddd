@@ -15,6 +15,8 @@ public:
 		QPointF sourceNormal = QPointF(1.0, 0.0);
 		QPointF targetNormal;
 		QRectF routingBounds;
+		QRectF sourceRect;
+		QRectF targetRect;
 		QVector<QRectF> obstacles;
 		QVector<QPainterPath> existingEdges;
 		QString stabilityKey;

@@ -1,3 +1,4 @@
+#include "DebuggerLogging.h"
 #include "SemanticValueView.h"
 #include "MemoryView.h"
 #include <QDialog>
@@ -889,7 +890,7 @@ QPointF GraphicalNodeItem::outputPortFor(DebugVariable* child) const
 
 	// Keep one stable hollow socket in the right side of the header.
 	return mapToScene(
-		QPointF(m_width - (SocketRadius * 2.0),
+		QPointF(m_width,
 				HeaderHeight / 2.0));
 }
 
@@ -900,7 +901,7 @@ QPointF GraphicalNodeItem::outputPortForExpression(const QString& expression) co
 	// The expression remains the semantic edge identity, while every
 	// connection uses the same visual socket in the card header.
 	return mapToScene(
-		QPointF(m_width - (SocketRadius * 2.0),
+		QPointF(m_width,
 				HeaderHeight / 2.0));
 }
 
@@ -979,7 +980,7 @@ GraphicalEdgeItem::GraphicalEdgeItem(GraphicalNodeItem* f,
 	, m_destinationObjectId(std::move(destinationObjectId))
 	, m_change(change)
 {
-	setZValue(1);
+	setZValue(-1);
 	QPen pen(QColor(180, 180, 180, 210));
 	pen.setWidthF(2);
 	pen.setCapStyle(Qt::RoundCap);
@@ -1028,7 +1029,7 @@ static QPointF pointOnRectToward(const QRectF& rect, const QPointF& toward)
 	return center + delta / divisor;
 }
 
-void GraphicalEdgeItem::updatePosition()
+void GraphicalEdgeItem::updateEndpoints()
 {
 	const QRectF targetRect = visibleCardRect(m_to);
 	m_pos[0] = m_from->outputPortForExpression(m_sourceExpression);
@@ -1041,206 +1042,22 @@ void GraphicalEdgeItem::updatePosition()
 		m_targetEnd = pointOnRectToward(targetRect, m_pos[0]);
 	}
 
-	if (!m_timer.isActive())
-		m_timer.start(16);
 }
 
-static bool segmentIntersectsRect(const QPointF& start,
-								  const QPointF& end,
-								  const QRectF& rect)
+void GraphicalEdgeItem::updatePosition()
 {
-	if (rect.contains(start) || rect.contains(end))
-		return true;
-
-	const QLineF segment(start, end);
-	const QLineF top(rect.topLeft(), rect.topRight());
-	const QLineF right(rect.topRight(), rect.bottomRight());
-	const QLineF bottom(rect.bottomRight(), rect.bottomLeft());
-	const QLineF left(rect.bottomLeft(), rect.topLeft());
-
-	QPointF intersection;
-	return segment.intersects(top, &intersection) == QLineF::BoundedIntersection
-		|| segment.intersects(right, &intersection) == QLineF::BoundedIntersection
-		|| segment.intersects(bottom, &intersection) == QLineF::BoundedIntersection
-		|| segment.intersects(left, &intersection) == QLineF::BoundedIntersection;
+    updateEndpoints();
+    if (scene()) for (auto* view : scene()->views()) {
+        if (auto* graph = qobject_cast<GraphicalVariablesView*>(view)) {
+            graph->scheduleEdgeRouting(); return;
+        }
+    }
+    if (!m_timer.isActive()) m_timer.start(16);
 }
 
-static void appendStraightEdge(QPainterPath& path,
-							   const QPointF& start,
-							   const QPointF& end,
-							   qreal sourceGap)
+void GraphicalEdgeItem::rerouteNow()
 {
-	QLineF line(start, end);
-
-	if (line.length() <= sourceGap) {
-		path.moveTo(start);
-		path.lineTo(end);
-		return;
-	}
-
-	line.setLength(sourceGap);
-	path.moveTo(line.p2());
-	path.lineTo(end);
-}
-
-static qreal routeLength(const QPointF& start,
-						 const QVector<QPointF>& bends,
-						 const QPointF& end)
-{
-	qreal total = 0.0;
-	QPointF previous = start;
-
-	for (const QPointF& bend : bends) {
-		total += QLineF(previous, bend).length();
-		previous = bend;
-	}
-
-	return total + QLineF(previous, end).length();
-}
-
-static bool routeCrossesRect(const QPointF& start,
-							 const QVector<QPointF>& bends,
-							 const QPointF& end,
-							 const QRectF& rect)
-{
-	QPointF previous = start;
-
-	for (const QPointF& bend : bends) {
-		if (segmentIntersectsRect(previous, bend, rect))
-			return true;
-		previous = bend;
-	}
-
-	return segmentIntersectsRect(previous, end, rect);
-}
-
-static QVector<QPointF> shortestDetour(
-	const QPointF& start,
-	const QPointF& end,
-	const QRectF& blockingRect,
-	qreal laneOffset)
-{
-	// Keep the detour close to the obstacle. The lane offset only separates
-	// otherwise identical references instead of producing oversized arcs.
-	const qreal clearance =
-		18.0 + qMin<qreal>(18.0, std::abs(laneOffset) * 0.20);
-	const QRectF routeRect =
-		blockingRect.adjusted(-clearance, -clearance, clearance, clearance);
-
-	const bool leftToRight = start.x() <= end.x();
-	const bool topToBottom = start.y() <= end.y();
-
-	const QPointF topA =
-		leftToRight ? routeRect.topLeft() : routeRect.topRight();
-	const QPointF topB =
-		leftToRight ? routeRect.topRight() : routeRect.topLeft();
-	const QPointF bottomA =
-		leftToRight ? routeRect.bottomLeft() : routeRect.bottomRight();
-	const QPointF bottomB =
-		leftToRight ? routeRect.bottomRight() : routeRect.bottomLeft();
-	const QPointF leftA =
-		topToBottom ? routeRect.topLeft() : routeRect.bottomLeft();
-	const QPointF leftB =
-		topToBottom ? routeRect.bottomLeft() : routeRect.topLeft();
-	const QPointF rightA =
-		topToBottom ? routeRect.topRight() : routeRect.bottomRight();
-	const QPointF rightB =
-		topToBottom ? routeRect.bottomRight() : routeRect.topRight();
-
-	const QVector<QVector<QPointF>> candidates = {
-		{topA, topB},
-		{bottomA, bottomB},
-		{leftA, leftB},
-		{rightA, rightB}
-	};
-
-	QVector<QPointF> best;
-	qreal bestLength = -1.0;
-	const QRectF forbidden =
-		blockingRect.adjusted(-2.0, -2.0, 2.0, 2.0);
-
-	for (const QVector<QPointF>& candidate : candidates) {
-		if (routeCrossesRect(start, candidate, end, forbidden))
-			continue;
-
-		const qreal candidateLength =
-			routeLength(start, candidate, end);
-		if (bestLength < 0.0 || candidateLength < bestLength) {
-			bestLength = candidateLength;
-			best = candidate;
-		}
-	}
-
-	return best;
-}
-
-static QPointF pointToward(
-	const QPointF& from,
-	const QPointF& toward,
-	qreal distance)
-{
-	QLineF line(from, toward);
-	if (line.length() < 0.001)
-		return from;
-
-	line.setLength(qMin(distance, line.length()));
-	return line.p2();
-}
-
-static void appendRoundedRoute(
-	QPainterPath& path,
-	const QPointF& start,
-	const QVector<QPointF>& bends,
-	const QPointF& end,
-	qreal sourceGap)
-{
-	QLineF sourceLine(start, bends.isEmpty() ? end : bends.first());
-	QPointF routedStart = start;
-
-	if (sourceLine.length() > sourceGap) {
-		sourceLine.setLength(sourceGap);
-		routedStart = sourceLine.p2();
-	}
-
-	path.moveTo(routedStart);
-
-	if (bends.isEmpty()) {
-		path.lineTo(end);
-		return;
-	}
-
-	QVector<QPointF> points;
-	points << routedStart;
-	for (const QPointF& bend : bends)
-		points << bend;
-	points << end;
-
-	constexpr qreal CornerRadius = 18.0;
-
-	for (int i = 1; i + 1 < points.size(); ++i) {
-		const QPointF& previous = points[i - 1];
-		const QPointF& corner = points[i];
-		const QPointF& next = points[i + 1];
-
-		const qreal incomingLength =
-			QLineF(corner, previous).length();
-		const qreal outgoingLength =
-			QLineF(corner, next).length();
-		const qreal radius =
-			qMin(CornerRadius,
-				 qMin(incomingLength * 0.28,
-					  outgoingLength * 0.28));
-
-		const QPointF enter =
-			pointToward(corner, previous, radius);
-		const QPointF leave =
-			pointToward(corner, next, radius);
-
-		path.lineTo(enter);
-		path.quadTo(corner, leave);
-	}
-
-	path.lineTo(end);
+    m_timer.stop(); updateEndpoints(); tick();
 }
 
 void GraphicalEdgeItem::tick()
@@ -1252,6 +1069,8 @@ void GraphicalEdgeItem::tick()
 	const qreal sourceGap = SocketRadius + 1.5;
 
 	OrthogonalEdgeRouter::Request request;
+	request.sourceRect = visibleCardRect(m_from);
+	request.targetRect = visibleCardRect(m_to);
 	request.source = start;
 	request.target = end;
 	request.sourceNormal = QPointF(1.0, 0.0);
@@ -1368,14 +1187,15 @@ void GraphicalEdgeItem::paint(
 	if (edgePath.isEmpty())
 		return;
 
-	QString edgeLabel;
-	const QString expression = m_sourceExpression.trimmed();
-	if (!expression.isEmpty()) {
-		static const QRegularExpression fieldPattern(
-			QStringLiteral(R"(([A-Za-z_][A-Za-z0-9_]*)\s*(?:\)|\])*\s*$)"));
-		const QRegularExpressionMatch match = fieldPattern.match(expression);
-		edgeLabel = match.hasMatch() ? match.captured(1) : expression;
-	}
+    QStringList labels;
+    const auto expressions=m_displayExpressions.isEmpty() ? QStringList{m_sourceExpression} : m_displayExpressions;
+    static const QRegularExpression fieldPattern(QStringLiteral(R"(([A-Za-z_][A-Za-z0-9_]*)\s*(?:\)|\])*\s*$)"));
+    for(const auto& expression : expressions) {
+        const auto match=fieldPattern.match(expression.trimmed());
+        const QString label=match.hasMatch() ? match.captured(1) : expression.trimmed();
+        if(!label.isEmpty() && !labels.contains(label)) labels.append(label);
+    }
+    const QString edgeLabel=labels.join(", ");
 
 	if (!edgeLabel.isEmpty()) {
 		QFont labelFont = painter->font();
@@ -1559,6 +1379,11 @@ GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
 	connect(mk("-", tr("Zoom out")), &QToolButton::clicked, this, &GraphicalVariablesView::zoomOut);
 	connect(mk("ƒ+", tr("Add expression display")), &QToolButton::clicked,
 	        this, [this] { createDisplayExpression(); });
+    auto* compact = mk("▦", tr("Compact object layout"));
+    compact->setCheckable(true);
+    connect(compact, &QToolButton::toggled, this, [this](bool checked) {
+        m_compactLayout = checked; autoLayout();
+    });
 	m_autoLayoutButton = mk("⇆", tr("Automatic layout: on"));
 	m_autoLayoutButton->setCheckable(true);
 	m_autoLayoutButton->setChecked(true);
@@ -1602,6 +1427,7 @@ void GraphicalVariablesView::setSession(DebuggerSession* s)
 
 void GraphicalVariablesView::refresh()
 {
+    qCDebug(debuggerUiLog) << "refresh graph";
 	if (!m_session) return;
 	if (m_refreshInProgress) {
 		m_refreshPending = true;
@@ -1731,6 +1557,7 @@ void GraphicalVariablesView::refresh()
 		m_scene->setSceneRect(m_scene->itemsBoundingRect().adjusted(-200, -200, 200, 200));
 
 	m_refreshInProgress = false;
+    scheduleEdgeRouting();
 	centerOn(previousCenter);
 	setUpdatesEnabled(true);
 	viewport()->update();
@@ -1755,6 +1582,7 @@ QPointF GraphicalVariablesView::positionForNode(
 
 void GraphicalVariablesView::scheduleAutoLayout()
 {
+    scheduleEdgeRouting();
 	// Debounce asynchronous pointer updates: only the latest scheduled
 	// callback is allowed to run the automatic layout.
 	const char* propertyName = "_qddd_layout_debounce_token";
@@ -1778,13 +1606,16 @@ void GraphicalVariablesView::configureNodeItem(GraphicalNodeItem* item)
 	item->setPositionChangedCallback(
 		[this](const QString& key, const QPointF& pos) {
 			rememberNodePosition(key, pos);
+            scheduleEdgeRouting();
 		});
 	item->setUserMovedCallback(
 		[this](const QString& key, const QPointF& pos) {
 			m_pinnedNodeKeys.insert(key);
 			rememberNodePosition(key, pos);
+            scheduleEdgeRouting();
 		});
 	item->setGeometryChangedCallback([this, item] {
+        scheduleEdgeRouting();
 		if (!item->layoutKey().isEmpty())
 			m_nodeExpandedExpressions.insert(
 				item->layoutKey(), item->expandedExpressions());
@@ -1841,7 +1672,9 @@ void GraphicalVariablesView::applyAutomaticLayout(bool fitAfterLayout)
 		                 source, destination});
 	}
 
-	const RuntimeLayoutResult layout = RuntimeGraphLayout::compute(nodes, edges);
+	const RuntimeLayoutResult layout = m_compactLayout
+        ? CompactObjectLayoutStrategy().layout(nodes, edges)
+        : HierarchicalLayoutStrategy().layout(nodes, edges);
 	QStringList keys = itemsByKey.keys();
 	std::sort(keys.begin(), keys.end());
 	for (const QString& key : keys) {
@@ -2463,4 +2296,31 @@ void GraphicalVariablesView::ensurePointerNodeOpen(
 				centerOn(item);
 			reopenDependentPointerExpressions(rootRaw, item);
 		});
+}
+
+void GraphicalVariablesView::scheduleEdgeRouting()
+{
+    if (m_routingScheduled) return;
+    m_routingScheduled = true;
+    QTimer::singleShot(0, this, [this] {
+        m_routingScheduled = false;
+        if (m_refreshInProgress) { scheduleEdgeRouting(); return; }
+        QVector<GraphicalEdgeItem*> edges;
+        for (auto* item : m_scene->items())
+            if (auto* edge = qgraphicsitem_cast<GraphicalEdgeItem*>(item)) edges.append(edge);
+        std::sort(edges.begin(), edges.end(), [](const auto* a, const auto* b) { return a->routingKey() < b->routingKey(); });
+        // Each edge sees only paths computed for this geometry, in stable order.
+        QHash<GraphicalNodeItem*, QHash<GraphicalNodeItem*, GraphicalEdgeItem*>> primary;
+        QHash<GraphicalEdgeItem*, QStringList> labels;
+        for (auto* edge : edges) {
+            edge->setPath(QPainterPath());
+            auto*& representative=primary[edge->sourceNode()][edge->destinationNode()];
+            if(!representative) representative=edge;
+            labels[representative].append(edge->sourceExpression());
+            edge->setVisible(representative==edge);
+        }
+        for (auto* edge : edges) if(edge->isVisible()) {
+            edge->setDisplayExpressions(labels.value(edge)); edge->rerouteNow();
+        }
+    });
 }

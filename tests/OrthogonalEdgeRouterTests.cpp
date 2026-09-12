@@ -3,6 +3,11 @@
 #include <QCoreApplication>
 #include <QLineF>
 #include <QPolygonF>
+#include <algorithm>
+// These regression checks must also execute in Release/RelWithDebInfo builds.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <cmath>
 
@@ -93,6 +98,32 @@ int main(int argc, char** argv)
 	assert(!blockedResult.path.isEmpty());
 	assert(!pathHitsRect(blockedResult.path, blocked.obstacles.front().adjusted(-7, -7, 7, 7)));
 
+	// Alternating tall cards require several bends through the gaps. A finite
+	// menu of one-dogleg candidates either crosses a card or takes a huge tour
+	// around all three; the nearby free corridor is less than 1100 pixels long.
+	OrthogonalEdgeRouter::Request staggered;
+	staggered.source = QPointF(0, 100);
+	staggered.target = QPointF(520, 100);
+	staggered.sourceNormal = QPointF(1, 0);
+	staggered.targetNormal = QPointF(-1, 0);
+	staggered.obstacles = {
+		QRectF(70, -1000, 80, 1140),
+		QRectF(230, 60, 80, 1040),
+		QRectF(390, -1000, 60, 1140)
+	};
+	for (int lane = -2; lane <= 2; ++lane) {
+		staggered.laneOffset = lane * 12.0;
+		staggered.stabilityKey = QStringLiteral("staggered-%1").arg(lane);
+		const auto routed = OrthogonalEdgeRouter::route(staggered);
+		assert(!routed.path.isEmpty());
+		assert(QLineF(routed.path.pointAtPercent(0), staggered.source).length() < 0.01);
+		assert(QLineF(routed.path.pointAtPercent(1), staggered.target).length() < 0.01);
+		assert(!pathHasSelfConflict(routed.path));
+		for (const QRectF& obstacle : staggered.obstacles)
+			assert(!pathHitsRect(routed.path, obstacle.adjusted(-1, -1, 1, 1)));
+		assert(routed.path.length() < 1100.0);
+	}
+
 	OrthogonalEdgeRouter::Request inverse;
 	inverse.source = QPointF(300, 120);
 	inverse.target = QPointF(0, 0);
@@ -135,34 +166,65 @@ int main(int argc, char** argv)
 	assert(!backtrackingResult.path.isEmpty());
 	assert(!pathHasSelfConflict(backtrackingResult.path));
 
-	OrthogonalEdgeRouter::Request outerBackEdge;
-	outerBackEdge.source = QPointF(420, 150);
-	outerBackEdge.target = QPointF(120, 170);
-	outerBackEdge.sourceNormal = QPointF(1, 0);
-	outerBackEdge.targetNormal = QPointF(-1, 0);
-	outerBackEdge.routingBounds = QRectF(80, 80, 400, 220);
-	outerBackEdge.stabilityKey = QStringLiteral("parent-back-edge");
-	auto outerBackResult = OrthogonalEdgeRouter::route(outerBackEdge);
-	assert(!outerBackResult.path.isEmpty());
-	assert(!pathHasSelfConflict(outerBackResult.path));
-
-	bool leavesGraphInterior = false;
-	for (const QPolygonF& polygon : outerBackResult.path.toSubpathPolygons()) {
-		for (const QPointF& point : polygon) {
-			if (point.y() < outerBackEdge.routingBounds.top()
-			    || point.y() > outerBackEdge.routingBounds.bottom()) {
-				leavesGraphInterior = true;
-				break;
-			}
-		}
-	}
-	assert(leavesGraphInterior);
+	// A distant unrelated card can enlarge graph bounds. It must not force a
+	// nearby backward edge to circumnavigate the complete graph.
+	OrthogonalEdgeRouter::Request nearbyBackEdge;
+	nearbyBackEdge.source = QPointF(420, 150);
+	nearbyBackEdge.target = QPointF(120, 170);
+	nearbyBackEdge.sourceNormal = QPointF(1, 0);
+	nearbyBackEdge.targetNormal = QPointF(-1, 0);
+	nearbyBackEdge.routingBounds = QRectF(-5000, -5000, 12000, 12000);
+	nearbyBackEdge.obstacles = {QRectF(220, 100, 100, 130), QRectF(6000, 6000, 200, 120)};
+	nearbyBackEdge.stabilityKey = QStringLiteral("parent-back-edge");
+	auto nearbyBackResult = OrthogonalEdgeRouter::route(nearbyBackEdge);
+	assert(!nearbyBackResult.path.isEmpty());
+	assert(!pathHasSelfConflict(nearbyBackResult.path));
+	for (const QRectF& obstacle : nearbyBackEdge.obstacles)
+		assert(!pathHitsRect(nearbyBackResult.path, obstacle.adjusted(-1, -1, 1, 1)));
+	assert(nearbyBackResult.path.length() < 900.0);
 
 	OrthogonalEdgeRouter::Request loop;
 	loop.source = QPointF(200, 50);
 	loop.stabilityKey = QStringLiteral("self");
 	auto loopResult = OrthogonalEdgeRouter::routeSelfLoop(loop, QRectF(0, 0, 200, 120));
 	assert(!loopResult.path.isEmpty());
+
+	// A neighboring card occupies the usual vertical leg of a self-loop.
+	// Another card above it makes checking only the first obstacle insufficient.
+	const QRectF loopCard(0, 0, 200, 120);
+	loop.source = QPointF(200, 85);
+	loop.obstacles = {QRectF(215, 25, 125, 35), QRectF(245, -100, 95, 85)};
+	const auto crowdedLoop = OrthogonalEdgeRouter::routeSelfLoop(loop, loopCard);
+	assert(!crowdedLoop.path.isEmpty());
+	assert(!pathHasSelfConflict(crowdedLoop.path));
+	assert(!pathHitsRect(crowdedLoop.path, loopCard.adjusted(1, 1, -1, -1)));
+	for (const QRectF& obstacle : loop.obstacles)
+		assert(!pathHitsRect(crowdedLoop.path, obstacle.adjusted(-1, -1, 1, 1)));
+	assert(QLineF(crowdedLoop.path.pointAtPercent(0), loop.source).length() < 0.01);
+	assert(QLineF(crowdedLoop.path.pointAtPercent(1), crowdedLoop.endPoint).length() < 0.01);
+	assert(crowdedLoop.path.length() < 1400.0);
+
+    OrthogonalEdgeRouter::Request closePorts;
+    closePorts.source=QPointF(0,0);closePorts.target=QPointF(30,0);
+    closePorts.sourceNormal=QPointF(1,0);closePorts.targetNormal=QPointF(-1,0);
+    closePorts.sourceRect=QRectF(-200,-60,200,120);closePorts.targetRect=QRectF(30,-60,200,120);
+    const auto closeRoute=OrthogonalEdgeRouter::route(closePorts);
+    assert(!closeRoute.path.isEmpty());assert(closeRoute.path.length()<=30.1);
+    assert(!pathHasSelfConflict(closeRoute.path));
+    closePorts.source=QPointF(0,-45);closePorts.target=QPointF(30,-34.615);
+    const auto offsetRoute=OrthogonalEdgeRouter::route(closePorts);
+    assert(!offsetRoute.path.isEmpty());assert(offsetRoute.path.length()<50);
+    assert(!pathHasSelfConflict(offsetRoute.path));
+
+
+    // Nearly equal obstacle coordinates must not move the port past a blocker.
+    OrthogonalEdgeRouter::Request precision;
+    precision.source=QPointF(0,0);precision.target=QPointF(300,0);
+    precision.sourceNormal=QPointF(1,0);precision.targetNormal=QPointF(-1,0);
+    precision.obstacles={QRectF(0,100,9.9995,20),QRectF(30,-5,2,10)};
+    const auto preciseRoute=OrthogonalEdgeRouter::route(precision);
+    assert(!preciseRoute.path.isEmpty());
+    for(const auto& obstacle:precision.obstacles) assert(!pathHitsRect(preciseRoute.path,obstacle));
 
 	return 0;
 }

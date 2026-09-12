@@ -54,3 +54,28 @@ public:
 		const QVector<RuntimeLayoutEdge>& edges,
 		const RuntimeLayoutOptions& options = {});
 };
+
+class RuntimeLayoutStrategy {
+public:
+    virtual ~RuntimeLayoutStrategy() = default;
+    virtual RuntimeLayoutResult layout(const QVector<RuntimeLayoutNode>& nodes,
+                                        const QVector<RuntimeLayoutEdge>& edges) const = 0;
+};
+class HierarchicalLayoutStrategy final : public RuntimeLayoutStrategy {
+public:
+    RuntimeLayoutResult layout(const QVector<RuntimeLayoutNode>& nodes,
+                               const QVector<RuntimeLayoutEdge>& edges) const override {
+        return RuntimeGraphLayout::compute(nodes,edges);
+    }
+};
+// Compact object layout retains cycle handling and manual pins from the layered
+// algorithm, with shorter routing corridors and reduced inter-component space.
+class CompactObjectLayoutStrategy final : public RuntimeLayoutStrategy {
+public:
+    RuntimeLayoutResult layout(const QVector<RuntimeLayoutNode>& nodes,
+                               const QVector<RuntimeLayoutEdge>& edges) const override {
+        RuntimeLayoutOptions options;
+        options.layerSpacing=55; options.nodeSpacing=20; options.componentSpacing=45;
+        return RuntimeGraphLayout::compute(nodes,edges,options);
+    }
+};

@@ -1,437 +1,191 @@
 #include "OrthogonalEdgeRouter.h"
-
 #include <QLineF>
 #include <QPolygonF>
-#include <QtMath>
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <queue>
 
 namespace {
-constexpr qreal kObstacleMargin = 8.0;
-constexpr qreal kLaneSpacing = 6.0;
-constexpr qreal kBendPenalty = 45.0;
-constexpr qreal kCrossingPenalty = 260.0;
-constexpr qreal kOverlapPenalty = 180.0;
-constexpr qreal kHugePenalty = 1000000.0;
-constexpr qreal kCornerRadius = 10.0;
-
-struct Candidate {
-	QVector<QPointF> points;
-	qreal cost = std::numeric_limits<qreal>::max();
-};
-
-bool fuzzyEqual(qreal a, qreal b)
-{
-	return std::abs(a - b) < 0.01;
+constexpr qreal clearance = 9.0;
+constexpr qreal bendCost = 18.0;
+bool same(const QPointF& a,const QPointF& b) { return QLineF(a,b).length()<0.001; }
+bool hits(const QPointF& a,const QPointF& b,const QRectF& r) {
+    if (std::abs(a.y()-b.y())<0.001)
+        return a.y()>=r.top() && a.y()<=r.bottom() && std::max(a.x(),b.x())>=r.left() && std::min(a.x(),b.x())<=r.right();
+    if (std::abs(a.x()-b.x())<0.001)
+        return a.x()>=r.left() && a.x()<=r.right() && std::max(a.y(),b.y())>=r.top() && std::min(a.y(),b.y())<=r.bottom();
+    return true;
 }
-
-bool pointEqual(const QPointF& a, const QPointF& b)
-{
-	return QLineF(a, b).length() < 0.01;
+bool clear(const QPointF& a,const QPointF& b,const QVector<QRectF>& obstacles) {
+    for (const auto& rect:obstacles) if(hits(a,b,rect)) return false;
+    return true;
 }
-
-bool between(qreal value, qreal a, qreal b)
-{
-	return value >= std::min(a, b) - 0.01
-		&& value <= std::max(a, b) + 0.01;
+bool conflicts(const QLineF& a,const QLineF& b,bool allowSharedEndpoint) {
+    const bool horizontal=std::abs(a.dy())<0.001 && std::abs(b.dy())<0.001 && std::abs(a.y1()-b.y1())<0.001;
+    const bool vertical=std::abs(a.dx())<0.001 && std::abs(b.dx())<0.001 && std::abs(a.x1()-b.x1())<0.001;
+    if(horizontal && std::min(std::max(a.x1(),a.x2()),std::max(b.x1(),b.x2()))-std::max(std::min(a.x1(),a.x2()),std::min(b.x1(),b.x2()))>0.001) return true;
+    if(vertical && std::min(std::max(a.y1(),a.y2()),std::max(b.y1(),b.y2()))-std::max(std::min(a.y1(),a.y2()),std::min(b.y1(),b.y2()))>0.001) return true;
+    QPointF point;
+    if(a.intersects(b,&point)!=QLineF::BoundedIntersection) return false;
+    return !allowSharedEndpoint || !((same(point,a.p1()) || same(point,a.p2())) && (same(point,b.p1()) || same(point,b.p2())));
 }
-
-QVector<QPointF> simplify(QVector<QPointF> points)
-{
-	for (int i = points.size() - 2; i > 0; --i) {
-		const QPointF& a = points[i - 1];
-		const QPointF& b = points[i];
-		const QPointF& c = points[i + 1];
-
-		const bool horizontal =
-			fuzzyEqual(a.y(), b.y())
-			&& fuzzyEqual(b.y(), c.y())
-			&& between(b.x(), a.x(), c.x());
-
-		const bool vertical =
-			fuzzyEqual(a.x(), b.x())
-			&& fuzzyEqual(b.x(), c.x())
-			&& between(b.y(), a.y(), c.y());
-
-		// Remove a collinear point only when it lies between its neighbours.
-		// Removing a turning-back point would turn the route into a segment
-		// that travels out and then overlaps itself on the way back.
-		if (pointEqual(a, b) || pointEqual(b, c) || horizontal || vertical)
-			points.removeAt(i);
-	}
-	return points;
+QVector<QPointF> simplify(const QVector<QPointF>& input) {
+    QVector<QPointF> result;
+    for(const auto& p:input) {
+        if(!result.isEmpty() && same(result.back(),p)) continue;
+        while(result.size()>=2) {
+            const auto a=result[result.size()-2], b=result.back();
+            const auto u=b-a,v=p-b;
+            if(std::abs(u.x()*v.y()-u.y()*v.x())>0.001 || QPointF::dotProduct(u,v)<0) break;
+            result.removeLast();
+        }
+        result.append(p);
+    }
+    return result;
 }
-
-QVector<QLineF> segments(const QVector<QPointF>& points)
-{
-	QVector<QLineF> out;
-	for (int i = 1; i < points.size(); ++i)
-		out.push_back(QLineF(points[i - 1], points[i]));
-	return out;
+QPainterPath pathFor(const QVector<QPointF>& input,qreal gap) {
+    const auto points=simplify(input); QPainterPath path;
+    if(points.size()<2) return path;
+    QLineF first(points[0],points[1]); first.setLength(std::min(first.length(),std::max(qreal(0),gap)));
+    path.moveTo(first.p2());
+    for(int i=1;i+1<points.size();++i) {
+        QLineF before(points[i],points[i-1]),after(points[i],points[i+1]);
+        const qreal radius=std::min(qreal(6),std::min(before.length(),after.length())/4);
+        before.setLength(radius); after.setLength(radius);
+        path.lineTo(before.p2()); path.quadTo(points[i],after.p2());
+    }
+    path.lineTo(points.back()); return path;
 }
-
-bool segmentHitsRect(const QLineF& line, const QRectF& rect)
-{
-	if (rect.contains(line.p1()) || rect.contains(line.p2()))
-		return true;
-	const QLineF sides[] = {
-		QLineF(rect.topLeft(), rect.topRight()),
-		QLineF(rect.topRight(), rect.bottomRight()),
-		QLineF(rect.bottomRight(), rect.bottomLeft()),
-		QLineF(rect.bottomLeft(), rect.topLeft())
-	};
-	QPointF intersection;
-	for (const QLineF& side : sides)
-		if (line.intersects(side, &intersection) == QLineF::BoundedIntersection)
-			return true;
-	return false;
+qreal manhattan(const QPointF& a,const QPointF& b) { return std::abs(a.x()-b.x())+std::abs(a.y()-b.y()); }
+QVector<QLineF> linesFor(const QVector<QPainterPath>& paths) {
+    QVector<QLineF> lines;
+    for(const auto& path:paths) for(const auto& polygon:path.toSubpathPolygons())
+        for(int i=1;i<polygon.size();++i) lines.append(QLineF(polygon[i-1],polygon[i]));
+    return lines;
 }
-
-bool orthogonal(const QLineF& line)
-{
-	return fuzzyEqual(line.x1(), line.x2()) || fuzzyEqual(line.y1(), line.y2());
+qreal crossingCost(const QPointF& a,const QPointF& b,const QVector<QLineF>& lines) {
+    qreal cost=0; QLineF segment(a,b);
+    for(const auto& line:lines) {
+        QPointF p;
+        if(segment.intersects(line,&p)==QLineF::BoundedIntersection && !same(p,a) && !same(p,b) && !same(p,line.p1()) && !same(p,line.p2())) cost+=12;
+    }
+    // A crossing may justify a small detour, never a tour around the graph.
+    return std::min(cost,qreal(36));
 }
-
-qreal segmentLength(const QVector<QPointF>& points)
-{
-	qreal total = 0.0;
-	for (const QLineF& line : segments(points))
-		total += line.length();
-	return total;
-}
-
-QVector<QLineF> pathSegments(const QPainterPath& path)
-{
-	QVector<QLineF> out;
-	const QList<QPolygonF> polygons = path.toSubpathPolygons();
-	for (const QPolygonF& polygon : polygons)
-		for (int i = 1; i < polygon.size(); ++i)
-			out.push_back(QLineF(polygon[i - 1], polygon[i]));
-	return out;
-}
-
-bool overlapsAxisAligned(const QLineF& a, const QLineF& b)
-{
-	if (fuzzyEqual(a.y1(), a.y2()) && fuzzyEqual(b.y1(), b.y2())
-	    && fuzzyEqual(a.y1(), b.y1())) {
-		const qreal a0 = std::min(a.x1(), a.x2());
-		const qreal a1 = std::max(a.x1(), a.x2());
-		const qreal b0 = std::min(b.x1(), b.x2());
-		const qreal b1 = std::max(b.x1(), b.x2());
-		return std::min(a1, b1) - std::max(a0, b0) > 3.0;
-	}
-	if (fuzzyEqual(a.x1(), a.x2()) && fuzzyEqual(b.x1(), b.x2())
-	    && fuzzyEqual(a.x1(), b.x1())) {
-		const qreal a0 = std::min(a.y1(), a.y2());
-		const qreal a1 = std::max(a.y1(), a.y2());
-		const qreal b0 = std::min(b.y1(), b.y2());
-		const qreal b1 = std::max(b.y1(), b.y2());
-		return std::min(a1, b1) - std::max(a0, b0) > 3.0;
-	}
-	return false;
-}
-
-bool hasSelfConflict(const QVector<QPointF>& points)
-{
-	const QVector<QLineF> routeSegments = segments(points);
-
-	for (int i = 0; i < routeSegments.size(); ++i) {
-		for (int j = i + 1; j < routeSegments.size(); ++j) {
-			const QLineF& a = routeSegments[i];
-			const QLineF& b = routeSegments[j];
-
-			// Overlap is invalid even for adjacent segments: it means the route
-			// leaves a point and then travels back over the same geometry.
-			if (overlapsAxisAligned(a, b))
-				return true;
-
-			// Adjacent segments are expected to meet at their common endpoint.
-			if (j == i + 1)
-				continue;
-
-			QPointF crossing;
-			if (a.intersects(b, &crossing) == QLineF::BoundedIntersection)
-				return true;
-		}
-	}
-
-	return false;
-}
-
-qreal score(const QVector<QPointF>& points,
-            const QVector<QRectF>& obstacles,
-            const QVector<QPainterPath>& existingEdges)
-{
-	const QVector<QLineF> routeSegments = segments(points);
-	qreal cost = segmentLength(points);
-	cost += qMax(0, points.size() - 2) * kBendPenalty;
-
-	for (const QLineF& segment : routeSegments) {
-		if (!orthogonal(segment))
-			cost += kHugePenalty;
-
-		for (const QRectF& obstacle : obstacles) {
-			const QRectF expanded = obstacle.adjusted(
-				-kObstacleMargin, -kObstacleMargin,
-				 kObstacleMargin,  kObstacleMargin);
-			if (segmentHitsRect(segment, expanded))
-				cost += kHugePenalty;
-		}
-
-		for (const QPainterPath& path : existingEdges) {
-			for (const QLineF& other : pathSegments(path)) {
-				if (overlapsAxisAligned(segment, other)) {
-					cost += kOverlapPenalty;
-					continue;
-				}
-				QPointF crossing;
-				if (segment.intersects(other, &crossing) == QLineF::BoundedIntersection
-				    && !pointEqual(crossing, segment.p1())
-				    && !pointEqual(crossing, segment.p2()))
-					cost += kCrossingPenalty;
-			}
-		}
-	}
-	return cost;
-}
-
-void addCandidate(QVector<Candidate>& candidates, QVector<QPointF> points,
-                  const OrthogonalEdgeRouter::Request& request)
-{
-	points = simplify(std::move(points));
-	if (points.size() < 2 || hasSelfConflict(points))
-		return;
-
-	Candidate candidate;
-	candidate.points = std::move(points);
-	candidate.cost = score(candidate.points, request.obstacles, request.existingEdges);
-	candidates.push_back(std::move(candidate));
-}
-
-QPainterPath roundedPath(QVector<QPointF> points, qreal sourceGap)
-{
-	points = simplify(std::move(points));
-	QPainterPath path;
-	if (points.size() < 2)
-		return path;
-
-	QPointF start = points.first();
-	QLineF first(start, points[1]);
-	if (first.length() > sourceGap) {
-		first.setLength(sourceGap);
-		start = first.p2();
-	}
-	path.moveTo(start);
-
-	for (int i = 1; i + 1 < points.size(); ++i) {
-		const QPointF previous = points[i - 1];
-		const QPointF corner = points[i];
-		const QPointF next = points[i + 1];
-		QLineF incoming(corner, previous);
-		QLineF outgoing(corner, next);
-		const qreal radius = qMin(kCornerRadius,
-			qMin(incoming.length() * 0.25, outgoing.length() * 0.25));
-		if (incoming.length() > 0.001) incoming.setLength(radius);
-		if (outgoing.length() > 0.001) outgoing.setLength(radius);
-		path.lineTo(incoming.p2());
-		path.quadTo(corner, outgoing.p2());
-	}
-	path.lineTo(points.last());
-	return path;
-}
-
-QPointF labelPosition(const QVector<QPointF>& points)
-{
-	qreal bestLength = -1.0;
-	QPointF best;
-	for (const QLineF& line : segments(points)) {
-		if (!fuzzyEqual(line.y1(), line.y2()))
-			continue;
-		if (line.length() > bestLength) {
-			bestLength = line.length();
-			best = (line.p1() + line.p2()) * 0.5;
-		}
-	}
-	if (bestLength >= 0.0)
-		return best;
-	return points.size() >= 2 ? (points[0] + points[1]) * 0.5 : QPointF();
+QVector<QPointF> search(const QPointF& start,const QPointF& goal,const QVector<QRectF>& obstacles,
+                       const OrthogonalEdgeRouter::Request& request) {
+    QVector<qreal> xs{start.x(),goal.x()},ys{start.y(),goal.y()};
+    for(const auto& rect:obstacles) { xs<<rect.left()-1<<rect.right()+1; ys<<rect.top()-1<<rect.bottom()+1; }
+    // Nearby free lanes also handle coincident ports without any third-party obstacles.
+    xs<<start.x()-24<<start.x()+24<<goal.x()-24<<goal.x()+24;
+    ys<<start.y()-24<<start.y()+24<<goal.y()-24<<goal.y()+24;
+    auto unique=[](QVector<qreal>& values) {
+        std::sort(values.begin(),values.end());
+        values.erase(std::unique(values.begin(),values.end()),values.end());
+    }; unique(xs);unique(ys);
+    const int width=xs.size(),height=ys.size();
+    // Bound allocation for malformed/hostile requests. No unsafe fallback is drawn.
+    if(qint64(width)*height>2000000) return {};
+    auto coord=[](const QVector<qreal>& values,qreal value){return int(std::lower_bound(values.begin(),values.end(),value)-values.begin());};
+    const int first=coord(ys,start.y())*width+coord(xs,start.x());
+    const int last=coord(ys,goal.y())*width+coord(xs,goal.x());
+    const int states=width*height*2;
+    QVector<qreal> distance(states,std::numeric_limits<qreal>::infinity());
+    QVector<int> previous(states,-1);
+    struct Visit {qreal estimate; qreal distance; int state;};
+    auto compare=[](const Visit& a,const Visit& b){return a.estimate!=b.estimate ? a.estimate>b.estimate : a.state>b.state;};
+    std::priority_queue<Visit,std::vector<Visit>,decltype(compare)> pending(compare);
+    const int initial=first*2+(std::abs(request.sourceNormal.y())>0.5 ? 1:0);
+    distance[initial]=0;pending.push({manhattan(start,goal),0,initial});
+    const auto existing=linesFor(request.existingEdges);
+    int found=-1;
+    while(!pending.empty()) {
+        const auto current=pending.top();pending.pop();
+        if(current.distance!=distance[current.state]) continue;
+        const int vertex=current.state/2,x=vertex%width,y=vertex/width;
+        const QPointF a(xs[x],ys[y]);
+        if(vertex==last) { found=current.state;break; }
+        const int adjacent[]={x>0?vertex-1:-1,x+1<width?vertex+1:-1,y>0?vertex-width:-1,y+1<height?vertex+width:-1};
+        for(int next:adjacent) {
+            if(next<0) continue;
+            const QPointF b(xs[next%width],ys[next/width]);
+            if(vertex==first && QPointF::dotProduct(b-a,request.sourceNormal)<-0.001) continue;
+            if(next==last && QPointF::dotProduct(b-a,request.targetNormal)>0.001) continue;
+            if(!clear(a,b,obstacles)) continue;
+            if(conflicts(QLineF(a,b),QLineF(request.source,start),true) ||
+               conflicts(QLineF(a,b),QLineF(goal,request.target),true)) continue;
+            const int direction=std::abs(a.x()-b.x())<0.001 ? 1:0;
+            const int state=next*2+direction;
+            qreal cost=current.distance+manhattan(a,b)+(direction!=current.state%2 ? bendCost:0)+crossingCost(a,b,existing);
+            if(cost+0.001>=distance[state]) continue;
+            distance[state]=cost;previous[state]=current.state;
+            pending.push({cost+manhattan(b,goal),cost,state});
+        }
+    }
+    QVector<QPointF> result;
+    for(int state=found;state>=0;state=previous[state]) { const int vertex=state/2;result.prepend(QPointF(xs[vertex%width],ys[vertex/width])); }
+    return simplify(result);
 }
 }
 
-OrthogonalEdgeRouter::Result OrthogonalEdgeRouter::route(const Request& request)
-{
-	Result result;
-	result.endPoint = request.target;
-
-	const qreal lane =
-		(static_cast<int>(qHash(request.stabilityKey) % 5) - 2) * kLaneSpacing
-		+ request.laneOffset * 0.20;
-	const qreal stubLength = 24.0 + std::abs(lane) * 0.35;
-
-	const QPointF sourceLead =
-		request.source + request.sourceNormal * stubLength;
-	const QPointF targetLead =
-		request.target + request.targetNormal * stubLength;
-
-	QRectF graphBounds = request.routingBounds;
-	if (!graphBounds.isValid() || graphBounds.isEmpty()) {
-		graphBounds = QRectF(request.source, request.target).normalized();
-		for (const QRectF& rect : request.obstacles)
-			graphBounds = graphBounds.united(rect);
-	}
-
-	qreal minX = std::min(sourceLead.x(), targetLead.x());
-	qreal maxX = std::max(sourceLead.x(), targetLead.x());
-	qreal minY = std::min(sourceLead.y(), targetLead.y());
-	qreal maxY = std::max(sourceLead.y(), targetLead.y());
-
-	for (const QRectF& rect : request.obstacles) {
-		minX = std::min(minX, rect.left());
-		maxX = std::max(maxX, rect.right());
-		minY = std::min(minY, rect.top());
-		maxY = std::max(maxY, rect.bottom());
-	}
-
-	minX = std::min(minX, graphBounds.left());
-	maxX = std::max(maxX, graphBounds.right());
-	minY = std::min(minY, graphBounds.top());
-	maxY = std::max(maxY, graphBounds.bottom());
-
-	const qreal midX = (sourceLead.x() + targetLead.x()) * 0.5 + lane;
-	const qreal midY = (sourceLead.y() + targetLead.y()) * 0.5 + lane;
-	const qreal outer = 30.0 + std::abs(lane);
-
-	auto withStubs = [&](std::initializer_list<QPointF> middle) {
-		QVector<QPointF> points;
-		points << request.source << sourceLead;
-		for (const QPointF& point : middle)
-			points << point;
-		points << targetLead << request.target;
-		return points;
-	};
-
-	QVector<Candidate> candidates;
-
-	// The graph is laid out primarily from left to right. A target clearly to
-	// the left of the source is therefore a back edge (for example child.parent
-	// -> parent). Keep those connections out of the interior of the graph:
-	// they must use a corridor above or below the complete card group.
-	constexpr qreal BackEdgeTolerance = 18.0;
-	const bool backEdge =
-		request.target.x() < request.source.x() - BackEdgeTolerance;
-
-	if (backEdge) {
-		const qreal topLane =
-			graphBounds.top() - outer - std::abs(lane);
-		const qreal bottomLane =
-			graphBounds.bottom() + outer + std::abs(lane);
-
-		addCandidate(
-			candidates,
-			withStubs({
-				QPointF(sourceLead.x(), topLane),
-				QPointF(targetLead.x(), topLane)
-			}),
-			request);
-
-		addCandidate(
-			candidates,
-			withStubs({
-				QPointF(sourceLead.x(), bottomLane),
-				QPointF(targetLead.x(), bottomLane)
-			}),
-			request);
-	} else {
-		// Normal forward edges may use compact internal routes.
-		addCandidate(candidates,
-			withStubs({
-				QPointF(midX, sourceLead.y()),
-				QPointF(midX, targetLead.y())
-			}), request);
-
-		addCandidate(candidates,
-			withStubs({
-				QPointF(sourceLead.x(), midY),
-				QPointF(targetLead.x(), midY)
-			}), request);
-
-		addCandidate(candidates,
-			withStubs({
-				QPointF(sourceLead.x(), minY - outer),
-				QPointF(targetLead.x(), minY - outer)
-			}), request);
-
-		addCandidate(candidates,
-			withStubs({
-				QPointF(sourceLead.x(), maxY + outer),
-				QPointF(targetLead.x(), maxY + outer)
-			}), request);
-
-		addCandidate(candidates,
-			withStubs({
-				QPointF(minX - outer, sourceLead.y()),
-				QPointF(minX - outer, targetLead.y())
-			}), request);
-
-		addCandidate(candidates,
-			withStubs({
-				QPointF(maxX + outer, sourceLead.y()),
-				QPointF(maxX + outer, targetLead.y())
-			}), request);
-	}
-
-	if (candidates.isEmpty()) {
-		// Preserve the same policy in fallback: a back edge still leaves the
-		// graph before returning to its target.
-		const qreal fallbackY = backEdge
-			? graphBounds.top() - outer - 24.0
-			: minY - outer - 24.0;
-
-		QVector<QPointF> fallback = {
-			request.source,
-			sourceLead,
-			QPointF(sourceLead.x(), fallbackY),
-			QPointF(targetLead.x(), fallbackY),
-			targetLead,
-			request.target
-		};
-		fallback = simplify(std::move(fallback));
-
-		result.path = roundedPath(fallback, request.sourceGap);
-		result.labelPosition = labelPosition(fallback);
-		return result;
-	}
-
-	std::stable_sort(
-		candidates.begin(), candidates.end(),
-		[](const Candidate& a, const Candidate& b) {
-			return a.cost < b.cost;
-		});
-
-	const Candidate& best = candidates.first();
-	result.path = roundedPath(best.points, request.sourceGap);
-	result.labelPosition = labelPosition(best.points);
-	return result;
+OrthogonalEdgeRouter::Result OrthogonalEdgeRouter::route(const Request& request) {
+    Result result;result.endPoint=request.target;
+    QVector<QRectF> obstacles;
+    for(const auto& rect:request.obstacles) if(rect.isValid()) obstacles.append(rect.adjusted(-clearance,-clearance,clearance,clearance));
+    const QPointF direction=request.target-request.source;
+    const bool straight=manhattan(request.source,request.target)>0 &&
+        (std::abs(direction.x())<0.001 || std::abs(direction.y())<0.001) &&
+        QPointF::dotProduct(direction,request.sourceNormal)>0 &&
+        QPointF::dotProduct(direction,request.targetNormal)<=0 &&
+        std::abs(direction.x()*request.sourceNormal.y()-direction.y()*request.sourceNormal.x())<0.001 &&
+        std::abs(direction.x()*request.targetNormal.y()-direction.y()*request.targetNormal.x())<0.001;
+    if(straight && clear(request.source,request.target,obstacles) &&
+        (!request.sourceRect.isValid() || !hits(request.source,request.target,request.sourceRect.adjusted(0.1,0.1,-0.1,-0.1))) &&
+        (!request.targetRect.isValid() || !hits(request.source,request.target,request.targetRect.adjusted(0.1,0.1,-0.1,-0.1)))) {
+        result.path=pathFor({request.source,request.target},request.sourceGap);
+        result.labelPosition=(request.source+request.target)/2; return result;
+    }
+    qreal stub=20, portClearance=clearance;
+    if(QPointF::dotProduct(request.sourceNormal,request.targetNormal)<-0.99) {
+        const qreal gap=QPointF::dotProduct(direction,request.sourceNormal);
+        if(gap>0) { stub=std::min(stub,gap/2); portClearance=std::min(clearance,gap/3); }
+    }
+    const auto sourceCard=request.sourceRect.adjusted(-portClearance,-portClearance,portClearance,portClearance);
+    const auto targetCard=request.targetRect.adjusted(-portClearance,-portClearance,portClearance,portClearance);
+    const QPointF sourceLead=request.source+request.sourceNormal*stub;
+    const QPointF targetLead=request.target+request.targetNormal*stub;
+    if(!clear(request.source,sourceLead,obstacles) || !clear(targetLead,request.target,obstacles)) return result;
+    if(request.sourceRect.isValid() && hits(targetLead,request.target,sourceCard) && request.sourceRect!=request.targetRect) return result;
+    if(request.targetRect.isValid() && hits(request.source,sourceLead,targetCard) && request.sourceRect!=request.targetRect) return result;
+    if(request.sourceRect.isValid()) obstacles.append(sourceCard);
+    if(request.targetRect.isValid() && request.targetRect!=request.sourceRect) obstacles.append(targetCard);
+    auto middle=search(sourceLead,targetLead,obstacles,request);
+    if(middle.isEmpty()) return result;
+    QVector<QPointF> points{request.source};points+=middle;points.append(request.target);
+    points=simplify(points);
+    for(int i=1;i<points.size();++i) for(int j=i+1;j<points.size();++j)
+        if(conflicts(QLineF(points[i-1],points[i]),QLineF(points[j-1],points[j]),j==i+1)) return result;
+    // Validate the complete path, including the two mandatory port leads.
+    // A missing route stays empty; no unchecked line is drawn through a card.
+    for(int i=1;i<points.size();++i) {
+        for(const auto& obstacle:request.obstacles)
+            if(hits(points[i-1],points[i],obstacle.adjusted(-clearance,-clearance,clearance,clearance))) return result;
+        for(const auto& card:{request.sourceRect,request.targetRect})
+            if(card.isValid() && hits(points[i-1],points[i],card.adjusted(0.1,0.1,-0.1,-0.1))) return result;
+    }
+    result.path=pathFor(points,request.sourceGap);
+    qreal longest=-1;
+    for(int i=1;i<points.size();++i) {
+        const auto length=QLineF(points[i-1],points[i]).length();
+        if(length>longest) {longest=length;result.labelPosition=(points[i-1]+points[i])/2;}
+    }
+    return result;
 }
 
-OrthogonalEdgeRouter::Result OrthogonalEdgeRouter::routeSelfLoop(
-	const Request& request, const QRectF& cardRect)
-{
-	Result result;
-	const qreal lane = 26.0 + static_cast<int>(qHash(request.stabilityKey) % 4) * kLaneSpacing;
-	const QPointF end(cardRect.center().x(), cardRect.top());
-	const qreal right = cardRect.right() + lane;
-	const qreal top = cardRect.top() - lane;
-	QVector<QPointF> points = {
-		request.source,
-		QPointF(right, request.source.y()),
-		QPointF(right, top),
-		QPointF(end.x(), top),
-		end
-	};
-	result.path = roundedPath(points, request.sourceGap);
-	result.labelPosition = labelPosition(points);
-	result.endPoint = end;
-	return result;
+OrthogonalEdgeRouter::Result OrthogonalEdgeRouter::routeSelfLoop(const Request& request,const QRectF& cardRect) {
+    Request loop=request;
+    loop.sourceRect=cardRect;loop.targetRect=cardRect;
+    loop.target=QPointF(cardRect.center().x(),cardRect.top());loop.targetNormal=QPointF(0,-1);
+    return route(loop);
 }
