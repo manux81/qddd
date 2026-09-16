@@ -397,10 +397,34 @@ static void appendCircularArc(QPainterPath& path,
 // GraphicalNodeItem
 // ------------------------------------------------------------
 
+// Scene items own their displayed tree. The debugger may replace roots or
+// children between asynchronous replies, before a variablesUpdated notification.
+static std::unique_ptr<DebugVariable> copyDisplayVariable(const DebugVariable* source,
+                                                        DebugVariable* parent = nullptr)
+{
+    auto copy = std::make_unique<DebugVariable>();
+    if (!source) return copy;
+    copy->name=source->name;
+    copy->expression=source->fullPath();
+    copy->value=source->value;
+    copy->type=source->type;
+    copy->address=source->address;
+    copy->pointeeAddress=source->pointeeAddress;
+    copy->isPointer=source->isPointer;
+    copy->hasChildren=source->hasChildren;
+    copy->isWatch=source->isWatch;
+    copy->enabled=source->enabled;
+    copy->parent=parent;
+    for (const auto& child : source->children)
+        copy->children.push_back(copyDisplayVariable(child.get(),copy.get()));
+    return copy;
+}
+
 GraphicalNodeItem::GraphicalNodeItem(DebugVariable* node,
 	                                 DebuggerSession* session,
 	                                 QString layoutKey)
-	: m_node(node)
+	: m_displaySnapshot(copyDisplayVariable(node))
+    , m_node(m_displaySnapshot.get())
 	, m_session(session)
 	, m_layoutKey(std::move(layoutKey))
 {
@@ -548,13 +572,19 @@ void GraphicalNodeItem::drawHeader(QPainter* p, const QRectF& r)
 	if (!m_node->enabled)
 		t += QObject::tr("  [disabled]");
 
-	const QString visibleTitle = p->fontMetrics().elidedText(
-		t, Qt::ElideMiddle, qMax(1, int(h.width()) - 24));
-	p->drawText(
-		h.adjusted(12, 0, -12, 0),
-		Qt::AlignVCenter | Qt::AlignLeft,
-		visibleTitle
-	);
+    const bool hasOutgoing=std::any_of(m_edges.cbegin(),m_edges.cend(),[this](const auto* edge) {
+        return edge->sourceNode()==this;
+    });
+    const int rightInset=hasOutgoing ? 34 : 12;
+    const QString visibleTitle=p->fontMetrics().elidedText(t,Qt::ElideMiddle,qMax(1,int(h.width())-12-rightInset));
+    p->drawText(h.adjusted(12,0,-rightInset,0),Qt::AlignVCenter|Qt::AlignLeft,visibleTitle);
+    if(hasOutgoing) {
+        const auto socket=outputSocketRect();
+        p->setPen(QPen(QColor(180,180,180,210),2));
+        p->setBrush(Qt::NoBrush);
+        p->drawLine(QPointF(socket.right(),socket.center().y()),QPointF(h.right(),socket.center().y()));
+        p->drawEllipse(socket);
+    }
 }
 
 
@@ -741,10 +771,12 @@ void GraphicalNodeItem::setPage(int page, int pageCount)
 }
 
 void GraphicalNodeItem::mousePressEvent(QGraphicsSceneMouseEvent *e) {
-	if (e->pos().y() < HeaderHeight) {
+	if (e->button() == Qt::LeftButton && e->pos().y() >= 0 && e->pos().y() < HeaderHeight) {
 		m_dragStartPosition = pos();
+        m_dragStartScenePosition = e->scenePos();
 		m_draggingHeader = true;
-		return QGraphicsItem::mousePressEvent(e);
+        e->accept();
+        return;
 	}
 	if (e->button() != Qt::LeftButton)
 		return QGraphicsItem::mousePressEvent(e);
@@ -808,9 +840,20 @@ void GraphicalNodeItem::wheelEvent(QGraphicsSceneWheelEvent* event)
 	event->accept();
 }
 
+void GraphicalNodeItem::mouseMoveEvent(QGraphicsSceneMouseEvent* event)
+{
+    if (m_draggingHeader) {
+        setPos(m_dragStartPosition + event->scenePos() - m_dragStartScenePosition);
+        event->accept();
+        return;
+    }
+    event->ignore();
+}
+
 void GraphicalNodeItem::mouseReleaseEvent(QGraphicsSceneMouseEvent* event)
 {
-	QGraphicsItem::mouseReleaseEvent(event);
+    if (!m_draggingHeader) { event->ignore(); return; }
+    event->accept();
 	if (m_draggingHeader && QLineF(m_dragStartPosition, pos()).length() > 1.0 &&
 	    !m_layoutKey.isEmpty() && m_onUserMoved) {
 		m_onUserMoved(m_layoutKey, pos());
@@ -820,13 +863,13 @@ void GraphicalNodeItem::mouseReleaseEvent(QGraphicsSceneMouseEvent* event)
 
 void GraphicalNodeItem::rebind(DebugVariable* node)
 {
-    // The session may already have released the previous DebugVariable tree.
-    // Install the new pointer before anything can lazily access cached rows.
-    m_node = node;
+    auto replacement=copyDisplayVariable(node);
     prepareGeometryChange();
     m_expanded.clear();
     m_cachedRows.clear();
-    m_rowsDirty = true;
+    m_rowsDirty=true;
+    m_displaySnapshot=std::move(replacement);
+    m_node=m_displaySnapshot.get();
     restoreExpandedExpressions(m_expandedExpressionState);
     update();
 }
@@ -860,6 +903,7 @@ void GraphicalNodeItem::recalculateWidth()
 void GraphicalNodeItem::addEdge(GraphicalEdgeItem* e)
 {
 	m_edges << e;
+    update();
 }
 
 void GraphicalNodeItem::setPositionChangedCallback(
@@ -882,6 +926,11 @@ void GraphicalNodeItem::setGeometryChangedCallback(std::function<void()> cb)
 QPointF GraphicalNodeItem::inputPort() const
 {
 	return mapToScene(QPointF(0, HeaderHeight / 2));
+}
+
+QRectF GraphicalNodeItem::outputSocketRect() const
+{
+    return QRectF(m_width-12-SocketRadius,HeaderHeight/2.0-SocketRadius,SocketRadius*2,SocketRadius*2);
 }
 
 QPointF GraphicalNodeItem::outputPortFor(DebugVariable* child) const
@@ -1066,7 +1115,7 @@ void GraphicalEdgeItem::tick()
 
 	const QPointF start = m_pos[0];
 	const QPointF end = m_pos[SEGMENTS - 1];
-	const qreal sourceGap = SocketRadius + 1.5;
+	const qreal sourceGap = 0.0;
 
 	OrthogonalEdgeRouter::Request request;
 	request.sourceRect = visibleCardRect(m_from);
@@ -1165,23 +1214,6 @@ void GraphicalEdgeItem::paint(
 
 	const QColor edgeColor = pen().color();
 
-	// Draw a hollow source socket. The edge itself starts outside the socket,
-	// so its center remains genuinely transparent.
-	painter->save();
-
-	QPen socketPen(edgeColor);
-	socketPen.setWidthF(2.0);
-	socketPen.setCapStyle(Qt::RoundCap);
-	socketPen.setJoinStyle(Qt::RoundJoin);
-
-	painter->setPen(socketPen);
-	painter->setBrush(Qt::NoBrush);
-	painter->drawEllipse(
-		m_pos[0],
-		SocketRadius,
-		SocketRadius);
-
-	painter->restore();
 
 	const QPainterPath edgePath = path();
 	if (edgePath.isEmpty())
@@ -1429,7 +1461,7 @@ void GraphicalVariablesView::refresh()
 {
     qCDebug(debuggerUiLog) << "refresh graph";
 	if (!m_session) return;
-	if (m_refreshInProgress) {
+	if (m_refreshInProgress || m_modalGraphInteraction) {
 		m_refreshPending = true;
 		return;
 	}
@@ -1774,6 +1806,16 @@ void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent* event)
 
 void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
 {
+    const bool previousInteraction=m_modalGraphInteraction;
+    m_modalGraphInteraction=true;
+    struct ResumeUpdates { std::function<void()> resume; ~ResumeUpdates() { resume(); } } resume{
+        [this,previousInteraction] {
+            m_modalGraphInteraction=previousInteraction;
+            if (!m_modalGraphInteraction && m_refreshPending)
+                QTimer::singleShot(0,this,&GraphicalVariablesView::refresh);
+        }
+    };
+
 	auto* item = qgraphicsitem_cast<GraphicalNodeItem*>(itemAt(event->pos()));
 	if (!item) {
 		QMenu menu(this);
@@ -1970,13 +2012,14 @@ void GraphicalVariablesView::editVariableValue(DebugVariable* variable)
 {
 	if (!m_session || !variable || !variable->enabled || variable->hasChildren)
 		return;
+	const QString expression=variable->fullPath();
 	bool accepted = false;
 	const QString value = QInputDialog::getText(
 		this, tr("Edit value"),
-		tr("New value for %1:").arg(variable->fullPath()),
+		tr("New value for %1:").arg(expression),
 		QLineEdit::Normal, variable->value, &accepted);
 	if (accepted)
-		m_session->setVariable(variable->fullPath(), value);
+		m_session->setVariable(expression, value);
 }
 
 void GraphicalVariablesView::openPointerNode(DebugVariable* ptrVar, GraphicalNodeItem* fromItem)
@@ -2321,6 +2364,17 @@ void GraphicalVariablesView::scheduleEdgeRouting()
         }
         for (auto* edge : edges) if(edge->isVisible()) {
             edge->setDisplayExpressions(labels.value(edge)); edge->rerouteNow();
+        }
+        // Routing must never pan the viewport while a card follows the mouse.
+        // Grow bounds only when necessary; shrinking/recentering every reroute
+        // changes scrollbar values and makes dragging appear to scroll itself.
+        if (!m_scene->mouseGrabberItem()) {
+            const QRectF needed=m_scene->itemsBoundingRect().adjusted(-80,-80,80,80);
+            if (!m_scene->sceneRect().contains(needed)) {
+                const QPointF center=mapToScene(viewport()->rect().center());
+                m_scene->setSceneRect(m_scene->sceneRect().united(needed));
+                centerOn(center);
+            }
         }
     });
 }

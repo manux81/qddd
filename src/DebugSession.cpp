@@ -1,3 +1,5 @@
+#include "DebuggerLogging.h"
+#include "ProcessDebuggerTransport.h"
 #include "GdbMiSession.h"
 #include "RuntimeGraphBuilder.h"
 #include <QDateTime>
@@ -139,6 +141,13 @@ static bool looksLikePointer(const QString& v)
 {
     const QString s = v.trimmed().toLower();
     return s.startsWith("0x") && s.size() > 2;
+}
+
+static bool isPointerValue(const QString& type, const QString& value)
+{
+    if (type.trimmed().isEmpty()) return looksLikePointer(value);
+    static const QRegularExpression pointerType(QStringLiteral(R"(\*\s*(?:(?:const|volatile)\s*)*$)"));
+    return pointerType.match(type.trimmed()).hasMatch();
 }
 
 static bool looksLikeStruct(const QString& v)
@@ -380,18 +389,14 @@ QString DebugVariable::fullPath() const
 // DebuggerSession
 // ============================================================================
 
-GdbMiSession::GdbMiSession(QObject* parent)
-    : DebuggerSession(parent)
+GdbMiSession::GdbMiSession(QObject* parent, std::unique_ptr<DebuggerTransport> transport)
+    : DebuggerSession(parent), m_transport(transport ? std::move(transport) : std::make_unique<ProcessDebuggerTransport>())
 {
-    connect(&m_debuggerProcess,
-            &QProcess::readyReadStandardOutput,
-            this,
-            &GdbMiSession::onDebuggerOutputReady);
-
-    connect(&m_debuggerProcess,
-            QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this,
-            &GdbMiSession::onDebuggerFinished);
+    connect(m_transport.get(), &DebuggerTransport::bytesReady, this, &GdbMiSession::onDebuggerOutputReady);
+    connect(m_transport.get(), &DebuggerTransport::finished, this, [this](int code, bool crashed) {
+        onDebuggerFinished(code, crashed ? QProcess::CrashExit : QProcess::NormalExit);
+    });
+    connect(m_transport.get(), &DebuggerTransport::diagnostic, this, &DebuggerSession::debuggerOutput);
 
 	m_commandTimeoutTimer.setSingleShot(true);
 	connect(&m_commandTimeoutTimer, &QTimer::timeout,
@@ -399,7 +404,15 @@ GdbMiSession::GdbMiSession(QObject* parent)
 
 }
 
-GdbMiSession::~GdbMiSession() = default;
+GdbMiSession::~GdbMiSession()
+{
+    m_commandTimeoutTimer.stop();
+    // Process termination must not call back into a partially destroyed session.
+    disconnect(m_transport.get(), nullptr, this, nullptr);
+    disconnect(&m_stlinkProcess, nullptr, this, nullptr);
+    if (m_transport->isRunning()) { m_transport->kill(); m_transport->waitForFinished(1000); }
+    if (m_stlinkProcess.state() != QProcess::NotRunning) { m_stlinkProcess.kill(); m_stlinkProcess.waitForFinished(1000); }
+}
 
 void GdbMiSession::setBackend(Backend backend)
 {
@@ -479,7 +492,7 @@ void GdbMiSession::startSession(const QString& executablePath)
 	// QProcess::start() is ignored when a previous debugger is still alive.
 	// Make target/profile switches deterministic and prevent commands intended
 	// for an ARM GDB from being sent to an earlier host GDB instance.
-	if (m_debuggerProcess.state() != QProcess::NotRunning)
+	if (m_transport->isRunning())
 		terminateSession();
 	resetSessionState();
 	m_commandChannelReliable = true;
@@ -548,11 +561,11 @@ void GdbMiSession::startSession(const QString& executablePath)
         break;
     }
 
-    m_debuggerProcess.start(debugger, args);
+    m_transport->start(debugger, args);
 
-    if (!m_debuggerProcess.waitForStarted(5000)) {
+    if (!m_transport->waitForStarted(5000)) {
 		const QString message = tr("Failed to start debugger: %1 (%2)")
-		                            .arg(debugger, m_debuggerProcess.errorString());
+		                            .arg(debugger, m_transport->errorString());
 		qWarning().noquote() << message;
 		resetSessionState();
 		emit targetStartFailed(message);
@@ -615,9 +628,9 @@ void GdbMiSession::terminateSession()
 {
 	resetSessionState();
 
-    if (m_debuggerProcess.state() != QProcess::NotRunning) {
-        m_debuggerProcess.kill();
-        m_debuggerProcess.waitForFinished(1000);
+    if (m_transport->isRunning()) {
+        m_transport->kill();
+        m_transport->waitForFinished(1000);
     }
 
     if (m_stlinkProcess.state() != QProcess::NotRunning) {
@@ -628,7 +641,7 @@ void GdbMiSession::terminateSession()
 
 bool GdbMiSession::isRunning() const
 {
-    return m_debuggerProcess.state() != QProcess::NotRunning;
+    return m_transport->isRunning();
 }
 
 // ============================================================================
@@ -1057,7 +1070,7 @@ void GdbMiSession::selectStackFrame(int frameIndex)
 void GdbMiSession::enqueueCommand(const QString& command,
                                     std::function<void(const QString&)> cb)
 {
-	if (m_debuggerProcess.state() == QProcess::NotRunning || !m_commandChannelReliable) {
+	if (!m_transport->isRunning() || !m_commandChannelReliable) {
 		emit debuggerOutput(tr("MI command rejected because the debugger session is not ready: %1\n")
 		                    .arg(command));
 		return;
@@ -1075,7 +1088,7 @@ void GdbMiSession::enqueueCommand(const QString& command,
 void GdbMiSession::processCommandQueue()
 {
 	if (m_commandInFlight || m_commandQueue.isEmpty() || !m_commandChannelReliable
-	    || m_debuggerProcess.state() == QProcess::NotRunning)
+	    || !m_transport->isRunning())
         return;
 
     m_commandInFlight = true;
@@ -1087,11 +1100,11 @@ void GdbMiSession::processCommandQueue()
 		emit downloadStarted();
 
     qDebug().noquote() << "[MI SEND]" << wire;
-	const qint64 written = m_debuggerProcess.write((wire + "\n").toUtf8());
+	const qint64 written = m_transport->write((wire + "\n").toUtf8());
 	if (written < 0) {
 		abortCommandChannel(tr("Failed to write MI command %1: %2")
 		                    .arg(m_inFlight.token)
-		                    .arg(m_debuggerProcess.errorString()));
+		                    .arg(m_transport->errorString()));
 		return;
 	}
 	m_commandTimeoutTimer.start(m_commandTimeoutMs);
@@ -1099,13 +1112,13 @@ void GdbMiSession::processCommandQueue()
 
 void GdbMiSession::onDebuggerOutputReady()
 {
-	consumeDebuggerOutput(m_debuggerProcess.readAllStandardOutput());
+	consumeDebuggerOutput(m_transport->read());
 }
 
 void GdbMiSession::onDebuggerFinished(int exitCode,
                                          QProcess::ExitStatus)
 {
-	consumeDebuggerOutput(m_debuggerProcess.readAllStandardOutput());
+	consumeDebuggerOutput(m_transport->read());
 	const QByteArray remainder = m_debuggerOutputBuffer.takeRemainder();
 	if (!remainder.isEmpty()) {
 		emit debuggerOutput(tr("Debugger terminated with an incomplete MI record; processing the residual fragment.\n"));
@@ -1138,10 +1151,13 @@ void GdbMiSession::resetSessionState()
 	m_debuggerOutputBuffer.clear();
 	m_targetExecuting = false;
 	m_currentThreadId.clear();
+	++m_stopStateGeneration;
+	m_snapshotArmed = false;
 	m_pendingStack = false;
 	m_pendingVariables = false;
 	m_pendingPointerExpansions = 0;
 	m_pendingAddressRequests = 0;
+	m_pendingWatchRequests = 0;
 	m_captureDisassembly = false;
 	m_disassemblyBuffer.clear();
 	m_reverseRecordingRequested = false;
@@ -1164,13 +1180,14 @@ void GdbMiSession::resetSessionState()
 
 void GdbMiSession::abortCommandChannel(const QString& reason)
 {
+    qCWarning(debuggerSessionLog) << reason;
 	if (!m_commandChannelReliable)
 		return;
 	m_commandChannelReliable = false;
 	emit debuggerOutput(tr("MI command channel aborted: %1\n").arg(reason));
 	resetSessionState();
-	if (m_debuggerProcess.state() != QProcess::NotRunning)
-		m_debuggerProcess.kill();
+	if (m_transport->isRunning())
+		m_transport->kill();
 }
 
 void GdbMiSession::onCommandTimeout()
@@ -1204,10 +1221,10 @@ void GdbMiSession::dispatchDebuggerMessage(const QString& rawLine)
     if (!parsed.valid() && (line.startsWith('^') || line.startsWith('*') ||
         line.startsWith('=') || line.startsWith('+') || line.startsWith('~') ||
         line.startsWith('@') || line.startsWith('&') || line.front().isDigit())) {
-        qWarning().noquote() << "[MI protocol]" << parsed.error;
+        qCWarning(debuggerProtocolLog).noquote() << "[MI protocol]" << parsed.error;
         return;
     }
-	qDebug().noquote() << "[MI RECV]" << rawLine;
+	qCDebug(debuggerProtocolLog).noquote() << "[MI RECV]" << rawLine;
 	// ------------------------------------------------------------
 	// 1) Strip MI token (if present)
 	//    e.g. "3^running" -> tok=3, line="^running"
@@ -1571,7 +1588,22 @@ void GdbMiSession::handleBreakpointDeleted(const QString& line)
 
 void GdbMiSession::requestStopState()
 {
-    enqueueCommand("-thread-info", [this](const QString& reply) {
+	if (!isRunning() || !m_commandChannelReliable)
+		return;
+
+	// A new refresh supersedes outstanding work for the previous stop/frame.
+	// Arm before enqueuing anything so every enrichment belongs to this barrier.
+	const quint64 refreshGeneration = ++m_stopStateGeneration;
+	m_snapshotArmed = true;
+	m_pendingStack = true;
+	m_pendingVariables = true;
+	m_pendingPointerExpansions = 0;
+	m_pendingAddressRequests = 0;
+	m_pendingWatchRequests = 0;
+	m_restoredHistoricalVariables = false;
+
+    enqueueCommand("-thread-info", [this, refreshGeneration](const QString& reply) {
+		if (refreshGeneration != m_stopStateGeneration) return;
         const auto record = MiParser::parse(reply);
         const auto* threads = record.payload.field("threads");
         if (!record.valid() || record.resultClass != "done" || !threads) return;
@@ -1588,25 +1620,25 @@ void GdbMiSession::requestStopState()
         emit threadsUpdated();
     });
 
-    m_pendingStack = true;
-    m_pendingVariables = true;
-
     enqueueCommand("-stack-list-frames",
-        [this](const QString& reply) {
+        [this, refreshGeneration](const QString& reply) {
+			if (refreshGeneration != m_stopStateGeneration) return;
             parseStackFromReply(reply);
             m_pendingStack = false;
             emit stackFramesUpdated();
-            finalizeSnapshotIfReady();
+            finalizeSnapshotIfReady(refreshGeneration);
         });
 
-    enqueueCommand("-stack-select-frame 0");
+    enqueueCommand(QString("-stack-select-frame %1").arg(m_selectedFrame));
     enqueueCommand("-stack-list-variables --all-values",
-        [this](const QString& reply) {
+        [this, refreshGeneration](const QString& reply) {
+			if (refreshGeneration != m_stopStateGeneration) return;
             parseVarsFromReply(reply);
+			if (refreshGeneration != m_stopStateGeneration) return;
 			requestWatchValues();
+			if (refreshGeneration != m_stopStateGeneration) return;
             m_pendingVariables = false;
-            //emit variablesUpdated();
-            finalizeSnapshotIfReady();
+            finalizeSnapshotIfReady(refreshGeneration);
         });
 }
 
@@ -1627,27 +1659,39 @@ void GdbMiSession::requestWatchValue(const QString& expression)
 {
 	if (!m_watchExpressions.contains(expression) ||
 	    m_disabledWatchExpressions.contains(expression) || !isRunning() ||
-	    m_targetExecuting)
+	    !m_commandChannelReliable || m_targetExecuting)
 		return;
 
+	const quint64 refreshGeneration = m_stopStateGeneration;
+	const bool contributesToSnapshot = m_snapshotArmed;
+	if (contributesToSnapshot)
+		++m_pendingWatchRequests;
 	enqueueCommand(
 		QStringLiteral("-data-evaluate-expression %1").arg(miQuote(expression)),
-		[this, expression](const QString& reply) {
-			if (!m_watchExpressions.contains(expression) ||
-			    m_disabledWatchExpressions.contains(expression))
+		[this, expression, refreshGeneration, contributesToSnapshot](const QString& reply) {
+			if (refreshGeneration != m_stopStateGeneration)
 				return;
 
-			QString value = miGet(reply, QStringLiteral("value"));
-			const QString type = miGet(reply, QStringLiteral("type"));
-			if (value.isEmpty()) {
-				const QString error = miGet(reply, QStringLiteral("msg"));
-				value = error.isEmpty() ? tr("<unavailable>")
-				                        : QStringLiteral("<%1>").arg(error);
+			if (m_watchExpressions.contains(expression) &&
+			    !m_disabledWatchExpressions.contains(expression)) {
+				QString value = miGet(reply, QStringLiteral("value"));
+				const QString type = miGet(reply, QStringLiteral("type"));
+				if (value.isEmpty()) {
+					const QString error = miGet(reply, QStringLiteral("msg"));
+					value = error.isEmpty() ? tr("<unavailable>")
+					                        : QStringLiteral("<%1>").arg(error);
+				}
+				m_watchValueCache.insert(expression, value);
+				m_watchTypeCache.insert(expression, type);
+				upsertWatchVariable(expression, value, type, true);
 			}
-			m_watchValueCache.insert(expression, value);
-			m_watchTypeCache.insert(expression, type);
-			upsertWatchVariable(expression, value, type, true);
-			emit variablesUpdated();
+			// Removed/disabled watches still complete their part of the refresh.
+			if (contributesToSnapshot) {
+				--m_pendingWatchRequests;
+				finalizeSnapshotIfReady(refreshGeneration);
+			} else {
+				emit variablesUpdated();
+			}
 		});
 }
 
@@ -1668,7 +1712,7 @@ void GdbMiSession::upsertWatchVariable(const QString& expression,
 	watch->type = type;
 	watch->isWatch = true;
 	watch->enabled = enabled;
-	watch->isPointer = enabled && looksLikePointer(watch->value);
+	watch->isPointer = enabled && isPointerValue(watch->type, watch->value);
 	watch->pointeeAddress = watch->isPointer ? extractHexAddress(watch->value) : QString();
 	watch->hasChildren = enabled && looksLikeStruct(watch->value);
 	if (enabled)
@@ -1711,9 +1755,9 @@ void GdbMiSession::parseStackFromReply(const QString& replyBlob)
 
 void GdbMiSession::parseVarsFromReply(const QString& replyBlob)
 {
+	const quint64 refreshGeneration = m_stopStateGeneration;
     m_variables.clear();
 	m_restoredHistoricalVariables = false;
-	m_pendingPointerExpansions = 0;
 
     int idx = replyBlob.indexOf("variables=[");
     if (idx < 0)
@@ -1727,7 +1771,7 @@ void GdbMiSession::parseVarsFromReply(const QString& replyBlob)
         dv->value   = miGet(vblob, "value");
         dv->type    = miGet(vblob, "type");
 
-        dv->isPointer   = looksLikePointer(dv->value);
+        dv->isPointer   = isPointerValue(dv->type, dv->value);
 		dv->pointeeAddress = dv->isPointer ? extractHexAddress(dv->value) : QString();
         dv->hasChildren = looksLikeStruct(dv->value);
         dv->parent      = nullptr;
@@ -1745,39 +1789,42 @@ void GdbMiSession::parseVarsFromReply(const QString& replyBlob)
 
 			// If this is a pointer, try to dereference it and parse inline struct
 			// fields (when available) so the UI can expand it.
-			const bool looksNullPtr =
-				raw->value.trimmed().toLower().startsWith("0x0") ||
-				raw->value.trimmed().toLower() == "0x00000000";
+            bool pointerAddressValid = false;
+            const auto pointerAddress = raw->pointeeAddress.toULongLong(&pointerAddressValid, 0);
+            const bool looksNullPtr = !pointerAddressValid || pointerAddress == 0;
 
 			if (raw->isPointer && !looksNullPtr && raw->type.contains('*')) {
 				++m_pendingPointerExpansions;
 				enqueueCommand(
 					QString("-data-evaluate-expression \"*%1\"").arg(raw->fullPath()),
-					[this, raw](const QString& reply) {
+					[this, raw, refreshGeneration](const QString& reply) {
+						if (refreshGeneration != m_stopStateGeneration) return;
 						const QString deref = miGet(reply, "value").trimmed();
 						if (!deref.isEmpty() && looksLikeStruct(deref)) {
 							raw->children.clear();
 							expandInlineStructIntoChildren(raw, deref, 0, 2);
 						}
 
-						if (--m_pendingPointerExpansions == 0 && m_pendingAddressRequests == 0)
-							emit variablesUpdated();
+						--m_pendingPointerExpansions;
+						finalizeSnapshotIfReady(refreshGeneration);
 					}
 				);
+				if (refreshGeneration != m_stopStateGeneration) return;
 			}
 
 			++m_pendingAddressRequests;
 			enqueueCommand(QString("-data-evaluate-expression \"&%1\"")
 			                   .arg(raw->fullPath()),
-			               [this, raw](const QString &reply) {
-				               QString addr = extractHexAddress(reply);
+			               [this, raw, refreshGeneration](const QString &reply) {
+				               if (refreshGeneration != m_stopStateGeneration) return;
+				               QString addr = MiParser::parse(reply).resultClass == "done"
+                                   ? extractHexAddress(miGet(reply, "value")) : QString();
 				               if (!addr.isEmpty())
 					               raw->address = addr;
-								if (--m_pendingAddressRequests == 0) {
-									if (m_pendingPointerExpansions == 0)
-										emit variablesUpdated();
-								}
+				               --m_pendingAddressRequests;
+				               finalizeSnapshotIfReady(refreshGeneration);
 			               });
+			if (refreshGeneration != m_stopStateGeneration) return;
 		}
     }
 
@@ -1794,11 +1841,15 @@ void GdbMiSession::parseVarsFromReply(const QString& replyBlob)
 // Snapshot
 // ============================================================================
 
-void GdbMiSession::finalizeSnapshotIfReady()
+void GdbMiSession::finalizeSnapshotIfReady(quint64 refreshGeneration)
 {
-    if (m_pendingStack || m_pendingVariables)
+	if (refreshGeneration != m_stopStateGeneration || !m_snapshotArmed ||
+	    m_pendingStack || m_pendingVariables || m_pendingPointerExpansions != 0 ||
+	    m_pendingAddressRequests != 0 || m_pendingWatchRequests != 0)
         return;
 
+	// Disarm before emitting signals: subscribers may start another refresh.
+	m_snapshotArmed = false;
 	if (m_restoredHistoricalVariables) {
 		m_restoredHistoricalVariables = false;
 		emit variablesUpdated();
@@ -1809,7 +1860,11 @@ void GdbMiSession::finalizeSnapshotIfReady()
 
 void GdbMiSession::captureExecutionSnapshot()
 {
-    auto graph = buildRuntimeGraph(m_variables);
+    qCDebug(debuggerSnapshotsLog) << "capture" << m_stepCounter;
+    auto graph = buildRuntimeGraph(
+        m_variables,
+        m_lastStopFunction + ":" + m_currentThreadId + ":" + QString::number(m_selectedFrame),
+        m_currentThreadId);
     m_graphChanges = diffRuntimeGraphs(m_objectGraph, graph);
     m_objectGraph = std::move(graph);
     ExecutionSnapshot snapshot;
@@ -1824,7 +1879,10 @@ void GdbMiSession::captureExecutionSnapshot()
     std::function<void(const DebugVariable*)> capture = [&](const DebugVariable* var) {
         if (!var) return;
         snapshot.variableValues.insert(var->fullPath(), var->value);
-        snapshot.objectIds.insert(var->fullPath(), RuntimeObjectGraph::identityFor(var->address, var->type, var->fullPath()));
+        const auto* binding = m_objectGraph.reference(
+            RuntimeObjectGraph::referenceIdentity(QStringLiteral("variables"), var->fullPath()));
+        if (binding)
+            snapshot.objectIds.insert(var->fullPath(), binding->destinationObjectId);
         for (const auto& child : var->children) capture(child.get());
     };
     for (const auto& var : m_variables) capture(var.get());
@@ -1866,7 +1924,7 @@ bool GdbMiSession::restoreHistoricalVariables()
 			const auto value = snapshot.variableValues.constFind(variable->fullPath());
 			if (value != snapshot.variableValues.constEnd()) {
 				variable->value = value.value();
-				variable->isPointer = looksLikePointer(variable->value);
+				variable->isPointer = isPointerValue(variable->type, variable->value);
 				variable->pointeeAddress = variable->isPointer ? extractHexAddress(variable->value) : QString();
 				variable->hasChildren = looksLikeStruct(variable->value);
 				variable->children.clear();
@@ -2158,13 +2216,21 @@ void GdbMiSession::evaluateExpressionValue(
 
 void GdbMiSession::replaceExternalVariables(const QMap<QString, QString>& values)
 {
+	// Invalidate callbacks that hold pointers into the variables being replaced.
+	++m_stopStateGeneration;
+	m_snapshotArmed = false;
+	m_pendingStack = false;
+	m_pendingVariables = false;
+	m_pendingPointerExpansions = 0;
+	m_pendingAddressRequests = 0;
+	m_pendingWatchRequests = 0;
 	m_variables.clear();
 	for (auto it = values.cbegin(); it != values.cend(); ++it) {
 		auto variable = std::make_unique<DebugVariable>();
 		variable->name = it.key();
 		variable->value = it.value();
 		variable->isWatch = m_watchExpressions.contains(it.key());
-		variable->isPointer = looksLikePointer(variable->value);
+		variable->isPointer = isPointerValue(variable->type, variable->value);
 		variable->pointeeAddress = variable->isPointer ? extractHexAddress(variable->value) : QString();
 		variable->hasChildren = looksLikeStruct(variable->value);
 		expandInlineStructIntoChildren(variable.get(), variable->value, 0, 2);
@@ -2200,11 +2266,12 @@ const QSet<QString>& GdbMiSession::changedPaths() const { return m_changedPaths;
 void GdbMiSession::readMemory(const QString& address, int byteCount,
                                  std::function<void(MemoryRead)> callback)
 {
+    qCDebug(debuggerMemoryLog) << "read bytes" << byteCount;
     if (!callback) return;
     if (address.trimmed().isEmpty() || byteCount < 1 || byteCount > 65536) {
         callback({address, {}, tr("Specify an address and 1–65536 bytes.")}); return;
     }
-    if (m_targetExecuting || m_debuggerProcess.state() == QProcess::NotRunning || !m_commandChannelReliable) {
+    if (m_targetExecuting || !m_transport->isRunning() || !m_commandChannelReliable) {
         callback({address, {}, tr("Memory is available only while the debugger is stopped.")}); return;
     }
     enqueueCommand(QString("-data-read-memory-bytes %1 %2").arg(miQuote(address)).arg(byteCount),
@@ -2268,17 +2335,24 @@ void GdbMiSession::insertBreakpoint(const BreakpointRequest& request)
         if (request.ignoreCount) command += "-i " + QString::number(request.ignoreCount) + " ";
         break;
     }
-    enqueueCommand(command + miQuote(request.location), [this](const QString& reply) {
+    enqueueCommand(command + miQuote(request.location), [this, request](const QString& reply) {
         const auto record = MiParser::parse(reply);
         if (record.resultClass == "error") { emit debuggerOutput(miGet(reply, "msg")+"\n"); return; }
         handleBreakpointEvent(reply);
+        if (request.kind == BreakpointRequest::WriteWatch || request.kind == BreakpointRequest::ReadWatch || request.kind == BreakpointRequest::AccessWatch) {
+            const int id = miGet(reply, "number").toInt();
+            if (id > 0) {
+                if (!request.condition.isEmpty()) updateBreakpointCondition(id, request.condition);
+                if (request.ignoreCount) updateBreakpointIgnoreCount(id, request.ignoreCount);
+            }
+        }
     });
 }
 
 void GdbMiSession::inspectValue(const QString& expression, std::function<void(SemanticValue)> callback)
 {
     if (!callback) return;
-    if (m_targetExecuting || m_debuggerProcess.state() == QProcess::NotRunning || !m_commandChannelReliable) {
+    if (m_targetExecuting || !m_transport->isRunning() || !m_commandChannelReliable) {
         SemanticValue value; value.error = tr("Stop the debugger before inspecting a value."); callback(value); return;
     }
     enqueueCommand("-enable-pretty-printing");

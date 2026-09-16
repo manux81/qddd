@@ -7,6 +7,7 @@
 #include <QFileDevice>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QDebug>
 
 #include <functional>
 
@@ -33,6 +34,8 @@ QString createFakeGdb(QTemporaryDir& temp)
 
 	static const char source[] = R"SH(#!/bin/sh
 printf '(gdb)\r\n'
+stop_round=0
+supersede=0
 while IFS= read -r line; do
   token=$(printf '%s\n' "$line" | sed 's/[^0-9].*$//')
   command=${line#"$token"}
@@ -44,6 +47,47 @@ while IFS= read -r line; do
       ;;
     -data-read-memory-bytes*)
       printf '%s^done,memory=[{begin="0x1000",offset="0x0",end="0x1004",contents="00417fff"}]\n' "$token"
+      ;;
+    -test-stop|-test-stop-superseded)
+      stop_round=$((stop_round + 1))
+      if [ "$command" = '-test-stop-superseded' ]; then supersede=1; fi
+      printf '%s^done\n*stopped,reason="breakpoint-hit",thread-id="1",frame={func="main",fullname="snapshot.cpp",line="%s"}\n' "$token" "$((stop_round + 10))"
+      ;;
+    -thread-info)
+      printf '%s^done,threads=[{id="1",name="main",state="stopped"}],current-thread-id="1"\n' "$token"
+      ;;
+    -stack-list-frames)
+      printf '%s^done,stack=[frame={level="0",func="main",fullname="snapshot.cpp",line="%s"}]\n' "$token" "$((stop_round + 10))"
+      ;;
+    -stack-list-variables*)
+      printf '%s^done,variables=[{name="ptr",value="0x2000",type="Node *"},{name="count",value="42",type="int"}]\n' "$token"
+      ;;
+    '-data-evaluate-expression "*ptr"')
+      sleep 0.01
+      printf '%s^done,value="{field = %s}"\n' "$token" "$((stop_round + 6))"
+      ;;
+    '-data-evaluate-expression "&ptr"')
+      sleep 0.01
+      if [ "$supersede" = 1 ]; then
+        supersede=0
+        stop_round=$((stop_round + 1))
+        printf '*stopped,reason="breakpoint-hit",thread-id="1",frame={func="main",fullname="snapshot.cpp",line="%s"}\n' "$((stop_round + 10))"
+        printf '%s^done,value="0xdead"\n' "$token"
+      else
+        printf '%s^done,value="0x1%s00"\n' "$token" "$stop_round"
+      fi
+      ;;
+    '-data-evaluate-expression "&count"')
+      sleep 0.01
+      printf '%s^done,value="0x1200"\n' "$token"
+      ;;
+    '-data-evaluate-expression "snapshotWatch"')
+      sleep 0.01
+      printf '%s^done,value="%s",type="int"\n' "$token" "$((stop_round + 98))"
+      ;;
+    '-data-evaluate-expression "unavailableWatch"')
+      sleep 0.01
+      printf '%s^error,msg="watch is out of scope"\n' "$token"
       ;;
     -test-multi)
       printf '~"hello\\n"\n=thread-created,id="1"\r\n%s^done,value="ok"\n' "$token"
@@ -130,6 +174,7 @@ int main(int argc, char** argv)
 	session.setBackend(DebuggerSession::Backend::GdbMi);
 	session.setGdbExecutable(fakeGdb);
 	session.setCommandTimeoutMs(1000);
+	session.setReverseMode(DebuggerSession::ReverseMode::Disabled);
 
 	int starts = 0;
 	int exits = 0;
@@ -199,6 +244,70 @@ int main(int argc, char** argv)
 	if (findWatch(QStringLiteral("replacement")) ||
 	    !session.watchExpressions().isEmpty())
 		return 22;
+
+	// The snapshot is observed at emission time, before later asynchronous
+	// replies can repair the live model. Addresses, pointer fields and both
+	// successful and failed watch evaluations must have finished already.
+	session.addWatchExpression(QStringLiteral("snapshotWatch"));
+	session.addWatchExpression(QStringLiteral("unavailableWatch"));
+	if (!waitFor([&] { return findWatch(QStringLiteral("unavailableWatch")); }))
+		return 32;
+	int snapshots = 0;
+	bool completeSnapshots = true;
+	const auto snapshotConnection = QObject::connect(
+		&session, &DebuggerSession::snapshotCaptured,
+		[&](const ExecutionSnapshot& snapshot) {
+			++snapshots;
+			const int expectedRound = snapshots == 1 ? 1 : 3;
+			const RuntimeObject* pointer = session.objectGraph().object(
+				snapshot.objectIds.value(QStringLiteral("ptr")));
+			const RuntimeObject* count = session.objectGraph().object(
+				snapshot.objectIds.value(QStringLiteral("count")));
+			completeSnapshots = completeSnapshots && pointer && count &&
+				pointer->address == QStringLiteral("0x%1").arg(0x1000 + expectedRound * 0x100, 0, 16) &&
+				count->address == QStringLiteral("0x1200") &&
+				snapshot.variableValues.value(QStringLiteral("(*(ptr)).field")) ==
+					QString::number(expectedRound + 6) &&
+				snapshot.variableValues.value(QStringLiteral("snapshotWatch")) ==
+					QString::number(expectedRound + 98) &&
+				snapshot.variableValues.value(QStringLiteral("unavailableWatch")) ==
+					QStringLiteral("<watch is out of scope>") &&
+				snapshot.threadId == QStringLiteral("1") &&
+				snapshot.line == expectedRound + 10;
+			if (!completeSnapshots) qWarning() << "Incomplete snapshot" << snapshot.variableValues << snapshot.threadId << snapshot.line << (pointer ? pointer->address : QString()) << (count ? count->address : QString());
+			for (auto it = snapshot.objectIds.cbegin(); it != snapshot.objectIds.cend(); ++it) {
+				const auto* binding = session.objectGraph().reference(
+					RuntimeObjectGraph::referenceIdentity(QStringLiteral("variables"), it.key()));
+				completeSnapshots = completeSnapshots && binding &&
+					binding->destinationObjectId == it.value();
+			}
+		});
+	session.sendRawCommand(QStringLiteral("-test-stop"));
+	if (!waitFor([&] { return snapshots >= 1; }) || !completeSnapshots ||
+	    session.executionHistory().size() != 1)
+		return 33;
+
+	// Ordinary watch requests after completion must not re-arm history capture.
+	session.addWatchExpression(QStringLiteral("lateWatch"));
+	if (!waitFor([&] { return findWatch(QStringLiteral("lateWatch")); }) || snapshots != 1)
+		return 34;
+	session.removeWatchExpression(QStringLiteral("lateWatch"));
+
+	// A new stop arrives while the previous refresh's root address request is
+	// outstanding. Its stale callbacks must neither mutate the next model nor
+	// decrement its counters or capture a partial/duplicate snapshot.
+	session.sendRawCommand(QStringLiteral("-test-stop-superseded"));
+	if (!waitFor([&] { return snapshots >= 2; }) || !completeSnapshots ||
+	    snapshots != 2 || session.executionHistory().size() != 2)
+		return 35;
+	bool snapshotQueueDrained = false;
+	session.sendRawCommand(QStringLiteral("-test-snapshot-queue-drained"),
+	                       [&](const QString&) { snapshotQueueDrained = true; });
+	if (!waitFor([&] { return snapshotQueueDrained; }) || snapshots != 2)
+		return 36;
+	QObject::disconnect(snapshotConnection);
+	session.removeWatchExpression(QStringLiteral("snapshotWatch"));
+	session.removeWatchExpression(QStringLiteral("unavailableWatch"));
 
 	bool errorDone = false;
 	bool afterErrorDone = false;

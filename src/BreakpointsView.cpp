@@ -1,3 +1,4 @@
+#include "BreakpointCreationDialog.h"
 /*
  * Copyright (c) 2026, Manuele Conti
  * All rights reserved.
@@ -233,8 +234,7 @@ void BreakpointsView::showContextMenu(const QPoint &pos) {
 		return;
 
 	QModelIndex idx = indexAt(pos);
-	if (!idx.isValid())
-		return;
+	if (!idx.isValid()) { showBreakpointCreation(m_session, this); return; }
 
 	const int row = idx.row();
 	auto *enabledItem = m_model->item(row, ColEnabled);
@@ -249,6 +249,7 @@ void BreakpointsView::showContextMenu(const QPoint &pos) {
 	menu.setAttribute(Qt::WA_TranslucentBackground);
 	menu.setMinimumWidth(220);
 
+	QAction *actAdd = menu.addAction(tr("Add breakpoint / watchpoint…"));
 	QAction *actEnable = menu.addAction(tr("Enable Breakpoint"));
 	QAction *actDisable = menu.addAction(tr("Disable Breakpoint"));
 	QAction *actCondition = menu.addAction(tr("Edit Breakpoint…"));
@@ -281,7 +282,8 @@ void BreakpointsView::showContextMenu(const QPoint &pos) {
 	if (!chosen)
 		return;
 
-	if (chosen == actDelete)
+	if (chosen == actAdd) showBreakpointCreation(m_session, this);
+	else if (chosen == actDelete)
 		m_session->removeBreakpoint(number);
 	else if (chosen == actEnable)
 		m_session->setBreakpointEnabled(number, true);

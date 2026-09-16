@@ -1,3 +1,4 @@
+#include "DebuggerLogging.h"
 #include <QRegularExpression>
 #include "RuntimeObjectGraph.h"
 
@@ -86,10 +87,13 @@ const RuntimeReference* RuntimeObjectGraph::reference(const QString& id) const
 RuntimeGraphDiff diffRuntimeGraphs(const RuntimeObjectGraph& before,
 	                                const RuntimeObjectGraph& after)
 {
+	qCDebug(debuggerGraphLog) << "diff" << before.objects().size() << after.objects().size();
 	RuntimeGraphDiff diff;
 	for (const auto& entry : after.objects()) {
 		const RuntimeObject* oldObject = before.object(entry.first);
 		if (!oldObject) { diff.addedObjects.insert(entry.first); continue; }
+        if(oldObject->kind != entry.second->kind || oldObject->aliases != entry.second->aliases || oldObject->threads != entry.second->threads)
+            diff.modifiedObjects.insert(entry.first);
         for (auto member = oldObject->members.cbegin(); member != oldObject->members.cend(); ++member) {
             if (!entry.second->members.contains(member.key())) {
                 diff.modifiedObjects.insert(entry.first);

@@ -1,3 +1,4 @@
+find_package(Qt5 REQUIRED COMPONENTS Test)
 set(CMAKE_AUTOMOC ON)
 
 add_executable(mi_stream_buffer_tests
@@ -17,7 +18,7 @@ if(UNIX)
 		DebugSessionMiTests.cpp
 		../src/RuntimeObjectGraph.cpp
 		../src/DebugSession.cpp
-		../src/DebugSession.h ../src/GdbMiSession.h
+		../src/DebugSession.h ../src/GdbMiSession.h ../src/DebuggerTransport.h
 		../src/MiStreamBuffer.cpp
 		../src/MiStreamBuffer.h
 	)
@@ -102,10 +103,10 @@ target_link_libraries(runtime_graph_builder_tests PRIVATE Qt5::Core)
 add_test(NAME runtime_graph_builder_tests COMMAND runtime_graph_builder_tests)
 add_executable(graphical_scene_tests GraphicalSceneTests.cpp
     ../src/GraphicalVariablesView.cpp ../src/GraphicalVariablesView.h
-    ../src/DebugSession.cpp ../src/DebugSession.h ../src/GdbMiSession.h ../src/MiStreamBuffer.cpp
+    ../src/DebugSession.cpp ../src/DebugSession.h ../src/GdbMiSession.h ../src/DebuggerTransport.h ../src/MiStreamBuffer.cpp
     ../src/RuntimeObjectGraph.cpp ../src/RuntimeGraphLayout.cpp ../src/OrthogonalEdgeRouter.cpp)
 target_include_directories(graphical_scene_tests PRIVATE ../src)
-target_link_libraries(graphical_scene_tests PRIVATE Qt5::Core Qt5::Gui Qt5::Widgets)
+target_link_libraries(graphical_scene_tests PRIVATE Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Test)
 add_test(NAME graphical_scene_tests COMMAND graphical_scene_tests)
 set_tests_properties(graphical_scene_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 add_executable(type_visualizer_tests TypeVisualizerTests.cpp)

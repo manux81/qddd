@@ -9,6 +9,8 @@
 
 enum class RuntimeRelationship { Pointer, Reference, Member, Element, Alias, Ownership };
 
+enum class RuntimeValueKind { Object, Scalar, PointerStorage };
+
 enum class RuntimeChangeState { Unchanged, Added, Modified, Removed };
 
 struct RuntimeMember
@@ -35,6 +37,9 @@ struct RuntimeObject
 	QString address;
 	QString type;
 	QHash<QString, RuntimeMember> members;
+	RuntimeValueKind kind = RuntimeValueKind::Object;
+	QSet<QString> aliases;
+	QSet<QString> threads;
 	RuntimeChangeState change = RuntimeChangeState::Unchanged;
 };
 

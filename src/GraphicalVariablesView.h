@@ -118,6 +118,7 @@ public:
 	const QString& layoutKey() const { return m_layoutKey; }
 
 	QPointF inputPort() const;
+	QRectF outputSocketRect() const;
 	QPointF outputPortFor(DebugVariable* child) const;
 	QPointF outputPortForExpression(const QString& expression) const;
 	void setExpandedRecursively(bool expanded, int maxDepth = 8);
@@ -136,6 +137,7 @@ public:
 protected:
 	void mousePressEvent(QGraphicsSceneMouseEvent*) override;
 	void mouseReleaseEvent(QGraphicsSceneMouseEvent*) override;
+	void mouseMoveEvent(QGraphicsSceneMouseEvent*) override;
 	void wheelEvent(QGraphicsSceneWheelEvent*) override;
 	QVariant itemChange(GraphicsItemChange,
 						const QVariant&) override;
@@ -147,6 +149,7 @@ private:
 	const QVector<VisibleRow>& cachedRows() const;
 
 private:
+	std::unique_ptr<DebugVariable> m_displaySnapshot;
 	DebugVariable* m_node = nullptr;
 	DebuggerSession* m_session = nullptr;
 	QString m_layoutKey;
@@ -160,6 +163,7 @@ private:
 	int m_width = 260;
 	int m_page = 0;
 	QPointF m_dragStartPosition;
+	QPointF m_dragStartScenePosition;
 	bool m_draggingHeader = false;
 	mutable QVector<VisibleRow> m_cachedRows;
 	mutable bool m_rowsDirty = true;
@@ -230,6 +234,7 @@ private:
 	bool m_autoLayoutEnabled = true;
 	bool m_compactLayout = false;
 	bool m_refreshInProgress = false;
+	bool m_modalGraphInteraction = false;
 	bool m_refreshPending = false;
 	bool m_layoutScheduled = false;
 	bool m_routingScheduled = false;

@@ -7,6 +7,10 @@
 #include <QPolygonF>
 #include <QLineF>
 #include <QElapsedTimer>
+#include <QMouseEvent>
+#include <QtTest/QTest>
+#include <QScrollBar>
+#include <QDebug>
 int main(int argc, char** argv) {
     QApplication app(argc,argv);
     GdbMiSession session;
@@ -29,6 +33,23 @@ int main(int argc, char** argv) {
     if (!found || nodes!=2) return 3;
     QImage image(900,600,QImage::Format_ARGB32); QPainter painter(&image);
     view.scene()->render(&painter);
+    // Regression for the reported drawSource -> fullPath crash: a card must
+    // still render after its source tree and cached child rows are destroyed.
+    {
+        auto source=std::make_unique<DebugVariable>();source->name="object";source->hasChildren=true;
+        auto child=std::make_unique<DebugVariable>();child->name="field";child->value="7";child->parent=source.get();
+        source->children.push_back(std::move(child));
+        auto* stable=new GraphicalNodeItem(source.get(),&session,"owned");
+        view.scene()->addItem(stable);stable->setExpandedRecursively(true);
+        stable->boundingRect();
+        source->children.clear();source.reset();
+        if(stable->node()->children.front()->fullPath()!="object.field") return 17;
+        view.scene()->render(&painter);
+        DebugVariable next;next.name="object";next.value="8";
+        stable->rebind(&next);
+        if(!stable->node()->children.empty() || stable->node()->value!="8") return 18;
+        delete stable;
+    }
     session.replaceExternalVariables({});
     for (auto* item : view.scene()->items()) if (qgraphicsitem_cast<GraphicalNodeItem*>(item)) return 4;
     // A moved third-party card must invalidate an edge even when it has no
@@ -71,6 +92,22 @@ int main(int argc, char** argv) {
     auto* representative=edge->isVisible() ? edge : alias;
     if(!representative->toolTip().contains("pointer") || !representative->toolTip().contains("secondPointer")) return 12;
 
+    // The socket is painted by the card, inside the header; the edge starts
+    // at the visible card boundary and has no half-hidden circle of its own.
+    const auto socket=a->outputSocketRect();
+    if(!a->boundingRect().adjusted(8,0,-8,0).contains(socket.adjusted(-1,-1,1,1))) return 13;
+    if(socket.bottom()>=30 || socket.top()<=0) return 14;
+    view.resize(1000,600);view.show();view.centerOn(QPointF(400,0));
+    QCoreApplication::processEvents();
+    const QPoint click=view.mapFromScene(a->mapToScene(QPointF(25,15)));
+    QTest::mousePress(view.viewport(),Qt::LeftButton,Qt::NoModifier,click);
+    if(view.scene()->mouseGrabberItem()!=a) { qWarning() << "Drag not grabbed" << click << view.viewport()->rect() << view.itemAt(click) << a; return 15; }
+    const QRectF bounds=view.scene()->sceneRect();
+    const int hScroll=view.horizontalScrollBar()->value(),vScroll=view.verticalScrollBar()->value();
+    QTest::mouseMove(view.viewport(),click+QPoint(40,20));
+    view.scheduleEdgeRouting();QCoreApplication::processEvents();
+    if(view.scene()->sceneRect()!=bounds || view.horizontalScrollBar()->value()!=hScroll || view.verticalScrollBar()->value()!=vScroll) return 16;
+    QTest::mouseRelease(view.viewport(),Qt::LeftButton,Qt::NoModifier,click+QPoint(40,20));QCoreApplication::processEvents();
     image.fill(QColor(25,25,25));
     view.scene()->render(&painter);
     painter.end();

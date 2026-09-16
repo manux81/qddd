@@ -1,3 +1,4 @@
+#include "DebuggerTransport.h"
 #pragma once
 #include "DebugSession.h"
 #include <QProcess>
@@ -12,7 +13,7 @@ class GdbMiSession final : public DebuggerSession
 	Q_OBJECT
 
 public:
-	explicit GdbMiSession(QObject* parent = nullptr);
+	explicit GdbMiSession(QObject* parent = nullptr, std::unique_ptr<DebuggerTransport> transport = {});
 	~GdbMiSession() override;
 
 	void setBackend(Backend backend) override;
@@ -148,7 +149,7 @@ private:
 	                        bool enabled);
 
 	// snapshot
-	void finalizeSnapshotIfReady();
+	void finalizeSnapshotIfReady(quint64 refreshGeneration);
 	void captureExecutionSnapshot();
 	bool restoreHistoricalVariables();
 	void computeVariableChanges(const ExecutionSnapshot& previous,
@@ -183,7 +184,7 @@ private:
 	QString m_stlinkServerPath = "ST-LINK_gdbserver";
 	int m_stlinkGdbPort = 4242;
 
-	QProcess m_debuggerProcess;
+	std::unique_ptr<DebuggerTransport> m_transport;
 	QProcess m_stlinkProcess;
 	MiStreamBuffer m_debuggerOutputBuffer;
 	QTimer m_commandTimeoutTimer;
@@ -222,8 +223,11 @@ private:
 	bool m_reverseRecordingReady = false;
 
 	int m_stepCounter = 0;
+	quint64 m_stopStateGeneration = 0;
+	bool m_snapshotArmed = false;
 	bool m_pendingStack = false;
 	bool m_pendingVariables = false;
 	int m_pendingPointerExpansions = 0;
 	int m_pendingAddressRequests = 0;
+	int m_pendingWatchRequests = 0;
 };
