@@ -229,6 +229,7 @@ void HardwareDebugPage::setupUi()
     m_serverTypeCombo->addItem(tr("ST-LINK"), "stlink");
     m_serverTypeCombo->addItem(tr("J-Link"), "jlink");
     m_serverTypeCombo->addItem(tr("MPLAB MDB / PICkit Basic"), "mplab-mdb");
+    m_serverTypeCombo->addItem(tr("QEMU"), "qemu");
     connect(m_serverTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &HardwareDebugPage::onServerTypeChanged);
     generalForm->addRow(tr("Server type:"), m_serverTypeCombo);
@@ -251,10 +252,10 @@ void HardwareDebugPage::setupUi()
     serverRowLayout->setContentsMargins(0, 0, 0, 0);
     m_serverPathEdit = new QLineEdit(serverRow);
     m_serverPathEdit->setPlaceholderText(tr("/path/to/gdb-server"));
-    auto* serverBrowse = new QPushButton(tr("Browse..."), serverRow);
-    connect(serverBrowse, &QPushButton::clicked, this, &HardwareDebugPage::onBrowseServer);
+    m_serverBrowseBtn = new QPushButton(tr("Browse..."), serverRow);
+    connect(m_serverBrowseBtn, &QPushButton::clicked, this, &HardwareDebugPage::onBrowseServer);
     serverRowLayout->addWidget(m_serverPathEdit, 1);
-    serverRowLayout->addWidget(serverBrowse);
+    serverRowLayout->addWidget(m_serverBrowseBtn);
     generalForm->addRow(tr("Server executable:"), serverRow);
 
     // Working directory
@@ -494,6 +495,32 @@ void HardwareDebugPage::setupUi()
     scrollLayout->addWidget(m_mplabGroup);
 
     // ================================================================
+    // QEMU / Cortex-M
+    // ================================================================
+    m_qemuGroup = new QGroupBox(tr("QEMU / Cortex-M Bootstrap"), scrollContent);
+    auto* qemuForm = new QFormLayout(m_qemuGroup);
+    qemuForm->setHorizontalSpacing(18);
+    qemuForm->setVerticalSpacing(10);
+
+    m_cortexMVectorBootstrapCheck = new QCheckBox(
+        tr("Initialize VTOR, MSP, PC and xPSR from the vector table after connecting"),
+        m_qemuGroup);
+    qemuForm->addRow(QString(), m_cortexMVectorBootstrapCheck);
+
+    m_vectorTableAddressEdit = new QLineEdit(m_qemuGroup);
+    m_vectorTableAddressEdit->setPlaceholderText(tr("0x08000000"));
+    qemuForm->addRow(tr("Vector table address:"), m_vectorTableAddressEdit);
+
+    auto* qemuInfo = new QLabel(
+        tr("Useful when QEMU stops at address 0 instead of performing the Cortex-M reset sequence."),
+        m_qemuGroup);
+    qemuInfo->setWordWrap(true);
+    qemuForm->addRow(qemuInfo);
+
+    m_qemuGroup->setVisible(false);
+    scrollLayout->addWidget(m_qemuGroup);
+
+    // ================================================================
     // Custom commands
     // ================================================================
     auto* cmdBox = new QGroupBox(tr("Custom GDB/MI Commands"), scrollContent);
@@ -730,6 +757,12 @@ void HardwareDebugPage::saveCurrentToConfig()
     cfg.runAfterLoad = m_runAfterLoadCheck->isChecked();
     cfg.initialBreakpoint = m_initialBreakpointEdit->text().trimmed();
 
+    cfg.cortexMVectorBootstrap = m_cortexMVectorBootstrapCheck->isChecked();
+    bool vectorAddressOk = false;
+    const quint32 vectorAddress = m_vectorTableAddressEdit->text().trimmed().toUInt(&vectorAddressOk, 0);
+    if (vectorAddressOk)
+        cfg.vectorTableAddress = vectorAddress;
+
     cfg.preConnectCommands = m_preConnectEdit->toPlainText().split(QStringLiteral("\n"),
                                                                     Qt::SkipEmptyParts);
     cfg.postConnectCommands = m_postConnectEdit->toPlainText().split(QStringLiteral("\n"),
@@ -792,6 +825,9 @@ void HardwareDebugPage::loadConfigToUi(int index)
     m_haltAfterResetCheck->setChecked(cfg.haltAfterReset);
     m_runAfterLoadCheck->setChecked(cfg.runAfterLoad);
     m_initialBreakpointEdit->setText(cfg.initialBreakpoint);
+    m_cortexMVectorBootstrapCheck->setChecked(cfg.cortexMVectorBootstrap);
+    m_vectorTableAddressEdit->setText(
+        QStringLiteral("0x%1").arg(cfg.vectorTableAddress, 8, 16, QLatin1Char('0')));
 
     m_preConnectEdit->setPlainText(cfg.preConnectCommands.join(QStringLiteral("\n")));
     m_postConnectEdit->setPlainText(cfg.postConnectCommands.join(QStringLiteral("\n")));
@@ -839,9 +875,17 @@ void HardwareDebugPage::updateServerTypeSpecificFields()
     m_stlinkGroup->setVisible(type == HardwareServerType::STLink);
     m_jlinkGroup->setVisible(type == HardwareServerType::JLink);
     m_mplabGroup->setVisible(type == HardwareServerType::MplabMdb);
+    m_qemuGroup->setVisible(type == HardwareServerType::Qemu);
 
     const bool usesGdb = type != HardwareServerType::MplabMdb;
+    const bool launchesServer = type != HardwareServerType::Qemu;
     m_gdbPathEdit->setEnabled(usesGdb);
+    m_serverPathEdit->setEnabled(launchesServer);
+    if (m_serverBrowseBtn)
+        m_serverBrowseBtn->setEnabled(launchesServer);
+    m_serverPathEdit->setPlaceholderText(type == HardwareServerType::Qemu
+        ? tr("Not used - attach to existing QEMU GDB stub")
+        : tr("/path/to/gdb-server"));
     m_hostEdit->setEnabled(usesGdb);
     m_portSpin->setEnabled(usesGdb);
     m_readyPatternEdit->setEnabled(usesGdb);
@@ -862,9 +906,13 @@ void HardwareDebugPage::updateCommandPreview()
     HardwareDebugConfiguration cfg = m_configManager.configurations[idx];
 
     QString preview;
-    preview += (cfg.serverType == HardwareServerType::MplabMdb
-        ? QStringLiteral("MDB executable:\n  %1\n\n")
-        : QStringLiteral("Server executable:\n  %1\n\n")).arg(cfg.serverExecutable);
+    if (cfg.serverType == HardwareServerType::Qemu)
+        preview += QStringLiteral("QEMU mode:\n  Attach to existing GDB stub at %1:%2\n\n")
+                       .arg(cfg.host).arg(cfg.port);
+    else
+        preview += (cfg.serverType == HardwareServerType::MplabMdb
+            ? QStringLiteral("MDB executable:\n  %1\n\n")
+            : QStringLiteral("Server executable:\n  %1\n\n")).arg(cfg.serverExecutable);
     preview += QStringLiteral("Arguments:\n");
     const QStringList args = cfg.generateServerArguments();
     for (const auto& arg : args) {
@@ -965,6 +1013,20 @@ void HardwareDebugPage::onTestConfig()
         return;
 
     HardwareDebugConfiguration cfg = m_configManager.configurations[idx];
+
+    if (cfg.serverType == HardwareServerType::Qemu) {
+        const auto validation = cfg.validate();
+        if (!validation.valid) {
+            m_testStatusLabel->setText(
+                QStringLiteral("<span style='color:red'>%1</span>")
+                    .arg(validation.errors.join(QStringLiteral("<br>"))));
+            return;
+        }
+        m_testStatusLabel->setText(
+            tr("<span style='color:green'>QEMU attach profile is valid.</span><br>GDB stub: %1:%2")
+                .arg(cfg.host).arg(cfg.port));
+        return;
+    }
 
     // Accept either an absolute path or a command available through PATH.
     if (cfg.serverExecutable.isEmpty()) {

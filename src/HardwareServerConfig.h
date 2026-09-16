@@ -45,7 +45,8 @@ enum class HardwareServerType {
     Generic,
     STLink,
     JLink,
-    MplabMdb
+    MplabMdb,
+    Qemu
 };
 
 // ============================================================================
@@ -100,6 +101,10 @@ struct HardwareDebugConfiguration
 
     // Ready detection pattern (optional regex)
     QString readyPattern;
+
+    // --- QEMU / Cortex-M specific fields ---
+    bool cortexMVectorBootstrap = false;
+    quint32 vectorTableAddress = 0x08000000U;
 
     // --- ST-Link specific fields ---
     QString stlinkCubeProgrammerPath;

@@ -486,8 +486,11 @@ void HardwareDebugSession::startSession(const HardwareDebugConfiguration& config
         emit debugOutput(QStringLiteral("[HARDWARE DEBUG] MDB: %1\n")
                          .arg(config.serverExecutable));
     } else {
-        emit debugOutput(QStringLiteral("[HARDWARE DEBUG] Server: %1\n")
-                         .arg(config.serverExecutable));
+        if (config.serverType == HardwareServerType::Qemu)
+            emit debugOutput(QStringLiteral("[HARDWARE DEBUG] QEMU: attach to existing GDB stub\n"));
+        else
+            emit debugOutput(QStringLiteral("[HARDWARE DEBUG] Server: %1\n")
+                             .arg(config.serverExecutable));
         emit debugOutput(QStringLiteral("[HARDWARE DEBUG] GDB: %1\n")
                          .arg(config.gdbExecutable));
         emit debugOutput(QStringLiteral("[HARDWARE DEBUG] Target: %1:%2\n")
@@ -517,6 +520,14 @@ void HardwareDebugSession::startSession(const HardwareDebugConfiguration& config
             this, &HardwareDebugSession::onGdbTargetStopped, Qt::UniqueConnection);
     connect(m_gdbSession, &DebuggerSession::targetExited,
             this, &HardwareDebugSession::onGdbTargetExited, Qt::UniqueConnection);
+
+    // QEMU profiles attach to an already-running GDB stub.  There is no
+    // separate server process for qddd to launch or own.
+    if (config.serverType == HardwareServerType::Qemu) {
+        emit debugOutput(QStringLiteral("[HARDWARE DEBUG] Attaching to existing QEMU stub...\n"));
+        onServerReady();
+        return;
+    }
 
     // Step 1: Start the GDB server
     setSessionState(SessionState::ServerStarting);
@@ -715,6 +726,25 @@ void HardwareDebugSession::executeGdbSequence()
     //
     // Symbol loading, pre-connect commands and target-select are performed by
     // DebuggerSession. This sequence starts once the remote target is connected.
+
+    if (m_config.cortexMVectorBootstrap) {
+        const QString vectorAddress = QStringLiteral("0x%1")
+            .arg(m_config.vectorTableAddress, 8, 16, QLatin1Char('0'));
+        const QStringList bootstrapCommands = {
+            QStringLiteral("-interpreter-exec console \"set {unsigned int}0xE000ED08 = %1\"").arg(vectorAddress),
+            QStringLiteral("-interpreter-exec console \"set $sp = *(unsigned int*)%1\"").arg(vectorAddress),
+            QStringLiteral("-interpreter-exec console \"set $pc = *(unsigned int*)(%1 + 4)\"").arg(vectorAddress),
+            QStringLiteral("-interpreter-exec console \"set $xpsr = 0x01000000\"")
+        };
+
+        for (const auto& cmd : bootstrapCommands) {
+            m_sequenceSteps.append([this, cmd](const QString&) {
+                emit debugOutput(
+                    QStringLiteral("[HARDWARE DEBUG] Cortex-M bootstrap: %1\n").arg(cmd));
+                sendCommand(cmd);
+            });
+        }
+    }
 
     if (!m_config.postConnectCommands.isEmpty()) {
         for (const auto& cmd : m_config.postConnectCommands) {

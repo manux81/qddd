@@ -89,6 +89,8 @@ void HardwareDebugConfiguration::save(QSettings& s, const QString& prefix) const
     s.setValue(cfgKey(prefix, "preLoadCommands"), preLoadCommands);
     s.setValue(cfgKey(prefix, "postLoadCommands"), postLoadCommands);
     s.setValue(cfgKey(prefix, "readyPattern"), readyPattern);
+    s.setValue(cfgKey(prefix, "cortexMVectorBootstrap"), cortexMVectorBootstrap);
+    s.setValue(cfgKey(prefix, "vectorTableAddress"), vectorTableAddress);
     s.setValue(cfgKey(prefix, "stlinkCubeProgrammerPath"), stlinkCubeProgrammerPath);
     s.setValue(cfgKey(prefix, "stlinkLogLevel"), stlinkLogLevel);
     s.setValue(cfgKey(prefix, "stlinkSwdMode"), stlinkSwdMode);
@@ -131,6 +133,8 @@ void HardwareDebugConfiguration::load(const QSettings& s, const QString& prefix)
     preLoadCommands = s.value(cfgKey(prefix, "preLoadCommands")).toStringList();
     postLoadCommands = s.value(cfgKey(prefix, "postLoadCommands")).toStringList();
     readyPattern = s.value(cfgKey(prefix, "readyPattern")).toString();
+    cortexMVectorBootstrap = s.value(cfgKey(prefix, "cortexMVectorBootstrap"), cortexMVectorBootstrap).toBool();
+    vectorTableAddress = s.value(cfgKey(prefix, "vectorTableAddress"), vectorTableAddress).toUInt();
     stlinkCubeProgrammerPath = s.value(cfgKey(prefix, "stlinkCubeProgrammerPath")).toString();
     stlinkLogLevel = s.value(cfgKey(prefix, "stlinkLogLevel"), stlinkLogLevel).toInt();
     stlinkSwdMode = s.value(cfgKey(prefix, "stlinkSwdMode"), stlinkSwdMode).toBool();
@@ -160,8 +164,8 @@ HardwareDebugConfiguration::ValidationResult HardwareDebugConfiguration::validat
         r.valid = false;
     }
 
-    // Server executable - warn if missing but don't block (user may install later)
-    if (serverExecutable.isEmpty()) {
+    // QEMU can expose an already-running GDB stub, so no server process is required.
+    if (serverType != HardwareServerType::Qemu && serverExecutable.isEmpty()) {
         r.errors << QStringLiteral("Server executable path is empty.");
         r.valid = false;
     }
@@ -353,6 +357,7 @@ QStringList HardwareDebugConfiguration::generateServerArguments() const
             return args;
         }
     case HardwareServerType::Generic:
+    case HardwareServerType::Qemu:
     case HardwareServerType::MplabMdb:
     default:
         return serverArguments;

@@ -111,6 +111,7 @@ private:
     QComboBox* m_serverTypeCombo = nullptr;
     QLineEdit* m_gdbPathEdit = nullptr;
     QLineEdit* m_serverPathEdit = nullptr;
+    QPushButton* m_serverBrowseBtn = nullptr;
     QLineEdit* m_workingDirEdit = nullptr;
     QLineEdit* m_hostEdit = nullptr;
     QSpinBox* m_portSpin = nullptr;
@@ -134,6 +135,11 @@ private:
     QPlainTextEdit* m_postConnectEdit = nullptr;
     QPlainTextEdit* m_preLoadEdit = nullptr;
     QPlainTextEdit* m_postLoadEdit = nullptr;
+
+    // QEMU / Cortex-M specific
+    QGroupBox* m_qemuGroup = nullptr;
+    QCheckBox* m_cortexMVectorBootstrapCheck = nullptr;
+    QLineEdit* m_vectorTableAddressEdit = nullptr;
 
     // ST-Link specific
     QGroupBox* m_stlinkGroup = nullptr;
