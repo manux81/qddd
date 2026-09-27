@@ -161,7 +161,7 @@ int main(int argc, char **argv)
     // Recording metadata: versioned round-trip + rejection.
     {
         HistoryRecordingMetadata meta;
-        meta.target = QStringLiteral("stm32f4-discovery");
+        meta.target = QStringLiteral("generic-board");
         meta.backend = QStringLiteral("gdb-stop-recording");
         meta.firmwarePath = QStringLiteral("/fw/app.elf");
         meta.firmwareBuildId = QStringLiteral("abc123");
