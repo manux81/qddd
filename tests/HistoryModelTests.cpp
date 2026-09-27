@@ -3,6 +3,8 @@
 #include "history/ExecutionComparison.h"
 #include "history/FlowModel.h"
 #include "history/GdbStopHistoryBackend.h"
+#include "history/GdbRecordTimeMachineBackend.h"
+#include "history/TimeMachineModel.h"
 #include "history/HistorySession.h"
 #include "history/RecordingMetadata.h"
 #include "history/TargetDescriptor.h"
@@ -33,6 +35,9 @@ public:
     QVector<ExecutionSnapshot> scriptedHistory;
     int scriptedStep = 0;
     QStringList targetCommands; // non-empty iff the live target was commanded
+    bool recorderSupported = false;
+    bool recorderActive = false;
+    bool reverseSupported = false;
 
     const QVector<ExecutionSnapshot> &executionHistory() const override
     {
@@ -71,6 +76,36 @@ public:
     void reverseStepInto() override { targetCommands << QStringLiteral("reverseStepInto"); }
     void reverseStepOver() override { targetCommands << QStringLiteral("reverseStepOver"); }
     bool supportsReverseExecution() const override { return false; }
+    bool startTimeMachineRecording() override
+    {
+        if (!recorderSupported || recorderActive)
+            return false;
+        targetCommands << QStringLiteral("startRecording");
+        return true;
+    }
+    bool stopTimeMachineRecording() override
+    {
+        if (!recorderActive)
+            return false;
+        targetCommands << QStringLiteral("stopRecording");
+        return true;
+    }
+    bool reverseFinishExecution() override
+    {
+        if (!reverseSupported)
+            return false;
+        targetCommands << QStringLiteral("reverseFinish");
+        return true;
+    }
+    bool returnToPresentExecution() override
+    {
+        if (!reverseSupported)
+            return false;
+        targetCommands << QStringLiteral("returnToPresent");
+        return true;
+    }
+    bool timeMachineRecordingActive() const override { return recorderActive; }
+    bool timeMachineRecordingSupported() const override { return recorderSupported; }
     void insertBreakpoint(const BreakpointRequest &) override { targetCommands << QStringLiteral("break"); }
     void insertBreakpoint(const QString &) override { targetCommands << QStringLiteral("break"); }
     void removeBreakpoint(int) override {}
@@ -165,6 +200,340 @@ static TraceEvent makeLinkedEvent(TimePoint t, int step)
     TraceEvent event = makeEvent(t, TraceEventType::Stop, TrackIds::Cpu);
     event.metadata.insert(QString::fromLatin1(SnapshotStepKey), step);
     return event;
+}
+
+// Minimal seek-capable backend: selections drive the (fake) target, so the
+// temporal state must read REPLAY rather than HISTORIC.
+class FakeSeekBackend : public HistoryBackend {
+public:
+    bool isAvailable() const override { return true; }
+    HistoryCapabilities capabilities() const override
+    {
+        return HistoryCapability::Recording | HistoryCapability::Seek;
+    }
+    std::optional<ExecutionState> currentState() override { return std::nullopt; }
+    bool seek(TimePoint) override { return true; }
+    bool stepForward() override { return false; }
+    bool stepBackward() override { return false; }
+    bool continueForward() override { return false; }
+    bool continueBackward() override { return false; }
+    bool returnToPresent() override { return true; }
+    std::vector<TraceEvent> events(TimeRange) override { return {}; }
+};
+
+static int checkTemporalStates()
+{
+    // Live with no selection.
+    {
+        FakeDebuggerSession fake;
+        HistorySession session;
+        DisplayedStateModel display(&fake, &session);
+        CHECK(display.temporalState() == TemporalState::Live);
+        CHECK(temporalBadgeText(TemporalState::Live) == QStringLiteral("LIVE"));
+    }
+    // Snapshot-only backend: selecting history inspects, never rewinds.
+    {
+        FakeDebuggerSession fake;
+        fake.scriptedHistory = {makeSnapshot(1, QStringLiteral("10"), 11),
+                                makeSnapshot(2, QStringLiteral("20"), 12)};
+        HistorySession session;
+        session.setSnapshotResolver([&](int step) -> std::optional<ExecutionSnapshot> {
+            for (const ExecutionSnapshot &s : fake.scriptedHistory) {
+                if (s.stepIndex == step)
+                    return s;
+            }
+            return std::nullopt;
+        });
+        session.setBackend(nullptr);
+        session.addEvent(makeLinkedEvent(100, 1));
+        session.addEvent(makeLinkedEvent(200, 2));
+        DisplayedStateModel display(&fake, &session);
+        session.selectEvent(session.storedEvents()[0].id);
+        CHECK(display.temporalState() == TemporalState::Historic);
+        CHECK(temporalBadgeText(TemporalState::Historic, 42)
+		      == QStringLiteral("TIME MACHINE \u00B7 HISTORIC \u00B7 #42"));
+        CHECK(temporalBadgeText(TemporalState::Replayed, 3)
+              == QStringLiteral("TIME MACHINE \u00B7 REPLAY \u00B7 #3"));
+    }
+    // Seek-capable backend: selecting history moved the target.
+    {
+        FakeDebuggerSession fake;
+        fake.scriptedHistory = {makeSnapshot(1, QStringLiteral("10"), 11),
+                                makeSnapshot(2, QStringLiteral("20"), 12)};
+        HistorySession session;
+        FakeSeekBackend backend;
+        session.setBackend(&backend);
+        session.setSnapshotResolver([&](int step) -> std::optional<ExecutionSnapshot> {
+            for (const ExecutionSnapshot &s : fake.scriptedHistory) {
+                if (s.stepIndex == step)
+                    return s;
+            }
+            return std::nullopt;
+        });
+        session.addEvent(makeLinkedEvent(100, 1));
+        session.addEvent(makeLinkedEvent(200, 2));
+        DisplayedStateModel display(&fake, &session);
+        session.selectEvent(session.storedEvents()[0].id);
+        CHECK(display.temporalState() == TemporalState::Replayed);
+        display.goLive();
+        CHECK(display.temporalState() == TemporalState::Live);
+    }
+    return 0;
+}
+
+static int checkActionStates()
+{
+    FakeDebuggerSession fake;
+    HistorySession empty;
+    empty.setBackend(nullptr);
+
+    // Nothing recorded: only ShowTimeline works, with reasons everywhere.
+    CHECK(!timeMachineActionState(TimeMachineAction::Previous, &empty, &fake).enabled);
+    CHECK(!timeMachineActionState(TimeMachineAction::Next, &empty, &fake).enabled);
+    CHECK(!timeMachineActionState(TimeMachineAction::ReturnToPresent, &empty, &fake).enabled);
+    CHECK(!timeMachineActionState(TimeMachineAction::StartRecording, &empty, &fake).enabled);
+    CHECK(!timeMachineActionState(TimeMachineAction::StopRecording, &empty, &fake).enabled);
+    CHECK(!timeMachineActionState(TimeMachineAction::ReverseContinue, &empty, &fake).enabled);
+    CHECK(!timeMachineActionState(TimeMachineAction::PreviousWrite, &empty, &fake).enabled);
+    CHECK(timeMachineActionState(TimeMachineAction::ShowTimeline, &empty, &fake).enabled);
+    CHECK(!timeMachineActionState(TimeMachineAction::Previous, &empty, &fake).reason.isEmpty());
+
+    // Snapshot-only history: navigation + present work, reverse does not.
+    HistorySession session;
+    session.setBackend(nullptr);
+    session.addEvent(makeLinkedEvent(100, 1));
+    session.addEvent(makeLinkedEvent(200, 2));
+    CHECK(timeMachineActionState(TimeMachineAction::Previous, &session, &fake).enabled);
+    CHECK(!timeMachineActionState(TimeMachineAction::Next, &session, &fake).enabled);
+    CHECK(!timeMachineActionState(TimeMachineAction::ReturnToPresent, &session, &fake).enabled);
+    CHECK(!timeMachineActionState(TimeMachineAction::ReverseContinue, &session, &fake).enabled);
+    CHECK(!timeMachineActionState(TimeMachineAction::ReverseContinue, &session, &fake)
+               .reason.isEmpty());
+    session.selectEvent(session.storedEvents()[0].id);
+    CHECK(!timeMachineActionState(TimeMachineAction::Previous, &session, &fake).enabled);
+    CHECK(timeMachineActionState(TimeMachineAction::Next, &session, &fake).enabled);
+    CHECK(timeMachineActionState(TimeMachineAction::ReturnToPresent, &session, &fake).enabled);
+    CHECK(timeMachineActionState(TimeMachineAction::MakeCheckpoint, &session, &fake).enabled
+          == session.capabilities().testFlag(HistoryCapability::Checkpoints));
+    return 0;
+}
+
+static int checkPointModel()
+{
+    FakeDebuggerSession fake;
+    fake.scriptedHistory = {makeSnapshot(1, QStringLiteral("10"), 11),
+                            makeSnapshot(2, QStringLiteral("20"), 12)};
+    HistorySession session;
+    session.setSnapshotResolver([&](int step) -> std::optional<ExecutionSnapshot> {
+        for (const ExecutionSnapshot &s : fake.scriptedHistory) {
+            if (s.stepIndex == step)
+                return s;
+        }
+        return std::nullopt;
+    });
+    session.setBackend(nullptr);
+    session.addEvent(makeLinkedEvent(100, 1));
+    session.addEvent(makeLinkedEvent(200, 2));
+
+    HistoryPointModel model;
+    model.setSession(&session);
+    // Row 0 is the present; history follows newest-first.
+    CHECK(model.rowCount() == 3);
+    CHECK(model.isPresentRow(0) && !model.isPresentRow(1));
+    CHECK(model.pointIdAtRow(0) == InvalidTraceEventId);
+    const TraceEventId newest = session.storedEvents()[1].id;
+    const TraceEventId oldest = session.storedEvents()[0].id;
+    CHECK(model.pointIdAtRow(1) == newest);
+    CHECK(model.pointIdAtRow(2) == oldest);
+    CHECK(model.rowForPoint(newest) == 1);
+    CHECK(model.rowForPoint(oldest) == 2);
+    CHECK(model.rowForPoint(999999) == -1);
+    // Live session selects the present row.
+    CHECK(model.data(model.index(0, 0), HistoryPointModel::IsSelectedRole).toBool());
+    CHECK(!model.data(model.index(1, 0), HistoryPointModel::IsSelectedRole).toBool());
+    // Selecting history moves selection and exposes point data.
+    session.selectEvent(oldest);
+    CHECK(model.data(model.index(2, 0), HistoryPointModel::IsSelectedRole).toBool());
+    CHECK(!model.data(model.index(0, 0), HistoryPointModel::IsSelectedRole).toBool());
+    CHECK(model.data(model.index(2, 0), HistoryPointModel::HasSnapshotRole).toBool());
+    CHECK(model.data(model.index(2, 0), HistoryPointModel::SequenceRole).toUInt() == 0);
+    CHECK(model.data(model.index(2, 0), HistoryPointModel::PointIdRole).toULongLong()
+          == oldest);
+    CHECK(model.data(model.index(2, 0), Qt::DisplayRole).toString().startsWith(
+          QStringLiteral("#%1").arg(oldest)));
+    CHECK(!model.data(model.index(2, 0), Qt::DisplayRole).toString().startsWith(
+          QStringLiteral("#0"))); // sequence/row must never become identity
+    CHECK(!model.data(model.index(1, 0), HistoryPointModel::IsCheckpointRole).toBool());
+    CHECK(!model.data(model.index(2, 0), HistoryPointModel::LocationRole).toString().isEmpty());
+    CHECK(!model.data(model.index(2, 0), HistoryPointModel::SubtitleRole).toString().isEmpty());
+    return 0;
+}
+
+static int checkHistoryChanges()
+{
+    FakeDebuggerSession fake;
+    ExecutionSnapshot first = makeSnapshot(1, QStringLiteral("10"), 11);
+    first.variableValues.insert(QStringLiteral("gone"), QStringLiteral("old"));
+    ExecutionSnapshot second = makeSnapshot(2, QStringLiteral("20"), 12);
+    second.variableValues.insert(QStringLiteral("added"), QStringLiteral("new"));
+    fake.scriptedHistory = {first, second};
+    HistorySession session;
+    session.setSnapshotResolver([&](int step) -> std::optional<ExecutionSnapshot> {
+        for (const ExecutionSnapshot &s : fake.scriptedHistory) {
+            if (s.stepIndex == step)
+                return s;
+        }
+        return std::nullopt;
+    });
+    session.setBackend(nullptr);
+    session.addEvent(makeLinkedEvent(100, 1));
+    session.addEvent(makeLinkedEvent(200, 2));
+    const TraceEventId firstId = session.storedEvents()[0].id;
+    const TraceEventId secondId = session.storedEvents()[1].id;
+
+    // Changed, added and removed paths are all reported with old → new.
+    const HistoryChangeSet set = computeHistoryChanges(&session, secondId);
+    CHECK(set.hasSnapshot);
+    CHECK(set.values.value(QStringLiteral("x")) == QStringLiteral("20"));
+    CHECK(set.changes.size() == 3);
+    CHECK(set.changes[0].path == QStringLiteral("added"));
+    CHECK(!set.changes[0].hadBefore && set.changes[0].hasNow);
+    CHECK(set.changes[0].newValue == QStringLiteral("new"));
+    CHECK(set.changes[1].path == QStringLiteral("gone"));
+    CHECK(set.changes[1].hadBefore && !set.changes[1].hasNow);
+    CHECK(set.changes[1].oldValue == QStringLiteral("old"));
+    CHECK(set.changes[2].path == QStringLiteral("x"));
+    CHECK(set.changes[2].oldValue == QStringLiteral("10"));
+    CHECK(set.changes[2].newValue == QStringLiteral("20"));
+
+    // First stop has no predecessor: everything reads as added.
+    const HistoryChangeSet initial = computeHistoryChanges(&session, firstId);
+    CHECK(initial.hasSnapshot);
+    CHECK(initial.changes.size() == 2);
+    CHECK(!initial.changes[0].hadBefore);
+
+    // Unknown or unlinked events resolve to an empty set, never to live data.
+    CHECK(!computeHistoryChanges(&session, 999999).hasSnapshot);
+    CHECK(!computeHistoryChanges(nullptr, secondId).hasSnapshot);
+    return 0;
+}
+
+static int checkTimeTravelController()
+{
+    FakeDebuggerSession fake;
+    fake.scriptedHistory = {makeSnapshot(1, QStringLiteral("10"), 11),
+                            makeSnapshot(2, QStringLiteral("20"), 12),
+                            makeSnapshot(3, QStringLiteral("20"), 13)};
+    HistorySession session;
+    session.setSnapshotResolver([&](int step) -> std::optional<ExecutionSnapshot> {
+        for (const ExecutionSnapshot &s : fake.scriptedHistory) {
+            if (s.stepIndex == step)
+                return s;
+        }
+        return std::nullopt;
+    });
+    session.setBackend(nullptr);
+    session.addEvent(makeLinkedEvent(100, 1));
+    session.addEvent(makeLinkedEvent(200, 2));
+    session.addEvent(makeLinkedEvent(300, 3));
+    const TraceEventId first = session.storedEvents()[0].id;
+    const TraceEventId last = session.storedEvents()[2].id;
+
+    TimeTravelController controller(&session);
+    int positionSignals = 0;
+    QObject::connect(&controller, &TimeTravelController::positionChanged,
+                     [&](const TimeTravelPosition &) { ++positionSignals; });
+
+    // Live is a separate state with no snapshot index.
+    CHECK(controller.position().type == TimeTravelPosition::Type::Live);
+    CHECK(controller.position().id == InvalidTraceEventId);
+    CHECK(positionSignals == 0);
+
+    // Snapshot navigation inspects without moving the target.
+    controller.showSnapshot(first);
+    CHECK(controller.position().type == TimeTravelPosition::Type::Snapshot);
+    CHECK(controller.position().id == first);
+    CHECK(positionSignals == 1);
+    controller.showSnapshot(first);
+    CHECK(positionSignals == 1); // no redundant updates
+    controller.showPrevious();   // already oldest: stays
+    CHECK(controller.position().id == first);
+    controller.showNext();
+    CHECK(controller.position().id == session.storedEvents()[1].id);
+    controller.showLive();
+    CHECK(controller.position().type == TimeTravelPosition::Type::Live);
+    CHECK(fake.targetCommands.isEmpty());
+
+    // Recorded-position navigation on a seek backend.
+    FakeSeekBackend seekBackend;
+    session.setBackend(&seekBackend);
+    const TraceEventId middle = session.storedEvents()[1].id;
+    controller.showRecordedPosition(middle);
+    CHECK(controller.position().type == TimeTravelPosition::Type::RecordedPosition);
+    CHECK(controller.position().id == middle);
+    // Return to present restores live following.
+    session.setBackend(nullptr);
+    controller.showPresent();
+    CHECK(controller.position().type == TimeTravelPosition::Type::Live);
+
+    // Find previous change walks snapshots, never claims exact writes.
+    controller.showSnapshot(last); // x == 20 at step 3
+    const TraceEventId changedAt = controller.findPreviousChange(QStringLiteral("x"));
+    CHECK(changedAt == session.storedEvents()[0].id); // x became 20 after step 1
+    CHECK(controller.position().id == session.storedEvents()[0].id);
+    CHECK(controller.findPreviousChange(QStringLiteral("missing")) == InvalidTraceEventId);
+    CHECK(controller.findPreviousChange(QString()) == InvalidTraceEventId);
+    CHECK(fake.targetCommands.isEmpty());
+    return 0;
+}
+
+static int checkResumeReturnsLive()
+{
+    FakeDebuggerSession fake;
+    fake.scriptedHistory = {makeSnapshot(1, QStringLiteral("10"), 11),
+                            makeSnapshot(2, QStringLiteral("20"), 12)};
+    HistorySession session;
+    session.setSnapshotResolver([&](int step) -> std::optional<ExecutionSnapshot> {
+        for (const ExecutionSnapshot &s : fake.scriptedHistory) {
+            if (s.stepIndex == step)
+                return s;
+        }
+        return std::nullopt;
+    });
+    session.setBackend(nullptr);
+    session.addEvent(makeLinkedEvent(100, 1));
+    session.addEvent(makeLinkedEvent(200, 2));
+    DisplayedStateModel display(&fake, &session);
+
+    // Browse history, then resume: the UI must realign to LIVE by itself.
+    session.selectEvent(session.storedEvents()[0].id);
+    CHECK(!display.displayedState().isLive());
+    emit fake.targetRunning();
+    CHECK(display.displayedState().isLive());
+    CHECK(display.displayedState().historyPointId == InvalidHistoryPointId);
+
+    // A new stop updates LIVE rather than mutating the old selection.
+    fake.scriptedHistory.append(makeSnapshot(3, QStringLiteral("30"), 13));
+    emit fake.snapshotCaptured(fake.scriptedHistory.back());
+    CHECK(display.displayedState().isLive());
+    CHECK(display.displayedState().snapshot->variableValues.value(QStringLiteral("x"))
+          == QStringLiteral("30"));
+    return 0;
+}
+
+static int checkPositionChip()
+{
+    CHECK(positionChipText(TemporalState::Live, std::nullopt) == QStringLiteral("LIVE"));
+    CHECK(positionChipText(TemporalState::Historic, std::nullopt)
+          == QStringLiteral("SNAPSHOT"));
+    ExecutionSnapshot snapshot;
+    snapshot.stepIndex = 42;
+    snapshot.timestampNs = 12483921LL;
+    CHECK(positionChipText(TemporalState::Historic, snapshot) == QStringLiteral("S42"));
+    const QString replayed = positionChipText(TemporalState::Replayed, snapshot);
+    CHECK(replayed.startsWith(QStringLiteral("TRACE")));
+    CHECK(replayed.contains(QStringLiteral("0.012484")));
+    return 0;
 }
 
 int main(int argc, char **argv)
@@ -308,6 +677,50 @@ int main(int argc, char **argv)
         CHECK(!backend.findPreviousWrite(0x20000000, 100).has_value());
         CHECK(!backend.currentState().has_value());
         CHECK(backend.events({0, 100}).empty());
+    }
+
+    // Explicit history points/checkpoints are ordered and retain the stable
+    // snapshot link instead of embedding debugger state in the event list.
+    {
+        FakeDebuggerSession fake;
+        fake.scriptedStep = 2;
+        GdbRecordTimeMachineBackend backend(&fake);
+        HistorySession session;
+        session.setBackend(&backend);
+        session.addEvent(makeLinkedEvent(200, 2));
+        session.addEvent(makeLinkedEvent(100, 1));
+        CHECK(session.historyPoints().size() == 2);
+        CHECK(session.historyPoints()[0].sequence == 0);
+        CHECK(session.historyPoints()[0].timestamp == 100);
+        CHECK(session.historyPoints()[0].snapshotStep.value_or(-1) == 1);
+        CHECK(session.createCheckpoint(session.historyPoints()[0].id));
+        CHECK(session.checkpoint(session.historyPoints()[0].id)->snapshotStep.value_or(-1) == 1);
+        CHECK(session.historyPoints()[0].type == HistoryPointType::Checkpoint);
+        CHECK(!session.createCheckpoint(999999));
+    }
+
+    // GDB recorder capabilities are conservative until recording succeeds;
+    // unsupported calls are rejected and accepted operations stay high-level.
+    {
+        FakeDebuggerSession fake;
+        fake.recorderSupported = true;
+        GdbRecordTimeMachineBackend backend(&fake);
+        HistorySession session;
+        session.setBackend(&backend);
+        CHECK(session.capabilities().testFlag(HistoryCapability::RecordReplay));
+        CHECK(!session.capabilities().testFlag(HistoryCapability::ReverseStep));
+        CHECK(session.startRecording());
+        CHECK(fake.targetCommands == QStringList{QStringLiteral("startRecording")});
+        fake.recorderActive = true;
+        fake.reverseSupported = true;
+        // Fake session's legacy supportsReverseExecution remains false, so the
+        // backend must not infer reverse capability merely from configuration.
+        emit fake.reverseExecutionAvailabilityChanged();
+        CHECK(!session.reverseStep());
+        emit fake.timeMachineRecordingStateChanged(true);
+        CHECK(session.isRecording());
+        CHECK(session.stopRecording());
+        CHECK(fake.targetCommands.contains(QStringLiteral("stopRecording")));
     }
 
     // Recording metadata: versioned round-trip + rejection.
@@ -484,6 +897,8 @@ int main(int argc, char **argv)
         // Browsing backward shows recorded values, not live ones.
         session.selectEvent(session.storedEvents()[0].id);
         CHECK(!display.displayedState().isLive());
+        CHECK(display.displayedState().historyPointId ==
+              session.storedEvents()[0].id);
         CHECK(display.displayedState().snapshotStep == 1);
         CHECK(display.displayedState().snapshot->variableValues.value(QStringLiteral("x"))
               == QStringLiteral("10"));
@@ -491,6 +906,8 @@ int main(int argc, char **argv)
         CHECK(display.displayedState().snapshot->file == QStringLiteral("main.c"));
 
         session.selectEvent(session.storedEvents()[1].id);
+        CHECK(display.displayedState().historyPointId ==
+              session.storedEvents()[1].id);
         CHECK(display.displayedState().snapshot->variableValues.value(QStringLiteral("x"))
               == QStringLiteral("20"));
 
@@ -661,5 +1078,20 @@ int main(int argc, char **argv)
     }
 
     std::cout << "history model tests passed\n";
+    if (int rc = checkTemporalStates())
+        return rc;
+    if (int rc = checkActionStates())
+        return rc;
+    if (int rc = checkPointModel())
+        return rc;
+    if (int rc = checkHistoryChanges())
+        return rc;
+    if (int rc = checkTimeTravelController())
+        return rc;
+    if (int rc = checkResumeReturnsLive())
+        return rc;
+    if (int rc = checkPositionChip())
+        return rc;
+    std::cout << "time machine model tests passed\n";
     return 0;
 }

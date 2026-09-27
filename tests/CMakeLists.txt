@@ -119,6 +119,24 @@ target_include_directories(graphical_scene_tests PRIVATE ../src)
 target_link_libraries(graphical_scene_tests PRIVATE Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Test)
 add_test(NAME graphical_scene_tests COMMAND graphical_scene_tests)
 set_tests_properties(graphical_scene_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+add_executable(time_travel_view_tests TimeTravelViewTests.cpp
+    ../src/history/HistorySession.cpp
+    ../src/history/HistoryTypes.cpp
+    ../src/history/DisplayedState.cpp
+    ../src/history/TimeMachineModel.cpp
+    ../src/history/HistoryView.cpp ../src/history/HistoryView.h
+    ../src/VariablesView.cpp ../src/VariablesView.h
+    ../src/GraphicalVariablesView.cpp ../src/GraphicalVariablesView.h
+    ../src/DebugSession.cpp ../src/DebugSession.h ../src/GdbMiSession.h
+    ../src/DebuggerTransport.h ../src/MiStreamBuffer.cpp
+    ../src/RuntimeObjectGraph.cpp ../src/RuntimeGraphLayout.cpp ../src/OrthogonalEdgeRouter.cpp
+    ../src/HardwareDebugSession.cpp ../src/GdbServerProcess.cpp
+    ../src/MdbProcess.cpp ../src/HardwareServerConfig.cpp
+    ../src/HardwareDebugSession.h ../src/MdbProcess.h ../src/HardwareServerConfig.h)
+target_include_directories(time_travel_view_tests PRIVATE ../src)
+target_link_libraries(time_travel_view_tests PRIVATE Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Test Qt5::Network)
+add_test(NAME time_travel_view_tests COMMAND time_travel_view_tests)
+set_tests_properties(time_travel_view_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 add_executable(type_visualizer_tests TypeVisualizerTests.cpp)
 target_include_directories(type_visualizer_tests PRIVATE ../src)
 target_link_libraries(type_visualizer_tests PRIVATE Qt5::Core)
@@ -127,7 +145,9 @@ add_executable(history_model_tests HistoryModelTests.cpp
     ../src/history/HistorySession.cpp
     ../src/history/HistoryTypes.cpp
     ../src/history/DisplayedState.cpp
+    ../src/history/TimeMachineModel.cpp
     ../src/history/GdbStopHistoryBackend.cpp
+    ../src/history/GdbRecordTimeMachineBackend.cpp
     ../src/DebugSession.h ../src/DebuggerTransport.h)
 target_include_directories(history_model_tests PRIVATE ../src)
 target_link_libraries(history_model_tests PRIVATE Qt5::Core)
