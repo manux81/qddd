@@ -123,3 +123,11 @@ add_executable(type_visualizer_tests TypeVisualizerTests.cpp)
 target_include_directories(type_visualizer_tests PRIVATE ../src)
 target_link_libraries(type_visualizer_tests PRIVATE Qt5::Core)
 add_test(NAME type_visualizer_tests COMMAND type_visualizer_tests)
+add_executable(history_model_tests HistoryModelTests.cpp
+    ../src/history/HistorySession.cpp
+    ../src/history/HistoryTypes.cpp
+    ../src/history/GdbStopHistoryBackend.cpp
+    ../src/DebugSession.h ../src/DebuggerTransport.h)
+target_include_directories(history_model_tests PRIVATE ../src)
+target_link_libraries(history_model_tests PRIVATE Qt5::Core)
+add_test(NAME history_model_tests COMMAND history_model_tests)
