@@ -41,11 +41,14 @@
 #include <QTimer>
 #include <QContextMenuEvent>
 #include <functional>
+#include <optional>
 #include <vector>
 
 class GraphicalNodeItem;
 class QGraphicsSceneWheelEvent;
 class QToolButton;
+class QLabel;
+class QResizeEvent;
 
 struct VisibleRow {
 	DebugVariable* node;
@@ -182,6 +185,8 @@ public:
 	~GraphicalVariablesView() override;
 
 	void setSession(DebuggerSession* session);
+	void setDisplayedSnapshot(const std::optional<ExecutionSnapshot>& snapshot,
+	                          int snapshotStep = -1);
 
 public slots:
 	void refresh();
@@ -197,6 +202,7 @@ protected:
 	void mouseDoubleClickEvent(QMouseEvent*) override;
 	void contextMenuEvent(QContextMenuEvent*) override;
 	void drawBackground(QPainter*, const QRectF&) override;
+	void resizeEvent(QResizeEvent*) override;
 
 private:
 	void createDisplayExpression(const QString& dependsOn = {});
@@ -216,9 +222,15 @@ private:
 	void configureNodeItem(GraphicalNodeItem* item);
 	void applyAutomaticLayout(bool fitAfterLayout = false);
 	void setAutoLayoutEnabled(bool enabled);
+	void updateModeChip();
+	void positionModeChip();
 
 	QGraphicsScene*  m_scene   = nullptr;
 	DebuggerSession* m_session = nullptr;
+	bool m_historical = false;
+	int m_historicalStep = -1;
+	std::optional<ExecutionSnapshot> m_historicalSnapshot;
+	std::vector<std::unique_ptr<DebugVariable>> m_historicalRoots;
 
 	QHash<QString, GraphicalNodeItem*> m_rootItems;
 	QHash<QString, QPointF> m_nodePositions;
@@ -231,6 +243,7 @@ private:
 	QHash<QString, QString> m_displayDependencies;
 	quint64 m_refreshGeneration = 0;
 	QToolButton* m_autoLayoutButton = nullptr;
+	QLabel* m_modeChip = nullptr;
 	bool m_autoLayoutEnabled = true;
 	bool m_compactLayout = false;
 	bool m_refreshInProgress = false;

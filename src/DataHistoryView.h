@@ -13,7 +13,10 @@
 class HistoryPlot : public QWidget {
 public:
     QVector<ValueHistoryPoint> points;
-    explicit HistoryPlot(QWidget* parent = nullptr) : QWidget(parent) { setMinimumHeight(110); }
+    explicit HistoryPlot(QWidget* parent = nullptr) : QWidget(parent) {
+        setMinimumHeight(48);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
+    }
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
@@ -43,15 +46,21 @@ protected:
 class DataHistoryView : public QWidget {
 public:
     explicit DataHistoryView(DebuggerSession* session, QWidget* parent = nullptr) : QWidget(parent) {
+        setMinimumSize(0, 0);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
         auto* layout = new QVBoxLayout(this);
         layout->addWidget(new QLabel(tr("Recorded values — selecting a stop does not rewind execution."), this));
         auto* stops = new QComboBox(this); layout->addWidget(stops);
         auto* path = new QLineEdit(this); path->setPlaceholderText(tr("Value path, e.g. controller.state.temperature")); layout->addWidget(path);
         auto* values = new QTableWidget(this); values->setColumnCount(2);
+        values->setMinimumHeight(45);
+        values->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
         values->setHorizontalHeaderLabels({tr("Path"), tr("Recorded value")});
         values->setEditTriggers(QAbstractItemView::NoEditTriggers); layout->addWidget(values);
         auto* plot = new HistoryPlot(this); layout->addWidget(plot);
         auto* history = new QTableWidget(this); history->setColumnCount(3);
+        history->setMinimumHeight(45);
+        history->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
         history->setHorizontalHeaderLabels({tr("Snapshot"), tr("Value"), tr("Changed")});
         history->setEditTriggers(QAbstractItemView::NoEditTriggers); layout->addWidget(history);
         auto updateHistory = [session, path, plot, history] {
@@ -81,4 +90,7 @@ public:
             stops->setCurrentIndex(stops->count()-1); updateHistory();
         });
     }
+
+    QSize minimumSizeHint() const override { return QSize(0, 0); }
+    QSize sizeHint() const override { return QSize(520, 220); }
 };

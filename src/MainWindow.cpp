@@ -59,6 +59,7 @@
 #include <QStatusBar>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSplitter>
 
 #include "SettingsDialog.h"
 #include "DebugAssistantDock.h"
@@ -66,6 +67,7 @@
 #include "HardwareServerConfig.h"
 #include "SourceBrowserDialog.h"
 #include "history/GdbStopHistoryBackend.h"
+#include "history/DisplayedState.h"
 #include "history/HistorySession.h"
 #include "history/HistoryView.h"
 
@@ -344,18 +346,21 @@ void MainWindow::setupUi() {
     addDockWidget(Qt::BottomDockWidgetArea, memoryDock);
     tabifyDockWidget(m_dataDock, memoryDock);
 
-    auto* historyDock = new QDockWidget(tr("Data timeline"), this);
-    historyDock->setObjectName("DataTimelineDock");
-    historyDock->setWidget(new DataHistoryView(m_session.get(), historyDock));
-    addDockWidget(Qt::BottomDockWidgetArea, historyDock);
-    tabifyDockWidget(m_dataDock, historyDock);
-
 	// Execution History: generic timeline over recorded stops. The backend
 	// observes live GDB stops; navigation never disturbs the live target.
 	m_historySession = new qddd::history::HistorySession(this);
 	m_historyBackend = new qddd::history::GdbStopHistoryBackend(m_session.get(), this);
 	m_historyBackend->attachStore(&m_historySession->eventStore());
 	m_historySession->setBackend(m_historyBackend);
+	m_historySession->setSnapshotResolver([this](int stepIndex)
+	    -> std::optional<ExecutionSnapshot> {
+		for (const ExecutionSnapshot& snapshot : m_session->executionHistory())
+			if (snapshot.stepIndex == stepIndex)
+				return snapshot;
+		return std::nullopt;
+	});
+	m_displayedState = new qddd::history::DisplayedStateModel(
+	    m_session.get(), m_historySession, this);
 	connect(m_historyBackend, &qddd::history::GdbStopHistoryBackend::stopRecorded,
 	        this, [this](const qddd::history::TraceEvent& event) {
 		        m_historySession->addEvent(event);
@@ -367,21 +372,35 @@ void MainWindow::setupUi() {
 		        m_historySession->setBackend(m_historyBackend);
 	        });
 
-	auto* executionHistoryDock = new QDockWidget(tr("Execution History"), this);
-	executionHistoryDock->setObjectName("ExecutionHistoryDock");
-	m_historyView = new qddd::history::HistoryView(m_historySession, executionHistoryDock);
-	executionHistoryDock->setWidget(m_historyView);
-	addDockWidget(Qt::BottomDockWidgetArea, executionHistoryDock);
-	tabifyDockWidget(m_dataDock, executionHistoryDock);
-	m_historyDock = executionHistoryDock;
+	auto* timeTravelDock = new QDockWidget(tr("Time Travel"), this);
+	timeTravelDock->setObjectName("TimeTravelDock");
+	timeTravelDock->setMinimumSize(0, 0);
+	auto* timeTravelSplit = new QSplitter(Qt::Vertical, timeTravelDock);
+	timeTravelSplit->setChildrenCollapsible(true);
+	timeTravelSplit->setOpaqueResize(true);
+	timeTravelSplit->setMinimumSize(0, 0);
+	m_historyView = new qddd::history::HistoryView(m_historySession, timeTravelSplit);
+	timeTravelSplit->addWidget(m_historyView);
+	timeTravelSplit->addWidget(new DataHistoryView(m_session.get(), timeTravelSplit));
+	timeTravelSplit->setStretchFactor(0, 3);
+	timeTravelSplit->setStretchFactor(1, 2);
+	timeTravelSplit->setSizes({260, 150});
+	timeTravelDock->setWidget(timeTravelSplit);
+	addDockWidget(Qt::BottomDockWidgetArea, timeTravelDock);
+	tabifyDockWidget(m_dataDock, timeTravelDock);
+	m_historyDock = timeTravelDock;
 
-	// Historical-state synchronization (source-location preview).
-	// Live debugger state is untouched; the next live stop navigates back.
-	connect(m_historySession, &qddd::history::HistorySession::selectedEventChanged,
-	        this, [this](qddd::history::TraceEventId id) {
-		        const qddd::history::TraceEvent* event = m_historySession->eventById(id);
-		        if (event && event->source && event->source->isValid())
-			        showSourceLocation(event->source->file, event->source->line);
+	connect(m_displayedState,
+	        &qddd::history::DisplayedStateModel::displayedStateChanged,
+	        this, [this](const qddd::history::DisplayedDebugState& state) {
+		        const bool historical = !state.isLive();
+		        m_variablesView->setDisplayedSnapshot(
+		            historical ? state.snapshot : std::nullopt, state.snapshotStep);
+		        m_graphicalView->setDisplayedSnapshot(
+		            historical ? state.snapshot : std::nullopt, state.snapshotStep);
+		        if (historical && state.snapshot && !state.snapshot->file.isEmpty()
+		            && state.snapshot->line > 0)
+			        showSourceLocation(state.snapshot->file, state.snapshot->line);
 	        });
 	connect(m_session.get(), &DebuggerSession::targetStarted, this, [this] {
 		m_historySession->setRecording(true);
@@ -666,7 +685,7 @@ void MainWindow::setupMenusAndToolbars() {
 			        m_disasmView->setAutoRefreshEnabled(on);
 	        });
 
-	QAction *toggleHistory = viewMenu->addAction(tr("Execution History"));
+	QAction *toggleHistory = viewMenu->addAction(tr("Time Travel"));
 	toggleHistory->setCheckable(true);
 	toggleHistory->setChecked(true);
 	connect(toggleHistory, &QAction::triggered, this,
@@ -808,26 +827,37 @@ void MainWindow::setupMenusAndToolbars() {
 		m_stackView->selectFrame(idx - 1);
 	});
 	connect(runAct, &QAction::triggered, this, &MainWindow::runProgram);
+	connect(runAgainAct, &QAction::triggered, this, &MainWindow::runProgram);
 	connect(contAct, &QAction::triggered, this, &MainWindow::continueProgram);
 	connect(stepInAct, &QAction::triggered, this, &MainWindow::stepInto);
 	connect(stepOverAct, &QAction::triggered, this, &MainWindow::stepOver);
 	connect(stepOutAct, &QAction::triggered, this, &MainWindow::stepOut);
-	connect(upAct, &QAction::triggered, this, &MainWindow::up);
-	connect(downAct, &QAction::triggered, this, &MainWindow::down);
 	connect(toggleBpAct, &QAction::triggered, this, &MainWindow::toggleBp);
 
 	// Mirror the target state in the command UI, as mature MI frontends do:
 	// execution controls are available only while stopped, and Interrupt only
 	// while running. The backend guard remains as protection against races.
-	auto setTargetRunningUi = [runAct, contAct, stepInAct, stepOverAct,
-	                           stepOutAct, untilAct, interruptAct](bool running) {
+	auto setTargetRunningUi = [this, runAct, runAgainAct, contAct, stepInAct,
+	                           stepOverAct, stepOutAct, untilAct,
+	                           interruptAct](bool running) {
 		runAct->setEnabled(!running);
+		runAgainAct->setEnabled(!running);
 		contAct->setEnabled(!running);
 		stepInAct->setEnabled(!running);
 		stepOverAct->setEnabled(!running);
 		stepOutAct->setEnabled(!running);
 		untilAct->setEnabled(!running);
 		interruptAct->setEnabled(running);
+		const QString stoppedOnly = tr("Available while the target is stopped");
+		const QString runningOnly = tr("Available while the target is running");
+		runAct->setToolTip(running ? stoppedOnly : tr("Run (F2)"));
+		runAgainAct->setToolTip(running ? stoppedOnly : tr("Run Again (F3)"));
+		contAct->setToolTip(running ? stoppedOnly : tr("Continue (F9)"));
+		stepInAct->setToolTip(running ? stoppedOnly : tr("Step Into (F5)"));
+		stepOverAct->setToolTip(running ? stoppedOnly : tr("Step Over (F6)"));
+		stepOutAct->setToolTip(running ? stoppedOnly : tr("Step Out"));
+		untilAct->setToolTip(running ? stoppedOnly : tr("Run Until Cursor (F7)"));
+		interruptAct->setToolTip(running ? tr("Interrupt") : runningOnly);
 	};
 	setTargetRunningUi(false);
 	connect(m_session.get(), &DebuggerSession::targetRunning, this,
@@ -1063,21 +1093,40 @@ void MainWindow::setupMenusAndToolbars() {
 	addButton(nextBackAct);
 	addButton(contBackAct);
 
-	auto updateReverseActions = [this, stepBackAct, nextBackAct, contBackAct] {
-		const bool ok = m_session && m_session->supportsReverseExecution();
+	auto targetRunning = std::make_shared<bool>(false);
+	auto updateReverseActions = [this, stepBackAct, nextBackAct, contBackAct,
+	                             targetRunning] {
+		const bool supported = m_session && m_session->supportsReverseExecution();
+		const bool ok = supported && !*targetRunning;
 		stepBackAct->setEnabled(ok);
 		nextBackAct->setEnabled(ok);
 		contBackAct->setEnabled(ok);
-		const QString tip = ok
-			? tr("Reverse execution")
-			: tr("Reverse execution is not available with the current debugger backend.");
+		const QString tip = *targetRunning
+			? tr("Available while the target is stopped")
+			: (supported
+				? tr("Reverse execution")
+				: tr("Reverse execution is not available with the current debugger backend."));
 		stepBackAct->setToolTip(tip);
 		nextBackAct->setToolTip(tip);
 		contBackAct->setToolTip(tip);
 	};
 	updateReverseActions();
 	connect(m_session.get(), &DebuggerSession::targetStarted, this, updateReverseActions);
-	connect(m_session.get(), &DebuggerSession::targetStopped, this, updateReverseActions);
+	connect(m_session.get(), &DebuggerSession::targetRunning, this,
+	        [targetRunning, updateReverseActions] {
+		        *targetRunning = true;
+		        updateReverseActions();
+	        });
+	connect(m_session.get(), &DebuggerSession::targetStopped, this,
+	        [targetRunning, updateReverseActions] {
+		        *targetRunning = false;
+		        updateReverseActions();
+	        });
+	connect(m_session.get(), &DebuggerSession::targetExited, this,
+	        [targetRunning, updateReverseActions](int) {
+		        *targetRunning = false;
+		        updateReverseActions();
+	        });
 	connect(m_session.get(), &DebuggerSession::reverseExecutionAvailabilityChanged,
 	        this, updateReverseActions);
 

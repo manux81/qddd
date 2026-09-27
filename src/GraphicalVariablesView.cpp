@@ -42,6 +42,7 @@
 #include <QGraphicsSceneWheelEvent>
 #include <QVBoxLayout>
 #include <QToolButton>
+#include <QLabel>
 #include <QStyle>
 #include <QMenu>
 #include <QInputDialog>
@@ -67,6 +68,32 @@ static constexpr int MinimumNodeWidth = 260;
 static constexpr int MaximumNodeWidth = 440;
 static constexpr qreal MinimumZoom = 0.25;
 static constexpr qreal MaximumZoom = 4.0;
+
+static std::unique_ptr<DebugVariable> snapshotGraphTree(
+	const DebugVariable* source, DebugVariable* parent,
+	const ExecutionSnapshot& snapshot)
+{
+	if (!source)
+		return {};
+	auto copy = std::make_unique<DebugVariable>();
+	copy->name = source->name;
+	copy->expression = source->expression;
+	copy->value = snapshot.variableValues.value(source->fullPath(), source->value);
+	copy->type = source->type;
+	copy->address = source->address;
+	copy->pointeeAddress = source->pointeeAddress;
+	copy->isPointer = source->isPointer;
+	copy->hasChildren = source->hasChildren;
+	copy->isWatch = source->isWatch;
+	copy->enabled = source->enabled;
+	copy->parent = parent;
+	for (const auto& child : source->children) {
+		auto childCopy = snapshotGraphTree(child.get(), copy.get(), snapshot);
+		if (childCopy)
+			copy->children.push_back(std::move(childCopy));
+	}
+	return copy;
+}
 
 
 
@@ -1397,6 +1424,15 @@ GraphicalVariablesView::GraphicalVariablesView(QWidget* parent)
 	vl->setContentsMargins(6, 6, 6, 6);
 	vl->setSpacing(4);
 
+	// Child of the view (like the toolbar overlay), not of the viewport:
+	// viewport children scroll with the scene contents.
+	m_modeChip = new QLabel(tr("LIVE"), this);
+	m_modeChip->setAlignment(Qt::AlignCenter);
+	m_modeChip->setToolTip(tr("Data Display is showing the current debugger state"));
+	updateModeChip();
+	positionModeChip();
+	m_modeChip->raise();
+
 	auto mk = [&](const QString &t, const QString& tooltip) {
 		auto *b = new QToolButton(overlay);
 		b->setText(t);
@@ -1457,6 +1493,70 @@ void GraphicalVariablesView::setSession(DebuggerSession* s)
 	refresh();
 }
 
+void GraphicalVariablesView::setDisplayedSnapshot(
+	const std::optional<ExecutionSnapshot>& snapshot, int snapshotStep)
+{
+	m_historical = snapshot.has_value();
+	m_historicalSnapshot = snapshot;
+	m_historicalStep = snapshotStep;
+	m_historicalRoots.clear();
+	if (snapshot && m_session) {
+		for (const auto& root : m_session->variables()) {
+			auto copy = snapshotGraphTree(root.get(), nullptr, *snapshot);
+			if (copy)
+				m_historicalRoots.push_back(std::move(copy));
+		}
+	}
+	updateModeChip();
+	refresh();
+}
+
+void GraphicalVariablesView::updateModeChip()
+{
+	if (!m_modeChip)
+		return;
+	if (m_historical) {
+		m_modeChip->setText(tr("HISTORY · %1").arg(m_historicalStep));
+		m_modeChip->setToolTip(
+			tr("Recorded state from stop %1; the live target was not rewound")
+				.arg(m_historicalStep));
+		// Muted amber on dark, matching the app palette (cf. command pill).
+		m_modeChip->setStyleSheet(QStringLiteral(
+			"QLabel { color: #f0d9a8; background: #4a3a20; border: 1px solid #6b5426; "
+			"border-radius: 4px; padding: 1px 6px; }"));
+	} else {
+		m_modeChip->setText(tr("LIVE"));
+		m_modeChip->setToolTip(tr("Data Display is showing the current debugger state"));
+		// Same muted green as the primary command button.
+		m_modeChip->setStyleSheet(QStringLiteral(
+			"QLabel { color: #d8f3dc; background: #2f3f33; border: 1px solid #3b5141; "
+			"border-radius: 4px; padding: 1px 6px; }"));
+	}
+	m_modeChip->adjustSize();
+	positionModeChip();
+	m_modeChip->raise();
+}
+
+void GraphicalVariablesView::positionModeChip()
+{
+	if (!m_modeChip)
+		return;
+	// viewport()->geometry() is in view coordinates and already excludes
+	// the scroll bars, so the chip stays pinned to the visible corner.
+	const QRect area = viewport()->geometry();
+	m_modeChip->adjustSize();
+	m_modeChip->move(qMax(8, area.right() - m_modeChip->width() - 12),
+	                 qMax(8, area.bottom() - m_modeChip->height() - 12));
+}
+
+void GraphicalVariablesView::resizeEvent(QResizeEvent* event)
+{
+	QGraphicsView::resizeEvent(event);
+	positionModeChip();
+	if (m_modeChip)
+		m_modeChip->raise();
+}
+
 void GraphicalVariablesView::refresh()
 {
     qCDebug(debuggerUiLog) << "refresh graph";
@@ -1489,7 +1589,8 @@ void GraphicalVariablesView::refresh()
 	QHash<QString, GraphicalNodeItem*> rootItemByExpression;
 
 	int y = 0;
-	for (auto& v : m_session->variables()) {
+	const auto& roots = m_historical ? m_historicalRoots : m_session->variables();
+	for (auto& v : roots) {
 		const QString layoutKey = layoutKeyForVariable(v.get());
         auto* item = m_rootItems.value(layoutKey, nullptr);
         if (!item) {
@@ -1783,6 +1884,10 @@ void GraphicalVariablesView::wheelEvent(QWheelEvent* event)
 
 void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent* event)
 {
+	if (m_historical) {
+		event->accept();
+		return;
+	}
 	auto* item =
 		qgraphicsitem_cast<GraphicalNodeItem*>(itemAt(event->pos()));
 
@@ -1806,6 +1911,14 @@ void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent* event)
 
 void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
 {
+	if (m_historical) {
+		QMenu menu(this);
+		auto* info = menu.addAction(
+			tr("Historical stop %1 — read-only").arg(m_historicalStep));
+		info->setEnabled(false);
+		menu.exec(event->globalPos());
+		return;
+	}
     const bool previousInteraction=m_modalGraphInteraction;
     m_modalGraphInteraction=true;
     struct ResumeUpdates { std::function<void()> resume; ~ResumeUpdates() { resume(); } } resume{

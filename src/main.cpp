@@ -32,6 +32,7 @@
 #include "MainWindow.h"
 #include "QDDDSplash.h"
 #include <QApplication>
+#include <QScreen>
 #include <QTimer>
 
 int main(int argc, char *argv[]) {
@@ -147,7 +148,14 @@ int main(int argc, char *argv[]) {
 		splash.hide();
 
 		MainWindow *w = new MainWindow(programPath);
-		w->resize(1200, 800);
+		QScreen* screen = w->screen() ? w->screen() : QApplication::primaryScreen();
+		const QRect available = screen ? screen->availableGeometry()
+		                               : QRect(0, 0, 1200, 800);
+		const QSize initial(qMin(1200, available.width()),
+		                    qMin(800, available.height()));
+		w->resize(initial);
+		w->move(available.center() - QPoint(initial.width() / 2,
+		                                    initial.height() / 2));
 		w->show();
 	});
 

@@ -74,7 +74,10 @@ HistoryTimelineWidget::HistoryTimelineWidget(QWidget *parent)
 {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
-    setMinimumHeight(220);
+    // This widget lives in a bottom dock. A large hard minimum forces the
+    // QMainWindow beyond the available screen and starves the source editor.
+    setMinimumHeight(70);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
     setToolTip(tr("Click an event to select it; click empty space to move the time cursor."));
 }
 
@@ -480,6 +483,8 @@ HistoryView::HistoryView(HistorySession *session, QWidget *parent)
     : QWidget(parent)
     , m_session(session)
 {
+    setMinimumSize(0, 0);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(4, 4, 4, 4);
     outer->setSpacing(4);
@@ -492,6 +497,8 @@ HistoryView::HistoryView(HistorySession *session, QWidget *parent)
     setupTransport(outer);
 
     auto *splitter = new QSplitter(Qt::Vertical, this);
+    splitter->setChildrenCollapsible(true);
+    splitter->setMinimumSize(0, 0);
     m_timeline = new HistoryTimelineWidget(splitter);
     m_timeline->setSession(session);
     splitter->addWidget(m_timeline);
@@ -503,6 +510,7 @@ HistoryView::HistoryView(HistorySession *session, QWidget *parent)
     splitter->addWidget(bottom);
     splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 2);
+    splitter->setSizes({180, 100});
     outer->addWidget(splitter, 1);
 
     connect(session, &HistorySession::capabilitiesChanged, this,
@@ -515,6 +523,8 @@ HistoryView::HistoryView(HistorySession *session, QWidget *parent)
             &HistoryView::refreshDetails);
     connect(session, &HistorySession::currentTimeChanged, this,
             &HistoryView::refreshDetails);
+    connect(session, &HistorySession::currentTimeChanged, this,
+            &HistoryView::refreshControls);
     connect(m_timeline, &HistoryTimelineWidget::eventClicked, this,
             &HistoryView::refreshDetails);
     connect(m_timeline, &HistoryTimelineWidget::timeClicked, this,
@@ -536,14 +546,26 @@ QToolButton *HistoryView::makeButton(const QString &text, const QString &tooltip
 
 void HistoryView::setupTransport(QBoxLayout *layout)
 {
-    auto *row = new QHBoxLayout;
+    // Bar styling follows the app-wide dark theme (cf. the command pill in
+    // MainWindow and the Data Display overlay): flat buttons, subtle hover,
+    // dim status text. Layout and labels are unchanged.
+    auto *bar = new QWidget(this);
+    bar->setStyleSheet(QStringLiteral(
+        "QToolButton { background: transparent; border: none; border-radius: 4px; "
+        "padding: 3px; margin: 0px; color: #d8d8d8; font-size: 13px; "
+        "min-width: 24px; min-height: 24px; }"
+        "QToolButton:hover { background: #333333; }"
+        "QToolButton:pressed { background: #1b1b1b; }"
+        "QToolButton:disabled { color: #5f5f5f; background: transparent; }"));
+    auto *row = new QHBoxLayout(bar);
+    row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(2);
     // U+23EE, U+25C0 etc. render without icon assets.
     m_jumpStart = makeButton(tr("⏮"), tr("Jump to start (oldest recorded stop)"));
     m_stepBack = makeButton(tr("◀"), tr("Select previous event"));
     m_stepFwd = makeButton(tr("▶"), tr("Select next event"));
-    m_contBack = makeButton(tr("⏪"), tr("Continue backward (needs reverse-continue support)"));
-    m_contFwd = makeButton(tr("⏩"), tr("Continue forward (needs reverse-continue support)"));
+    m_contBack = makeButton(tr("⏪"), tr("Jump to oldest recorded stop"));
+    m_contFwd = makeButton(tr("⏩"), tr("Return to live state"));
     m_jumpEnd = makeButton(tr("⏭"), tr("Jump to end / live"));
     row->addWidget(m_jumpStart);
     row->addWidget(m_stepBack);
@@ -553,8 +575,9 @@ void HistoryView::setupTransport(QBoxLayout *layout)
     row->addWidget(m_jumpEnd);
     m_status = new QLabel(this);
     m_status->setTextFormat(Qt::PlainText);
+    m_status->setStyleSheet(QStringLiteral("color: #9a9a9a; font-size: 11px;"));
     row->addWidget(m_status, 1);
-    layout->addLayout(row);
+    layout->addWidget(bar);
 
     connect(m_jumpStart, &QToolButton::clicked, this, &HistoryView::goToStart);
     connect(m_stepBack, &QToolButton::clicked, this, &HistoryView::stepBackward);
@@ -598,32 +621,14 @@ void HistoryView::refreshControls()
     if (!m_session)
         return;
     const bool hasEvents = !m_session->storedEvents().empty();
-    const HistoryCapabilities caps = m_session->capabilities();
-    const bool reverseContinue = caps.testFlag(HistoryCapability::ReverseContinue);
-    const bool canStep = caps.testFlag(HistoryCapability::ReverseStep);
-
     m_jumpStart->setEnabled(hasEvents);
-    m_jumpEnd->setEnabled(hasEvents);
-    // Steps move the target when a reverse backend exists, otherwise they
-    // navigate the recorded stops. Either way they need history.
-    m_stepBack->setEnabled(hasEvents);
-    m_stepFwd->setEnabled(hasEvents);
-    if (canStep) {
-        m_stepBack->setToolTip(tr("Step backward (reverse execution)"));
-        m_stepFwd->setToolTip(tr("Step forward (reverse execution)"));
-    } else {
-        m_stepBack->setToolTip(
-            tr("Select previous event (no reverse-step backend; target is not moved)"));
-        m_stepFwd->setToolTip(
-            tr("Select next event (no reverse-step backend; target is not moved)"));
-    }
-    m_contBack->setEnabled(hasEvents && reverseContinue);
-    m_contFwd->setEnabled(hasEvents && reverseContinue);
-    if (!reverseContinue) {
-        const QString tip = tr("Disabled: the active backend has no reverse-continue support.");
-        m_contBack->setToolTip(tip);
-        m_contFwd->setToolTip(tip);
-    }
+    m_jumpEnd->setEnabled(hasEvents && !m_session->isLive());
+    m_stepBack->setEnabled(m_session->canSelectPreviousEvent());
+    m_stepFwd->setEnabled(m_session->canSelectNextEvent());
+    m_stepBack->setToolTip(tr("Select previous recorded stop"));
+    m_stepFwd->setToolTip(tr("Select next recorded stop"));
+    m_contBack->setEnabled(m_session->canSelectPreviousEvent());
+    m_contFwd->setEnabled(hasEvents && !m_session->isLive());
 
     const int count = int(m_session->storedEvents().size());
     QString text = tr("%1 recorded stops").arg(count);
@@ -711,64 +716,24 @@ void HistoryView::goToStart()
 
 void HistoryView::stepBackward()
 {
-    if (!m_session)
-        return;
-    if (m_session->capabilities().testFlag(HistoryCapability::ReverseStep)) {
-        if (HistoryBackend *backend = m_session->backend())
-            backend->stepBackward();
-        return;
-    }
-    const std::vector<TraceEvent> &all = m_session->storedEvents();
-    if (all.empty())
-        return;
-    const TraceEventId current = m_session->selectedEventId();
-    for (size_t i = 0; i < all.size(); ++i) {
-        if (all[i].id == current) {
-            if (i > 0)
-                m_session->selectEvent(all[i - 1].id);
-            return;
-        }
-    }
-    m_session->selectEvent(all.back().id);
+    if (m_session)
+        m_session->selectPreviousEvent();
 }
 
 void HistoryView::stepForward()
 {
-    if (!m_session)
-        return;
-    if (m_session->capabilities().testFlag(HistoryCapability::ReverseStep)) {
-        if (HistoryBackend *backend = m_session->backend())
-            backend->stepForward();
-        return;
-    }
-    const std::vector<TraceEvent> &all = m_session->storedEvents();
-    if (all.empty())
-        return;
-    const TraceEventId current = m_session->selectedEventId();
-    for (size_t i = 0; i < all.size(); ++i) {
-        if (all[i].id == current) {
-            if (i + 1 < all.size())
-                m_session->selectEvent(all[i + 1].id);
-            return;
-        }
-    }
-    m_session->selectEvent(all.front().id);
+    if (m_session)
+        m_session->selectNextEvent();
 }
 
 void HistoryView::continueBackward()
 {
-    if (!m_session)
-        return;
-    if (HistoryBackend *backend = m_session->backend())
-        backend->continueBackward();
+    goToStart();
 }
 
 void HistoryView::continueForward()
 {
-    if (!m_session)
-        return;
-    if (HistoryBackend *backend = m_session->backend())
-        backend->continueForward();
+    goToEnd();
 }
 
 void HistoryView::goToEnd()
