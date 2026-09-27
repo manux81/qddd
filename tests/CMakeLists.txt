@@ -126,8 +126,20 @@ add_test(NAME type_visualizer_tests COMMAND type_visualizer_tests)
 add_executable(history_model_tests HistoryModelTests.cpp
     ../src/history/HistorySession.cpp
     ../src/history/HistoryTypes.cpp
+    ../src/history/DisplayedState.cpp
     ../src/history/GdbStopHistoryBackend.cpp
     ../src/DebugSession.h ../src/DebuggerTransport.h)
 target_include_directories(history_model_tests PRIVATE ../src)
 target_link_libraries(history_model_tests PRIVATE Qt5::Core)
 add_test(NAME history_model_tests COMMAND history_model_tests)
+add_executable(history_stop_flow_tests HistoryStopFlowTests.cpp
+    ../src/DebugSession.cpp ../src/GdbMiSession.h ../src/DebuggerTransport.h
+    ../src/MiStreamBuffer.cpp
+    ../src/RuntimeObjectGraph.cpp
+    ../src/history/HistorySession.cpp
+    ../src/history/HistoryTypes.cpp
+    ../src/history/DisplayedState.cpp
+    ../src/history/GdbStopHistoryBackend.cpp)
+target_include_directories(history_stop_flow_tests PRIVATE ../src)
+target_link_libraries(history_stop_flow_tests PRIVATE Qt5::Core)
+add_test(NAME history_stop_flow_tests COMMAND history_stop_flow_tests)
