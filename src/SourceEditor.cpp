@@ -533,7 +533,8 @@ void SourceEditor::showLocation(const QString &file, int line) {
 
 	setPlainText(QString::fromUtf8(f.readAll()));
 
-	QTextCursor cursor(document()->findBlockByLineNumber(line - 1));
+	// Debugger lines refer to source blocks, not visual lines created by wrapping.
+	QTextCursor cursor(document()->findBlockByNumber(line - 1));
 	setTextCursor(cursor);
 	centerCursor();
 

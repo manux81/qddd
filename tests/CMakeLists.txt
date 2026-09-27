@@ -1,6 +1,16 @@
 find_package(Qt5 REQUIRED COMPONENTS Test)
 set(CMAKE_AUTOMOC ON)
 
+add_executable(source_editor_tests SourceEditorTests.cpp
+    ../src/SourceEditor.cpp ../src/SourceEditor.h
+    ../src/CodeHighlighter.cpp ../src/CodeHighlighter.h
+    ../src/DebugSession.cpp ../src/DebugSession.h ../src/GdbMiSession.h
+    ../src/DebuggerTransport.h ../src/MiStreamBuffer.cpp ../src/RuntimeObjectGraph.cpp)
+target_include_directories(source_editor_tests PRIVATE ../src)
+target_link_libraries(source_editor_tests PRIVATE Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Test)
+add_test(NAME source_editor_tests COMMAND source_editor_tests)
+set_tests_properties(source_editor_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(mi_stream_buffer_tests
     MiStreamBufferTests.cpp
     ../src/MiStreamBuffer.cpp
