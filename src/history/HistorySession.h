@@ -33,6 +33,9 @@ public:
     void addEvents(const std::vector<TraceEvent> &events);
     void clear();
     const std::vector<TraceEvent> &storedEvents() const { return m_events; }
+    // Adapter hook for co-located backends (e.g. GdbStopHistoryBackend::
+    // attachStore). Regular consumers use addEvent()/events().
+    std::vector<TraceEvent> &eventStore() { return m_events; }
 
     std::vector<TraceEvent> events(TimeRange range) const;
     std::vector<TraceEvent> events(TimeRange range, const QString &trackId) const;

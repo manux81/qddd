@@ -61,6 +61,22 @@ add_executable(qddd WIN32 MACOSX_BUNDLE
     MockGdbServer.cpp
     MockGdbServer.h
 
+    history/HistoryTypes.cpp
+    history/HistoryTypes.h
+    history/HistoryCapabilities.h
+    history/HistoryBackend.h
+    history/TimelineTrack.h
+    history/TargetDescriptor.h
+    history/HistorySession.cpp
+    history/HistorySession.h
+    history/GdbStopHistoryBackend.cpp
+    history/GdbStopHistoryBackend.h
+    history/RecordingMetadata.h
+    history/ExecutionComparison.h
+    history/FlowModel.h
+    history/HistoryView.cpp
+    history/HistoryView.h
+
     resources.qrc
 )
 
@@ -78,3 +94,5 @@ target_link_libraries(qddd
         Qt5::Widgets
         Qt5::Network
 )
+
+target_include_directories(qddd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

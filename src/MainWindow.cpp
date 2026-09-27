@@ -65,6 +65,9 @@
 #include "HardwareDebugSession.h"
 #include "HardwareServerConfig.h"
 #include "SourceBrowserDialog.h"
+#include "history/GdbStopHistoryBackend.h"
+#include "history/HistorySession.h"
+#include "history/HistoryView.h"
 
 namespace {
 constexpr int kAutomaticTarget = -3;
@@ -347,6 +350,46 @@ void MainWindow::setupUi() {
     addDockWidget(Qt::BottomDockWidgetArea, historyDock);
     tabifyDockWidget(m_dataDock, historyDock);
 
+	// Execution History: generic timeline over recorded stops. The backend
+	// observes live GDB stops; navigation never disturbs the live target.
+	m_historySession = new qddd::history::HistorySession(this);
+	m_historyBackend = new qddd::history::GdbStopHistoryBackend(m_session.get(), this);
+	m_historyBackend->attachStore(&m_historySession->eventStore());
+	m_historySession->setBackend(m_historyBackend);
+	connect(m_historyBackend, &qddd::history::GdbStopHistoryBackend::stopRecorded,
+	        this, [this](const qddd::history::TraceEvent& event) {
+		        m_historySession->addEvent(event);
+	        });
+	connect(m_historyBackend, &qddd::history::GdbStopHistoryBackend::backendChanged,
+	        this, [this] {
+		        // Re-publish availability/capabilities; HistorySession
+		        // emits only on actual change.
+		        m_historySession->setBackend(m_historyBackend);
+	        });
+
+	auto* executionHistoryDock = new QDockWidget(tr("Execution History"), this);
+	executionHistoryDock->setObjectName("ExecutionHistoryDock");
+	m_historyView = new qddd::history::HistoryView(m_historySession, executionHistoryDock);
+	executionHistoryDock->setWidget(m_historyView);
+	addDockWidget(Qt::BottomDockWidgetArea, executionHistoryDock);
+	tabifyDockWidget(m_dataDock, executionHistoryDock);
+	m_historyDock = executionHistoryDock;
+
+	// Historical-state synchronization (source-location preview).
+	// Live debugger state is untouched; the next live stop navigates back.
+	connect(m_historySession, &qddd::history::HistorySession::selectedEventChanged,
+	        this, [this](qddd::history::TraceEventId id) {
+		        const qddd::history::TraceEvent* event = m_historySession->eventById(id);
+		        if (event && event->source && event->source->isValid())
+			        showSourceLocation(event->source->file, event->source->line);
+	        });
+	connect(m_session.get(), &DebuggerSession::targetStarted, this, [this] {
+		m_historySession->setRecording(true);
+	});
+	connect(m_session.get(), &DebuggerSession::targetExited, this, [this](int) {
+		m_historySession->setRecording(false);
+	});
+
 	m_consoleDock = new QDockWidget(tr("Console"), this);
 	m_consoleWidget = new ConsoleWidget(m_consoleDock);
 	m_consoleDock->setWidget(m_consoleWidget);
@@ -623,6 +666,15 @@ void MainWindow::setupMenusAndToolbars() {
 			        m_disasmView->setAutoRefreshEnabled(on);
 	        });
 
+	QAction *toggleHistory = viewMenu->addAction(tr("Execution History"));
+	toggleHistory->setCheckable(true);
+	toggleHistory->setChecked(true);
+	connect(toggleHistory, &QAction::triggered, this,
+	        [this] {
+		        if (m_historyDock)
+			        m_historyDock->setVisible(!m_historyDock->isVisible());
+	        });
+
 	QMenu *programMenu = menuBar()->addMenu(tr("&Program"));
 
 	QAction *runAct = programMenu->addAction(tr("Run"));
@@ -642,6 +694,87 @@ void MainWindow::setupMenusAndToolbars() {
 	QAction *upAct = programMenu->addAction(tr("Up"));
 	QAction *downAct = programMenu->addAction(tr("Down"));
 	QAction *toggleBpAct = programMenu->addAction(tr("Toggle Breakpoint"));
+
+	// Reverse debugging: capability-driven. GDB-level reverse execution is
+	// available only when the session reports it; history navigation
+	// (Previous Breakpoint) works on recorded events; memory-write search
+	// stays disabled until a backend implements MemoryWriteHistory.
+	programMenu->addSeparator();
+	m_reverseStepInAct = programMenu->addAction(tr("Reverse Step Into"));
+	m_reverseStepInAct->setShortcut(Qt::SHIFT | Qt::Key_F5);
+	m_reverseStepOverAct = programMenu->addAction(tr("Reverse Step Over"));
+	m_reverseStepOverAct->setShortcut(Qt::SHIFT | Qt::Key_F6);
+	m_reverseContinueAct = programMenu->addAction(tr("Reverse Continue"));
+	m_reverseContinueAct->setShortcut(Qt::SHIFT | Qt::Key_F9);
+	m_prevBreakpointAct = programMenu->addAction(tr("Previous Breakpoint"));
+	m_prevBreakpointAct->setShortcut(Qt::ALT | Qt::Key_B);
+	m_prevWriteAct = programMenu->addAction(tr("Find Previous Write"));
+	m_prevWriteAct->setEnabled(false);
+	m_prevWriteAct->setToolTip(tr("Requires a backend with memory-write history."));
+	connect(m_reverseStepInAct, &QAction::triggered, this, [this] {
+		m_session->reverseStepInto();
+	});
+	connect(m_reverseStepOverAct, &QAction::triggered, this, [this] {
+		m_session->reverseStepOver();
+	});
+	connect(m_reverseContinueAct, &QAction::triggered, this, [this] {
+		m_session->reverseContinueExecution();
+	});
+	connect(m_prevBreakpointAct, &QAction::triggered, this, [this] {
+		if (!m_historySession)
+			return;
+		const std::vector<qddd::history::TraceEvent>& all =
+		    m_historySession->storedEvents();
+		const qddd::history::TimePoint cursor = m_historySession->currentTime();
+		for (auto it = all.rbegin(); it != all.rend(); ++it) {
+			if (it->type == qddd::history::TraceEventType::Breakpoint
+			    && it->time < cursor) {
+				m_historySession->selectEvent(it->id);
+				return;
+			}
+		}
+	});
+	auto updateHistoryActions = [this] {
+		const bool reverseOk = m_session && m_session->supportsReverseExecution();
+		if (m_reverseStepInAct)
+			m_reverseStepInAct->setEnabled(reverseOk);
+		if (m_reverseStepOverAct)
+			m_reverseStepOverAct->setEnabled(reverseOk);
+		if (m_reverseContinueAct)
+			m_reverseContinueAct->setEnabled(reverseOk);
+		const QString reverseTip = reverseOk
+		    ? tr("Reverse execution")
+		    : tr("Reverse execution is not available with the current debugger backend.");
+		if (m_reverseStepInAct)
+			m_reverseStepInAct->setToolTip(reverseTip);
+		if (m_reverseStepOverAct)
+			m_reverseStepOverAct->setToolTip(reverseTip);
+		if (m_reverseContinueAct)
+			m_reverseContinueAct->setToolTip(reverseTip);
+		bool hasBreakpointEvent = false;
+		if (m_historySession) {
+			for (const auto& event : m_historySession->storedEvents()) {
+				if (event.type == qddd::history::TraceEventType::Breakpoint) {
+					hasBreakpointEvent = true;
+					break;
+				}
+			}
+		}
+		if (m_prevBreakpointAct) {
+			m_prevBreakpointAct->setEnabled(hasBreakpointEvent);
+			if (!hasBreakpointEvent)
+				m_prevBreakpointAct->setToolTip(
+				    tr("No breakpoint events recorded yet."));
+		}
+		// m_prevWriteAct stays disabled: no backend implements
+		// MemoryWriteHistory yet (see docs/execution-history.md).
+	};
+	updateHistoryActions();
+	connect(m_session.get(), &DebuggerSession::reverseExecutionAvailabilityChanged,
+	        this, updateHistoryActions);
+	if (m_historySession)
+		connect(m_historySession, &qddd::history::HistorySession::eventsAppended,
+		        this, updateHistoryActions);
 
 
 	runAct->setIcon(QIcon(":/icons/resources/icons/run.svg"));

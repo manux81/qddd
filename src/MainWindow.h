@@ -59,6 +59,12 @@ class QLabel;
 class QProgressBar;
 class HardwareDebugSession;
 
+namespace qddd { namespace history {
+class HistorySession;
+class GdbStopHistoryBackend;
+class HistoryView;
+}}
+
 class MainWindow : public QMainWindow {
 	Q_OBJECT
   public:
@@ -131,6 +137,19 @@ class MainWindow : public QMainWindow {
 	DebugAssistantDock *m_aiAssistant = nullptr;
 	DisassemblyView *m_disasmView = nullptr;
 	QWidget *m_commandOverlay = nullptr;
+
+	// Execution-history subsystem (generic; no target knowledge here).
+	// The history backend observes live stops; the timeline navigates the
+	// recorded stops without disturbing the live target.
+	qddd::history::HistorySession *m_historySession = nullptr;
+	qddd::history::GdbStopHistoryBackend *m_historyBackend = nullptr;
+	qddd::history::HistoryView *m_historyView = nullptr;
+	QDockWidget *m_historyDock = nullptr;
+	QAction *m_reverseStepInAct = nullptr;
+	QAction *m_reverseStepOverAct = nullptr;
+	QAction *m_reverseContinueAct = nullptr;
+	QAction *m_prevBreakpointAct = nullptr;
+	QAction *m_prevWriteAct = nullptr;
 
 	QString m_currentProgram;
 	bool m_breakOnMainInserted = false;
