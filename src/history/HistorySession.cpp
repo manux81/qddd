@@ -123,6 +123,22 @@ const TraceEvent *HistorySession::eventById(TraceEventId id) const
     return nullptr;
 }
 
+void HistorySession::setSnapshotResolver(SnapshotResolver resolver)
+{
+    m_snapshotResolver = std::move(resolver);
+}
+
+std::optional<ExecutionSnapshot> HistorySession::snapshotForEvent(TraceEventId id) const
+{
+    const TraceEvent *event = eventById(id);
+    if (!event || !m_snapshotResolver)
+        return std::nullopt;
+    const std::optional<int> step = traceSnapshotStep(*event);
+    if (!step)
+        return std::nullopt;
+    return m_snapshotResolver(*step);
+}
+
 TimeRange HistorySession::fullRange() const
 {
     if (m_events.empty())

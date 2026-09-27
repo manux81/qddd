@@ -76,6 +76,8 @@ add_executable(qddd WIN32 MACOSX_BUNDLE
     history/FlowModel.h
     history/HistoryView.cpp
     history/HistoryView.h
+    history/DisplayedState.cpp
+    history/DisplayedState.h
 
     resources.qrc
 )

@@ -11,9 +11,13 @@
 #include "HistoryBackend.h"
 #include "HistoryTypes.h"
 
+#include "DebugSession.h"
+
 #include <QObject>
 
+#include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace qddd {
@@ -40,6 +44,16 @@ public:
     std::vector<TraceEvent> events(TimeRange range) const;
     std::vector<TraceEvent> events(TimeRange range, const QString &trackId) const;
     const TraceEvent *eventById(TraceEventId id) const;
+
+    // Snapshot resolution. The session stores stop-level TraceEvents; the
+    // authoritative per-stop variable state lives in the debugger's
+    // ExecutionSnapshot list and is looked up by stable stepIndex (see
+    // SnapshotStepKey), never by shifting vector position and never by
+    // duplicating values into the event. The resolver is injected so this
+    // model stays independent of any concrete debugger implementation.
+    using SnapshotResolver = std::function<std::optional<ExecutionSnapshot>(int stepIndex)>;
+    void setSnapshotResolver(SnapshotResolver resolver);
+    std::optional<ExecutionSnapshot> snapshotForEvent(TraceEventId id) const;
 
     TimeRange fullRange() const;
 
@@ -71,6 +85,7 @@ private:
     void emitStateForTime(TimePoint time);
 
     HistoryBackend *m_backend = nullptr; // not owned
+    SnapshotResolver m_snapshotResolver;
     HistoryCapabilities m_lastCapabilities{};
     bool m_lastAvailable = false;
 

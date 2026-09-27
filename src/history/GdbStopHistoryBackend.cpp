@@ -87,6 +87,12 @@ void GdbStopHistoryBackend::onStoppedAt(const QString &file, int line, const QSt
     event.time = nowNs();
     event.type = TraceEventType::Stop;
     event.trackId = QString::fromLatin1(TrackIds::Cpu);
+    // Deterministic event<->snapshot link: the counter was already
+    // incremented for this stop before stoppedAt was emitted, and the
+    // snapshot captured for this stop records the same value, so no timing
+    // assumptions are needed (snapshot capture is async).
+    event.metadata.insert(QString::fromLatin1(SnapshotStepKey),
+                          m_session->lastStopStepIndex());
     if (!m_lastAddress.isEmpty()) {
         bool ok = false;
         const quint64 pc = m_lastAddress.toULongLong(&ok, 0);

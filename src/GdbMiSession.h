@@ -70,6 +70,9 @@ public:
 	[[nodiscard]] const RuntimeGraphDiff& graphChanges() const override { return m_graphChanges; }
 	[[nodiscard]] const QSet<QString>& changedPaths() const override;
 	[[nodiscard]] const QVector<BreakpointInfo>& breakpoints() const override;
+	void setMaxSnapshots(int count) override;
+	[[nodiscard]] int maxSnapshots() const override { return m_maxSnapshots; }
+	[[nodiscard]] int lastStopStepIndex() const override { return m_stepCounter; }
 
 	// Expression evaluation / raw MI
 	void inspectValue(const QString& expression, std::function<void(SemanticValue)> callback) override;
@@ -159,7 +162,7 @@ private:
 	[[nodiscard]] QString remoteSpec() const;
 
 private:
-	Backend m_backend = Backend::LldbMi;
+	Backend m_backend = Backend::GdbMi;
 
 	QString m_lastStopFile;
 	QString m_lastStopFunction;
@@ -212,6 +215,7 @@ private:
 	RuntimeObjectGraph m_objectGraph;
 	RuntimeGraphDiff m_graphChanges;
 	QVector<ExecutionSnapshot> m_executionHistory;
+	int m_maxSnapshots = 500;
 	enum class ReplayDirection { None, Backward, Forward };
 	ReplayDirection m_replayDirection = ReplayDirection::None;
 	int m_historyCursor = -1;

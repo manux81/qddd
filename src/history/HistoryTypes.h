@@ -111,6 +111,27 @@ struct TraceEvent {
     QString label() const;
 };
 
+// Metadata key carrying the DebuggerSession stop sequence number
+// (ExecutionSnapshot::stepIndex) of the stop that produced this event.
+// This is the stable link between a TraceEvent and its snapshot: unlike
+// executionHistory() vector indices it survives front-eviction, and unlike
+// signal-arrival order it does not depend on async fetch timing. Events
+// without a captured snapshot (e.g. reverse-replay stops, capture skipped
+// on session reset) simply carry no usable step.
+inline constexpr const char *SnapshotStepKey = "snapshotStep";
+
+inline std::optional<int> traceSnapshotStep(const TraceEvent &event)
+{
+    const QVariant value = event.metadata.value(QString::fromLatin1(SnapshotStepKey));
+    if (!value.isValid())
+        return std::nullopt;
+    bool ok = false;
+    const int step = value.toInt(&ok);
+    if (!ok)
+        return std::nullopt;
+    return step;
+}
+
 inline bool operator<(const TraceEvent &a, const TraceEvent &b)
 {
     if (a.time != b.time)

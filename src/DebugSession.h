@@ -270,6 +270,19 @@ public:
 	virtual const QSet<QString>& changedPaths() const = 0;
 	virtual const QVector<BreakpointInfo>& breakpoints() const = 0;
 
+	// Snapshot timeline bound. The history keeps at most maxSnapshots() stops;
+	// older snapshots are evicted from the front, so indices into
+	// executionHistory()/snapshotAt() shift as new stops arrive.
+	virtual void setMaxSnapshots(int count) = 0;
+	virtual int maxSnapshots() const = 0;
+
+	// Monotonic stop sequence number, incremented on every target stop.
+	// Lets history adapters correlate stop-derived events with the
+	// ExecutionSnapshot captured for the same stop. Unlike vector indices,
+	// the value recorded in ExecutionSnapshot::stepIndex is stable across
+	// executionHistory() eviction.
+	virtual int lastStopStepIndex() const = 0;
+
 	// Expression evaluation / raw MI
 	virtual void inspectValue(const QString& expression, std::function<void(SemanticValue)> callback) = 0;
 	virtual void readMemory(const QString& address, int byteCount, std::function<void(MemoryRead)> callback) = 0;
