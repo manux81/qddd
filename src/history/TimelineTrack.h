@@ -17,6 +17,7 @@ namespace qddd {
 namespace history {
 
 namespace TrackIds {
+inline const char *Stops = "stops";
 inline const char *Cpu = "cpu";
 inline const char *Interrupts = "interrupts";
 inline const char *Exceptions = "exceptions";
@@ -26,6 +27,56 @@ inline const char *Memory = "memory";
 inline const char *Peripherals = "peripherals";
 inline const char *UserEvents = "user";
 } // namespace TrackIds
+
+inline QString trackDisplayName(const QString &trackId)
+{
+    if (trackId == QLatin1String(TrackIds::Stops))
+        return QStringLiteral("Stops");
+    if (trackId == QLatin1String(TrackIds::Cpu))
+        return QStringLiteral("CPU");
+    if (trackId == QLatin1String(TrackIds::Interrupts))
+        return QStringLiteral("Interrupts");
+    if (trackId == QLatin1String(TrackIds::Exceptions))
+        return QStringLiteral("Exceptions");
+    if (trackId == QLatin1String(TrackIds::Breakpoints))
+        return QStringLiteral("Breakpoints");
+    if (trackId == QLatin1String(TrackIds::Watchpoints))
+        return QStringLiteral("Watchpoints");
+    if (trackId == QLatin1String(TrackIds::Memory))
+        return QStringLiteral("Memory");
+    if (trackId == QLatin1String(TrackIds::Peripherals))
+        return QStringLiteral("Peripherals");
+    if (trackId == QLatin1String(TrackIds::UserEvents))
+        return QStringLiteral("User Events");
+    return trackId;
+}
+
+inline int trackOrder(const QString &trackId)
+{
+    if (trackId == QLatin1String(TrackIds::Stops)) return 0;
+    if (trackId == QLatin1String(TrackIds::Cpu)) return 1;
+    if (trackId == QLatin1String(TrackIds::Interrupts)) return 2;
+    if (trackId == QLatin1String(TrackIds::Exceptions)) return 3;
+    if (trackId == QLatin1String(TrackIds::Breakpoints)) return 4;
+    if (trackId == QLatin1String(TrackIds::Watchpoints)) return 5;
+    if (trackId == QLatin1String(TrackIds::Memory)) return 6;
+    if (trackId == QLatin1String(TrackIds::Peripherals)) return 7;
+    if (trackId == QLatin1String(TrackIds::UserEvents)) return 8;
+    return 100;
+}
+
+inline QStringList activeTrackIds(const std::vector<TraceEvent> &store)
+{
+    QStringList ids;
+    for (const TraceEvent &event : store) {
+        if (!ids.contains(event.trackId))
+            ids << event.trackId;
+    }
+    std::sort(ids.begin(), ids.end(), [](const QString &a, const QString &b) {
+        return trackOrder(a) < trackOrder(b);
+    });
+    return ids;
+}
 
 class TimelineTrackProvider {
 public:
