@@ -1891,6 +1891,15 @@ void GdbMiSession::captureExecutionSnapshot()
 	m_historyCursor = m_executionHistory.size() - 1;
 	m_replayDirection = ReplayDirection::None;
 
+    // Bound the timeline: long sessions must not accumulate every stop.
+    // Snapshots evicted from the front shift executionHistory() indices.
+    if (m_executionHistory.size() > m_maxSnapshots) {
+        const int evicted = m_executionHistory.size() - m_maxSnapshots;
+        m_executionHistory.erase(m_executionHistory.begin(),
+                                 m_executionHistory.begin() + evicted);
+        m_historyCursor = qMax(-1, m_historyCursor - evicted);
+    }
+
     if (m_executionHistory.size() >= 2) {
         computeVariableChanges(
             m_executionHistory[m_executionHistory.size() - 2],
@@ -2262,6 +2271,17 @@ const ExecutionSnapshot* GdbMiSession::snapshotAt(int index) const
 }
 
 const QSet<QString>& GdbMiSession::changedPaths() const { return m_changedPaths; }
+
+void GdbMiSession::setMaxSnapshots(int count)
+{
+    m_maxSnapshots = qBound(1, count, 100000);
+    if (m_executionHistory.size() > m_maxSnapshots) {
+        const int evicted = m_executionHistory.size() - m_maxSnapshots;
+        m_executionHistory.erase(m_executionHistory.begin(),
+                                 m_executionHistory.begin() + evicted);
+        m_historyCursor = qMax(-1, m_historyCursor - evicted);
+    }
+}
 
 void GdbMiSession::readMemory(const QString& address, int byteCount,
                                  std::function<void(MemoryRead)> callback)

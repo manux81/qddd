@@ -1,5 +1,6 @@
 #include "GdbMiSession.h"
 #include "DebugSession.h"
+#include "ValueHistory.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -309,6 +310,39 @@ int main(int argc, char** argv)
 	session.removeWatchExpression(QStringLiteral("snapshotWatch"));
 	session.removeWatchExpression(QStringLiteral("unavailableWatch"));
 
+	// Bounded timeline: only the newest maxSnapshots() stops are retained.
+	if (session.maxSnapshots() != 500)
+		return 40;
+	session.setMaxSnapshots(2);
+	if (session.maxSnapshots() != 2)
+		return 41;
+	int boundedSnapshots = 0;
+	const auto boundedConnection = QObject::connect(
+		&session, &DebuggerSession::snapshotCaptured,
+		[&](const ExecutionSnapshot&) { ++boundedSnapshots; });
+	// stop_round is 3 here; three more stops yield lines 14, 15 and 16.
+	for (int stop = 0; stop < 3; ++stop) {
+		const int previous = boundedSnapshots;
+		session.sendRawCommand(QStringLiteral("-test-stop"));
+		if (!waitFor([&] { return boundedSnapshots > previous; }, 10000))
+			return 42;
+	}
+	QObject::disconnect(boundedConnection);
+	if (session.executionHistory().size() != 2)
+		return 43;
+	const ExecutionSnapshot* oldest = session.snapshotAt(0);
+	const ExecutionSnapshot* newest = session.snapshotAt(1);
+	if (!oldest || !newest || oldest->line != 15 || newest->line != 16)
+		return 44;
+	if (session.snapshotAt(2) != nullptr)
+		return 45;
+	const auto boundedHistory = valueHistory(session.executionHistory(),
+	                                         QStringLiteral("count"));
+	if (boundedHistory.size() != 2 || !boundedHistory[0].available ||
+	    !boundedHistory[1].available)
+		return 46;
+	session.setMaxSnapshots(500);
+
 	bool errorDone = false;
 	bool afterErrorDone = false;
 	session.sendRawCommand(QStringLiteral("-test-error"),
@@ -389,5 +423,11 @@ int main(int argc, char** argv)
 		return 16;
 
 	session.terminateSession();
+	session.setMaxSnapshots(0);
+	if (session.maxSnapshots() != 1)
+		return 47;
+	session.setMaxSnapshots(-5);
+	if (session.maxSnapshots() != 1)
+		return 48;
 	return 0;
 }
