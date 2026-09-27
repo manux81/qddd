@@ -132,6 +132,9 @@ add_executable(history_model_tests HistoryModelTests.cpp
 target_include_directories(history_model_tests PRIVATE ../src)
 target_link_libraries(history_model_tests PRIVATE Qt5::Core)
 add_test(NAME history_model_tests COMMAND history_model_tests)
+# The stop-flow harness drives a POSIX shell script pretending to be GDB,
+# like debug_session_mi_tests above: Unix-only.
+if(UNIX)
 add_executable(history_stop_flow_tests HistoryStopFlowTests.cpp
     ../src/DebugSession.cpp ../src/GdbMiSession.h ../src/DebuggerTransport.h
     ../src/MiStreamBuffer.cpp
@@ -143,3 +146,4 @@ add_executable(history_stop_flow_tests HistoryStopFlowTests.cpp
 target_include_directories(history_stop_flow_tests PRIVATE ../src)
 target_link_libraries(history_stop_flow_tests PRIVATE Qt5::Core)
 add_test(NAME history_stop_flow_tests COMMAND history_stop_flow_tests)
+endif()
