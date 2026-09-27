@@ -37,8 +37,6 @@
 #include <QStyledItemDelegate>
 #include <QFontDatabase>
 
-#include <optional>
-
 class QStandardItemModel;
 class HardwareDebugSession;
 
@@ -54,15 +52,7 @@ class VariablesView : public QTreeView {
 	void clearVariables();
 	void refresh();
 
-	// Historical preview: render a recorded snapshot read-only instead of
-	// the live session tree. Pass nullopt to return to live display.
-	// The snapshot is the authoritative stop-level state; no GDB reads are
-	// issued while historical.
-	void setDisplayedSnapshot(const std::optional<ExecutionSnapshot> &snapshot,
-	                          int snapshotStep = -1);
-
   private:
-	void refreshHistorical();
 	void addNode(QStandardItem *parent,
 	             DebugVariable *node);
 	void commitValue(QStandardItem *item);
@@ -73,9 +63,4 @@ class VariablesView : public QTreeView {
 	DebuggerSession *m_session = nullptr;
 	HardwareDebugSession *m_hardwareSession = nullptr;
 	bool m_refreshing = false;
-	// Historical preview state. While set, the view renders the recorded
-	// snapshot flat and read-only; live updates are held, not applied.
-	bool m_historical = false;
-	std::optional<ExecutionSnapshot> m_historicalSnapshot;
-	int m_historicalStep = -1;
 };

@@ -86,7 +86,7 @@ void GdbStopHistoryBackend::onStoppedAt(const QString &file, int line, const QSt
     event.id = m_nextId++;
     event.time = nowNs();
     event.type = TraceEventType::Stop;
-    event.trackId = QString::fromLatin1(TrackIds::Stops);
+    event.trackId = QString::fromLatin1(TrackIds::Cpu);
     // Deterministic event<->snapshot link: the counter was already
     // incremented for this stop before stoppedAt was emitted, and the
     // snapshot captured for this stop records the same value, so no timing

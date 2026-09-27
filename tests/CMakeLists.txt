@@ -126,7 +126,6 @@ add_test(NAME type_visualizer_tests COMMAND type_visualizer_tests)
 add_executable(history_model_tests HistoryModelTests.cpp
     ../src/history/HistorySession.cpp
     ../src/history/HistoryTypes.cpp
-    ../src/history/DisplayedState.cpp
     ../src/history/GdbStopHistoryBackend.cpp
     ../src/DebugSession.h ../src/DebuggerTransport.h)
 target_include_directories(history_model_tests PRIVATE ../src)

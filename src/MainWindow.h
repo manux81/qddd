@@ -63,7 +63,6 @@ namespace qddd { namespace history {
 class HistorySession;
 class GdbStopHistoryBackend;
 class HistoryView;
-class DisplayedStateModel;
 }}
 
 class MainWindow : public QMainWindow {
@@ -144,10 +143,13 @@ class MainWindow : public QMainWindow {
 	// recorded stops without disturbing the live target.
 	qddd::history::HistorySession *m_historySession = nullptr;
 	qddd::history::GdbStopHistoryBackend *m_historyBackend = nullptr;
-	qddd::history::DisplayedStateModel *m_displayedState = nullptr;
 	qddd::history::HistoryView *m_historyView = nullptr;
 	QDockWidget *m_historyDock = nullptr;
-	bool m_displayedHistorical = false;
+	QAction *m_reverseStepInAct = nullptr;
+	QAction *m_reverseStepOverAct = nullptr;
+	QAction *m_reverseContinueAct = nullptr;
+	QAction *m_prevBreakpointAct = nullptr;
+	QAction *m_prevWriteAct = nullptr;
 
 	QString m_currentProgram;
 	bool m_breakOnMainInserted = false;

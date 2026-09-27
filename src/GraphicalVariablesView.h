@@ -41,7 +41,6 @@
 #include <QTimer>
 #include <QContextMenuEvent>
 #include <functional>
-#include <optional>
 #include <vector>
 
 class GraphicalNodeItem;
@@ -184,11 +183,6 @@ public:
 
 	void setSession(DebuggerSession* session);
 
-	// Historical preview: render recorded snapshot values as read-only
-	// cards through the same pipeline. Pass nullopt to return to live.
-	void setDisplayedSnapshot(const std::optional<ExecutionSnapshot> &snapshot,
-	                          int snapshotStep = -1);
-
 public slots:
 	void refresh();
 	void zoomIn();
@@ -225,13 +219,6 @@ private:
 
 	QGraphicsScene*  m_scene   = nullptr;
 	DebuggerSession* m_session = nullptr;
-	// Historical preview: recorded snapshot rendered as flat read-only
-	// cards. While set, live updates re-render this recording; no GDB
-	// reads are issued and live interactions are disabled.
-	bool m_historical = false;
-	std::optional<ExecutionSnapshot> m_historicalSnapshot;
-	int m_historicalStep = -1;
-	std::vector<std::unique_ptr<DebugVariable>> m_historicalRoots;
 
 	QHash<QString, GraphicalNodeItem*> m_rootItems;
 	QHash<QString, QPointF> m_nodePositions;

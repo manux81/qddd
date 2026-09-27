@@ -1,27 +1,23 @@
 #include "HistoryView.h"
 
-#include "DebugSession.h"
-#include "history/ValuePlot.h"
+#include "history/FlowModel.h"
 
 #include <QBoxLayout>
 #include <QContextMenuEvent>
 #include <QFormLayout>
-#include <QHeaderView>
 #include <QKeyEvent>
 #include <QLabel>
-#include <QLineEdit>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
-#include <QTableWidget>
-#include <QTabWidget>
+#include <QSplitter>
 #include <QToolButton>
 #include <QToolTip>
+#include <QTreeWidget>
 #include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 namespace qddd {
 namespace history {
@@ -50,8 +46,6 @@ QString formatAddress(const std::optional<quint64> &address)
 
 QColor trackColor(const QString &trackId)
 {
-    if (trackId == QLatin1String(TrackIds::Stops))
-        return QColor(0x4c, 0xaf, 0x50);
     if (trackId == QLatin1String(TrackIds::Cpu))
         return QColor(0x4c, 0xaf, 0x50);
     if (trackId == QLatin1String(TrackIds::Interrupts))
@@ -69,15 +63,6 @@ QColor trackColor(const QString &trackId)
     return QColor(0x9e, 0x9e, 0x9e);
 }
 
-const TraceEvent *findEventByStep(const std::vector<TraceEvent> &store, int step)
-{
-    for (const TraceEvent &event : store) {
-        if (traceSnapshotStep(event) == step)
-            return &event;
-    }
-    return nullptr;
-}
-
 } // namespace
 
 // ============================================================================
@@ -89,8 +74,8 @@ HistoryTimelineWidget::HistoryTimelineWidget(QWidget *parent)
 {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
-    setMinimumHeight(150);
-    setToolTip(tr("Click an event to inspect the recorded stop; drag to pan, wheel to zoom."));
+    setMinimumHeight(220);
+    setToolTip(tr("Click an event to select it; click empty space to move the time cursor."));
 }
 
 void HistoryTimelineWidget::setSession(HistorySession *session)
@@ -98,13 +83,12 @@ void HistoryTimelineWidget::setSession(HistorySession *session)
     if (m_session)
         disconnect(m_session, nullptr, this, nullptr);
     m_session = session;
-    rebuildContentTracks();
+    rebuildDefaultTracks();
     m_followLive = true;
     m_viewStart = InvalidTime;
     if (!m_session)
         return;
     connect(m_session, &HistorySession::eventsAppended, this, [this] {
-        rebuildContentTracks();
         if (m_followLive)
             m_viewStart = InvalidTime;
         update();
@@ -121,15 +105,30 @@ void HistoryTimelineWidget::setTracks(std::vector<std::unique_ptr<TimelineTrackP
     update();
 }
 
-void HistoryTimelineWidget::rebuildContentTracks()
+void HistoryTimelineWidget::rebuildDefaultTracks()
 {
     m_tracks.clear();
     if (!m_session)
         return;
     const std::vector<TraceEvent> *store = &m_session->storedEvents();
-    for (const QString &trackId : activeTrackIds(*store)) {
+    struct Builtin {
+        const char *id;
+        const char *name;
+        int order;
+    };
+    const Builtin builtins[] = {
+        {TrackIds::Cpu, "CPU", 0},
+        {TrackIds::Interrupts, "Interrupts", 1},
+        {TrackIds::Exceptions, "Exceptions", 2},
+        {TrackIds::Breakpoints, "Breakpoints", 3},
+        {TrackIds::Watchpoints, "Watchpoints", 4},
+        {TrackIds::Memory, "Memory", 5},
+        {TrackIds::Peripherals, "Peripherals", 6},
+        {TrackIds::UserEvents, "User Events", 7},
+    };
+    for (const Builtin &builtin : builtins) {
         m_tracks.push_back(std::make_unique<FilterTrackProvider>(
-            trackId, trackDisplayName(trackId), trackOrder(trackId), store));
+            QString::fromLatin1(builtin.id), tr(builtin.name), builtin.order, store));
     }
 }
 
@@ -252,7 +251,7 @@ void HistoryTimelineWidget::paintEvent(QPaintEvent *)
     QFont labelFont = font();
     labelFont.setPointSize(std::max(8, labelFont.pointSize() - 1));
 
-    // Track rows (only lanes with recorded events exist).
+    // Track rows.
     for (size_t row = 0; row < m_tracks.size(); ++row) {
         const int y = layout.trackTop + int(row) * layout.trackHeight;
         const QRect rowRect(0, y, width(), layout.trackHeight);
@@ -474,48 +473,56 @@ void HistoryTimelineWidget::contextMenuEvent(QContextMenuEvent *event)
 }
 
 // ============================================================================
-// HistoryView: unified History dock
+// HistoryView
 // ============================================================================
 
-HistoryView::HistoryView(HistorySession *session, DebuggerSession *debugSession,
-                         DisplayedStateModel *displayModel, QWidget *parent)
+HistoryView::HistoryView(HistorySession *session, QWidget *parent)
     : QWidget(parent)
     , m_session(session)
-    , m_debug(debugSession)
-    , m_display(displayModel)
 {
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(4, 4, 4, 4);
     outer->setSpacing(4);
 
+    auto *preview = new QLabel(
+        tr("Preview — selecting history never disturbs the live target."), this);
+    preview->setStyleSheet(QStringLiteral("color: palette(mid); font-style: italic;"));
+    outer->addWidget(preview);
+
     setupTransport(outer);
 
-    m_timeline = new HistoryTimelineWidget(this);
+    auto *splitter = new QSplitter(Qt::Vertical, this);
+    m_timeline = new HistoryTimelineWidget(splitter);
     m_timeline->setSession(session);
-    outer->addWidget(m_timeline, 0);
+    splitter->addWidget(m_timeline);
 
-    auto *tabs = new QTabWidget(this);
-    tabs->addTab(buildStateTab(), tr("State"));
-    tabs->addTab(buildValueTab(), tr("Value History"));
-    tabs->addTab(buildEventTab(), tr("Event"));
-    outer->addWidget(tabs, 1);
+    auto *bottom = new QWidget(splitter);
+    auto *bottomLayout = new QHBoxLayout(bottom);
+    bottomLayout->setContentsMargins(0, 0, 0, 0);
+    setupDetails(bottomLayout);
+    splitter->addWidget(bottom);
+    splitter->setStretchFactor(0, 3);
+    splitter->setStretchFactor(1, 2);
+    outer->addWidget(splitter, 1);
 
-    if (m_display)
-        connect(m_display, &DisplayedStateModel::displayedStateChanged,
-                this, [this] { refreshAll(); });
-    if (m_session) {
-        connect(m_session, &HistorySession::eventsAppended, this, [this] {
-            refreshTransport();
-            refreshValueTab();
-        });
-    }
-    if (m_debug)
-        connect(m_debug, &DebuggerSession::snapshotCaptured, this, [this] {
-            refreshTransport();
-            refreshValueTab();
-        });
+    connect(session, &HistorySession::capabilitiesChanged, this,
+            &HistoryView::refreshControls);
+    connect(session, &HistorySession::eventsAppended, this,
+            &HistoryView::refreshControls);
+    connect(session, &HistorySession::eventsAppended, this,
+            &HistoryView::refreshFlowPlaceholder);
+    connect(session, &HistorySession::selectedEventChanged, this,
+            &HistoryView::refreshDetails);
+    connect(session, &HistorySession::currentTimeChanged, this,
+            &HistoryView::refreshDetails);
+    connect(m_timeline, &HistoryTimelineWidget::eventClicked, this,
+            &HistoryView::refreshDetails);
+    connect(m_timeline, &HistoryTimelineWidget::timeClicked, this,
+            &HistoryView::refreshDetails);
 
-    refreshAll();
+    refreshControls();
+    refreshDetails();
+    refreshFlowPlaceholder();
 }
 
 QToolButton *HistoryView::makeButton(const QString &text, const QString &tooltip)
@@ -531,244 +538,112 @@ void HistoryView::setupTransport(QBoxLayout *layout)
 {
     auto *row = new QHBoxLayout;
     row->setSpacing(2);
-    // Stop-history navigation only: first / previous / next / last recorded
-    // stop, plus an explicit return to live. These inspect recorded state;
-    // they never command the target (tooltips say so).
-    m_jumpStart = makeButton(tr("⏮"), tr("Show first recorded stop (target keeps running)"));
-    m_stepBack = makeButton(tr("◀"), tr("Show previous recorded stop (target keeps running)"));
-    m_stepFwd = makeButton(tr("▶"), tr("Show next recorded stop (target keeps running)"));
-    m_jumpEnd = makeButton(tr("⏭"), tr("Show last recorded stop (target keeps running)"));
-    m_liveButton = makeButton(tr("LIVE"), tr("Return all views to the live target state"));
-    m_liveButton->setCheckable(true);
+    // U+23EE, U+25C0 etc. render without icon assets.
+    m_jumpStart = makeButton(tr("⏮"), tr("Jump to start (oldest recorded stop)"));
+    m_stepBack = makeButton(tr("◀"), tr("Select previous event"));
+    m_stepFwd = makeButton(tr("▶"), tr("Select next event"));
+    m_contBack = makeButton(tr("⏪"), tr("Continue backward (needs reverse-continue support)"));
+    m_contFwd = makeButton(tr("⏩"), tr("Continue forward (needs reverse-continue support)"));
+    m_jumpEnd = makeButton(tr("⏭"), tr("Jump to end / live"));
     row->addWidget(m_jumpStart);
     row->addWidget(m_stepBack);
     row->addWidget(m_stepFwd);
+    row->addWidget(m_contBack);
+    row->addWidget(m_contFwd);
     row->addWidget(m_jumpEnd);
-    row->addWidget(m_liveButton);
-    m_modeBadge = new QLabel(this);
-    m_modeBadge->setTextFormat(Qt::PlainText);
-    m_modeBadge->setAlignment(Qt::AlignCenter);
-    m_modeBadge->setMinimumWidth(72);
-    row->addWidget(m_modeBadge);
-    m_position = new QLabel(this);
-    m_position->setTextFormat(Qt::PlainText);
-    row->addWidget(m_position, 1);
+    m_status = new QLabel(this);
+    m_status->setTextFormat(Qt::PlainText);
+    row->addWidget(m_status, 1);
     layout->addLayout(row);
 
     connect(m_jumpStart, &QToolButton::clicked, this, &HistoryView::goToStart);
     connect(m_stepBack, &QToolButton::clicked, this, &HistoryView::stepBackward);
     connect(m_stepFwd, &QToolButton::clicked, this, &HistoryView::stepForward);
-    connect(m_jumpEnd, &QToolButton::clicked, this, [this] {
-        if (!m_session || m_session->storedEvents().empty())
-            return;
-        m_session->selectEvent(m_session->storedEvents().back().id);
-    });
-    connect(m_liveButton, &QToolButton::clicked, this, &HistoryView::goLive);
+    connect(m_contBack, &QToolButton::clicked, this, &HistoryView::continueBackward);
+    connect(m_contFwd, &QToolButton::clicked, this, &HistoryView::continueForward);
+    connect(m_jumpEnd, &QToolButton::clicked, this, &HistoryView::goToEnd);
 }
 
-QWidget *HistoryView::buildStateTab()
+void HistoryView::setupDetails(QBoxLayout *layout)
 {
-    auto *tab = new QWidget(this);
-    auto *layout = new QVBoxLayout(tab);
-    layout->setContentsMargins(0, 2, 0, 0);
-    m_stateSummary = new QLabel(tab);
-    m_stateSummary->setTextFormat(Qt::PlainText);
-    m_stateSummary->setWordWrap(true);
-    layout->addWidget(m_stateSummary);
-    m_stateVariables = new QTableWidget(tab);
-    m_stateVariables->setColumnCount(3);
-    m_stateVariables->setHorizontalHeaderLabels({tr("Variable"), tr("Value"), tr("Changed")});
-    m_stateVariables->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_stateVariables->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_stateVariables->horizontalHeader()->setStretchLastSection(true);
-    m_stateVariables->verticalHeader()->setVisible(false);
-    layout->addWidget(m_stateVariables, 1);
-    connect(m_stateVariables, &QTableWidget::cellClicked, this, [this](int row, int) {
-        auto *item = m_stateVariables->item(row, 0);
-        if (item && m_valuePath)
-            m_valuePath->setText(item->text());
-    });
-    return tab;
-}
+    m_details = new QWidget(this);
+    auto *form = new QFormLayout(m_details);
+    form->setContentsMargins(4, 4, 4, 4);
+    form->addRow(tr("Time:"), new QLabel(tr("—"), m_details));
+    form->addRow(tr("Type:"), new QLabel(tr("—"), m_details));
+    form->addRow(tr("PC / address:"), new QLabel(tr("—"), m_details));
+    form->addRow(tr("Symbol:"), new QLabel(tr("—"), m_details));
+    form->addRow(tr("Source:"), new QLabel(tr("—"), m_details));
+    form->addRow(tr("Function:"), new QLabel(tr("—"), m_details));
+    form->addRow(tr("Metadata:"), new QLabel(tr("—"), m_details));
+    m_details->setLayout(form);
+    layout->addWidget(m_details, 3);
 
-QWidget *HistoryView::buildValueTab()
-{
-    auto *tab = new QWidget(this);
-    auto *layout = new QVBoxLayout(tab);
-    layout->setContentsMargins(0, 2, 0, 0);
-    m_valuePath = new QLineEdit(tab);
-    m_valuePath->setPlaceholderText(tr("Variable path — click a variable in State, or type here"));
-    layout->addWidget(m_valuePath);
-    m_plot = new ValueHistoryPlot(tab);
-    layout->addWidget(m_plot);
-    m_valueTable = new QTableWidget(tab);
-    m_valueTable->setColumnCount(3);
-    m_valueTable->setHorizontalHeaderLabels({tr("Stop"), tr("Value"), tr("Changed")});
-    m_valueTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_valueTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_valueTable->horizontalHeader()->setStretchLastSection(true);
-    m_valueTable->verticalHeader()->setVisible(false);
-    layout->addWidget(m_valueTable, 1);
-    connect(m_valuePath, &QLineEdit::textChanged, this, [this] { refreshValueTab(); });
-    // Clicking a row inspects that recorded stop in every history view.
-    connect(m_valueTable, &QTableWidget::cellClicked, this, [this](int row, int) {
-        auto *item = m_valueTable->item(row, 0);
-        if (!item || !m_session)
-            return;
-        bool ok = false;
-        const int step = item->data(Qt::UserRole).toInt(&ok);
-        if (!ok)
-            return;
-        if (const TraceEvent *event = findEventByStep(m_session->storedEvents(), step))
-            m_session->selectEvent(event->id);
-    });
-    return tab;
-}
-
-QWidget *HistoryView::buildEventTab()
-{
-    m_eventDetails = new QWidget(this);
-    auto *outer = new QVBoxLayout(m_eventDetails);
-    outer->setContentsMargins(0, 2, 0, 0);
-    auto *form = new QFormLayout();
-    form->setContentsMargins(0, 0, 0, 0);
-    form->addRow(tr("Time:"), new QLabel(tr("—"), m_eventDetails));
-    form->addRow(tr("Type:"), new QLabel(tr("—"), m_eventDetails));
-    form->addRow(tr("PC / address:"), new QLabel(tr("—"), m_eventDetails));
-    form->addRow(tr("Symbol:"), new QLabel(tr("—"), m_eventDetails));
-    form->addRow(tr("Source:"), new QLabel(tr("—"), m_eventDetails));
-    form->addRow(tr("Function:"), new QLabel(tr("—"), m_eventDetails));
-    form->addRow(tr("Metadata:"), new QLabel(tr("—"), m_eventDetails));
-    outer->addLayout(form);
-    outer->addStretch(1);
-    return m_eventDetails;
+    m_flowTree = new QTreeWidget(this);
+    m_flowTree->setHeaderLabels({tr("Execution path (prototype)")});
+    layout->addWidget(m_flowTree, 2);
 }
 
 static QLabel *detailLabel(QWidget *details, int row)
 {
-    auto *form = details->findChild<QFormLayout *>();
+    auto *form = qobject_cast<QFormLayout *>(details->layout());
     if (!form)
         return nullptr;
     auto *item = form->itemAt(row, QFormLayout::FieldRole);
     return qobject_cast<QLabel *>(item ? item->widget() : nullptr);
 }
 
-void HistoryView::refreshTransport()
+void HistoryView::refreshControls()
 {
     if (!m_session)
         return;
     const bool hasEvents = !m_session->storedEvents().empty();
+    const HistoryCapabilities caps = m_session->capabilities();
+    const bool reverseContinue = caps.testFlag(HistoryCapability::ReverseContinue);
+    const bool canStep = caps.testFlag(HistoryCapability::ReverseStep);
+
     m_jumpStart->setEnabled(hasEvents);
+    m_jumpEnd->setEnabled(hasEvents);
+    // Steps move the target when a reverse backend exists, otherwise they
+    // navigate the recorded stops. Either way they need history.
     m_stepBack->setEnabled(hasEvents);
     m_stepFwd->setEnabled(hasEvents);
-    m_jumpEnd->setEnabled(hasEvents);
-
-    const bool live = !m_display || m_display->displayedState().isLive();
-    m_liveButton->setChecked(live);
-    m_liveButton->setEnabled(hasEvents || !live);
-    if (live) {
-        m_modeBadge->setText(tr("LIVE"));
-        m_modeBadge->setToolTip(tr("Views show the live target state."));
-        m_modeBadge->setStyleSheet(
-            QStringLiteral("background: #1e4620; color: #d8f3dc; border-radius: 4px; padding: 2px 8px; font-weight: bold;"));
+    if (canStep) {
+        m_stepBack->setToolTip(tr("Step backward (reverse execution)"));
+        m_stepFwd->setToolTip(tr("Step forward (reverse execution)"));
     } else {
-        m_modeBadge->setText(tr("HISTORY"));
-        m_modeBadge->setToolTip(
-            tr("Views show a recorded stop. The target keeps running and is not rewound."));
-        m_modeBadge->setStyleSheet(
-            QStringLiteral("background: #5a3c00; color: #ffe0a3; border-radius: 4px; padding: 2px 8px; font-weight: bold;"));
+        m_stepBack->setToolTip(
+            tr("Select previous event (no reverse-step backend; target is not moved)"));
+        m_stepFwd->setToolTip(
+            tr("Select next event (no reverse-step backend; target is not moved)"));
+    }
+    m_contBack->setEnabled(hasEvents && reverseContinue);
+    m_contFwd->setEnabled(hasEvents && reverseContinue);
+    if (!reverseContinue) {
+        const QString tip = tr("Disabled: the active backend has no reverse-continue support.");
+        m_contBack->setToolTip(tip);
+        m_contFwd->setToolTip(tip);
     }
 
-    const std::vector<TraceEvent> &all = m_session->storedEvents();
-    if (all.empty()) {
-        m_position->setText(tr("No recorded stops"));
-        return;
-    }
-    const TraceEventId selected = m_session->selectedEventId();
-    int position = int(all.size()); // live-following with no explicit selection
-    for (size_t i = 0; i < all.size(); ++i) {
-        if (all[i].id == selected) {
-            position = int(i) + 1;
-            break;
-        }
-    }
-    m_position->setText(tr("Stop %1 / %2").arg(position).arg(all.size()));
+    const int count = int(m_session->storedEvents().size());
+    QString text = tr("%1 recorded stops").arg(count);
+    if (!m_session->isLive())
+        text += tr(" — viewing history");
+    else if (count > 0)
+        text += tr(" — live");
+    const QStringList capNames = historyCapabilityNames(m_session->capabilities());
+    text += tr(" — backend: %1")
+                .arg(capNames.isEmpty() ? tr("stop recording only") : capNames.join(QStringLiteral(", ")));
+    m_status->setText(text);
 }
 
-void HistoryView::refreshStateTab()
-{
-    if (!m_display)
-        return;
-    const DisplayedDebugState state = m_display->displayedState();
-    if (!state.snapshot) {
-        m_stateSummary->setText(tr("No recorded state."));
-        m_stateVariables->setRowCount(0);
-        return;
-    }
-    const ExecutionSnapshot &snapshot = *state.snapshot;
-    QString summary;
-    if (!snapshot.function.isEmpty())
-        summary += snapshot.function;
-    if (!snapshot.file.isEmpty() && snapshot.line > 0) {
-        if (!summary.isEmpty())
-            summary += QStringLiteral(" — ");
-        summary += QStringLiteral("%1:%2").arg(snapshot.file).arg(snapshot.line);
-    }
-    if (summary.isEmpty())
-        summary = tr("Stop %1").arg(snapshot.stepIndex);
-    if (!state.isLive())
-        summary += tr("  (recorded values — target not rewound)");
-    m_stateSummary->setText(summary);
-
-    QStringList keys = snapshot.variableValues.keys();
-    keys.sort();
-    m_stateVariables->setRowCount(keys.size());
-    for (int row = 0; row < keys.size(); ++row) {
-        auto *name = new QTableWidgetItem(keys[row]);
-        name->setFlags(name->flags() & ~Qt::ItemIsEditable);
-        auto *value = new QTableWidgetItem(snapshot.variableValues.value(keys[row]));
-        value->setFlags(value->flags() & ~Qt::ItemIsEditable);
-        const bool changed = snapshot.changedPaths.contains(keys[row]);
-        auto *changedItem = new QTableWidgetItem(changed ? tr("Yes") : tr("No"));
-        changedItem->setFlags(changedItem->flags() & ~Qt::ItemIsEditable);
-        m_stateVariables->setItem(row, 0, name);
-        m_stateVariables->setItem(row, 1, value);
-        m_stateVariables->setItem(row, 2, changedItem);
-    }
-}
-
-void HistoryView::refreshValueTab()
-{
-    if (!m_debug || !m_valuePath)
-        return;
-    const QVector<ExecutionSnapshot> &snapshots = m_debug->executionHistory();
-    const QVector<ValueHistoryPoint> points = valueHistory(snapshots, m_valuePath->text());
-    m_plot->points = points;
-    m_plot->update();
-    m_valueTable->setRowCount(points.size());
-    for (int i = 0; i < points.size(); ++i) {
-        const auto &p = points[i];
-        const int step = (i >= 0 && i < snapshots.size()) ? snapshots[i].stepIndex : -1;
-        auto *stop = new QTableWidgetItem(tr("Stop %1").arg(step));
-        stop->setData(Qt::UserRole, step);
-        stop->setFlags(stop->flags() & ~Qt::ItemIsEditable);
-        auto *value = new QTableWidgetItem(p.available ? p.value : tr("<unavailable>"));
-        value->setFlags(value->flags() & ~Qt::ItemIsEditable);
-        auto *changed = new QTableWidgetItem(p.changed ? tr("Yes") : tr("No"));
-        changed->setFlags(changed->flags() & ~Qt::ItemIsEditable);
-        m_valueTable->setItem(i, 0, stop);
-        m_valueTable->setItem(i, 1, value);
-        m_valueTable->setItem(i, 2, changed);
-    }
-}
-
-void HistoryView::refreshEventTab()
+void HistoryView::refreshDetails()
 {
     if (!m_session)
         return;
     const TraceEvent *event = m_session->selectedEvent();
     auto set = [this](int row, const QString &text) {
-        if (QLabel *label = detailLabel(m_eventDetails, row))
+        if (QLabel *label = detailLabel(m_details, row))
             label->setText(text);
     };
     if (!event) {
@@ -801,12 +676,30 @@ void HistoryView::refreshEventTab()
     set(6, meta.isEmpty() ? tr("—") : meta.join(QStringLiteral("; ")));
 }
 
-void HistoryView::refreshAll()
+void HistoryView::refreshFlowPlaceholder()
 {
-    refreshTransport();
-    refreshStateTab();
-    refreshValueTab();
-    refreshEventTab();
+    if (!m_flowTree || !m_session)
+        return;
+    m_flowTree->clear();
+    const std::unique_ptr<CallNode> root = buildCallTree(m_session->storedEvents());
+    if (root->children.empty()) {
+        auto *item = new QTreeWidgetItem(
+            m_flowTree, {tr("No function-entry data — requires an instruction-history backend.")});
+        item->setDisabled(true);
+        return;
+    }
+    std::function<void(QTreeWidgetItem *, const CallNode &)> add =
+        [&add](QTreeWidgetItem *parent, const CallNode &node) {
+            for (const auto &child : node.children) {
+                auto *item = new QTreeWidgetItem(parent, {child->function});
+                add(item, *child);
+            }
+        };
+    for (const auto &child : root->children) {
+        auto *item = new QTreeWidgetItem(m_flowTree, {child->function});
+        add(item, *child);
+    }
+    m_flowTree->expandAll();
 }
 
 void HistoryView::goToStart()
@@ -820,6 +713,11 @@ void HistoryView::stepBackward()
 {
     if (!m_session)
         return;
+    if (m_session->capabilities().testFlag(HistoryCapability::ReverseStep)) {
+        if (HistoryBackend *backend = m_session->backend())
+            backend->stepBackward();
+        return;
+    }
     const std::vector<TraceEvent> &all = m_session->storedEvents();
     if (all.empty())
         return;
@@ -838,6 +736,11 @@ void HistoryView::stepForward()
 {
     if (!m_session)
         return;
+    if (m_session->capabilities().testFlag(HistoryCapability::ReverseStep)) {
+        if (HistoryBackend *backend = m_session->backend())
+            backend->stepForward();
+        return;
+    }
     const std::vector<TraceEvent> &all = m_session->storedEvents();
     if (all.empty())
         return;
@@ -852,11 +755,25 @@ void HistoryView::stepForward()
     m_session->selectEvent(all.front().id);
 }
 
-void HistoryView::goLive()
+void HistoryView::continueBackward()
 {
-    if (m_display)
-        m_display->goLive();
-    else if (m_session)
+    if (!m_session)
+        return;
+    if (HistoryBackend *backend = m_session->backend())
+        backend->continueBackward();
+}
+
+void HistoryView::continueForward()
+{
+    if (!m_session)
+        return;
+    if (HistoryBackend *backend = m_session->backend())
+        backend->continueForward();
+}
+
+void HistoryView::goToEnd()
+{
+    if (m_session)
         m_session->goLive();
 }
 

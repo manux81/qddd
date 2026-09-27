@@ -544,16 +544,6 @@ void GraphicalVariablesView::drawBackground(QPainter* p,
 		p->drawLine(x, t, x, b);
 	for (int y = t - t % big; y <= b; y += big)
 		p->drawLine(l, y, r, y);
-
-	if (m_historical) {
-		p->setPen(QColor(255, 224, 163));
-		QFont banner = p->font();
-		banner.setBold(true);
-		p->setFont(banner);
-		p->drawText(QPointF(l + 12, t + 20),
-		            tr("HISTORY · Stop %1 — recorded values, target not rewound")
-		                .arg(m_historicalStep));
-	}
 }
 
 void GraphicalNodeItem::drawHeader(QPainter* p, const QRectF& r)
@@ -1467,36 +1457,6 @@ void GraphicalVariablesView::setSession(DebuggerSession* s)
 	refresh();
 }
 
-void GraphicalVariablesView::setDisplayedSnapshot(
-    const std::optional<ExecutionSnapshot> &snapshot, int snapshotStep)
-{
-	const bool historical = snapshot.has_value();
-	if (m_historical == historical && m_historicalStep == snapshotStep
-	    && (!historical
-	        || (m_historicalSnapshot
-	            && m_historicalSnapshot->timestampNs == snapshot->timestampNs)))
-		return;
-	m_historical = historical;
-	m_historicalSnapshot = snapshot;
-	m_historicalStep = snapshotStep;
-	m_historicalRoots.clear();
-	if (m_historicalSnapshot) {
-		QStringList keys = m_historicalSnapshot->variableValues.keys();
-		keys.sort();
-		for (const QString &key : keys) {
-			auto node = std::make_unique<DebugVariable>();
-			node->name = key;
-			node->expression = key;
-			node->value = m_historicalSnapshot->variableValues.value(key);
-			node->isPointer = false;
-			node->hasChildren = false;
-			node->enabled = true;
-			m_historicalRoots.push_back(std::move(node));
-		}
-	}
-	refresh();
-}
-
 void GraphicalVariablesView::refresh()
 {
     qCDebug(debuggerUiLog) << "refresh graph";
@@ -1529,12 +1489,7 @@ void GraphicalVariablesView::refresh()
 	QHash<QString, GraphicalNodeItem*> rootItemByExpression;
 
 	int y = 0;
-	// Historical preview renders the recorded snapshot through the same
-	// card pipeline. Live updates arriving while historical only re-render
-	// this recording; nothing here issues GDB reads.
-	const std::vector<std::unique_ptr<DebugVariable>> &roots =
-	    m_historical ? m_historicalRoots : m_session->variables();
-	for (auto& v : roots) {
+	for (auto& v : m_session->variables()) {
 		const QString layoutKey = layoutKeyForVariable(v.get());
         auto* item = m_rootItems.value(layoutKey, nullptr);
         if (!item) {
@@ -1606,8 +1561,6 @@ void GraphicalVariablesView::refresh()
 	// Explicitly dependent displays retain their logical relationship even
 	// when the value is not a pointer.  This mirrors DDD's "dependent on"
 	// displays while leaving evaluation ownership in DebuggerSession.
-	// Skipped for historical recordings (expressions refer to live state).
-	if (!m_historical)
 	for (auto dependency = m_displayDependencies.cbegin();
 	     dependency != m_displayDependencies.cend(); ++dependency) {
 		const QString& destinationExpression = dependency.key();
@@ -1830,10 +1783,6 @@ void GraphicalVariablesView::wheelEvent(QWheelEvent* event)
 
 void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent* event)
 {
-	if (m_historical) {
-		event->accept(); // Recorded cards are read-only; nothing to open.
-		return;
-	}
 	auto* item =
 		qgraphicsitem_cast<GraphicalNodeItem*>(itemAt(event->pos()));
 
@@ -1857,15 +1806,6 @@ void GraphicalVariablesView::mouseDoubleClickEvent(QMouseEvent* event)
 
 void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
 {
-	if (m_historical) {
-		// No live evaluation, edits or new displays on recorded state.
-		QMenu menu(this);
-		QAction* info = menu.addAction(
-		    tr("Historical Stop %1 — read-only recorded state").arg(m_historicalStep));
-		info->setEnabled(false);
-		menu.exec(event->globalPos());
-		return;
-	}
     const bool previousInteraction=m_modalGraphInteraction;
     m_modalGraphInteraction=true;
     struct ResumeUpdates { std::function<void()> resume; ~ResumeUpdates() { resume(); } } resume{

@@ -78,7 +78,6 @@ add_executable(qddd WIN32 MACOSX_BUNDLE
     history/HistoryView.h
     history/DisplayedState.cpp
     history/DisplayedState.h
-    history/ValuePlot.h
 
     resources.qrc
 )
