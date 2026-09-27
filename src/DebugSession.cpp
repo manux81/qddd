@@ -1422,11 +1422,13 @@ void GdbMiSession::onTargetStoppedInternal(const QString& stopMsg)
 					m_lastStopFile = path;
 					m_lastStopLine = lineNo;
 					m_lastStopFunction = func;
-					emit stoppedAt(path, lineNo, func);
 				}
 				if (!addr.isEmpty()) {
 					m_lastStopAddr = addr;
 					emit stoppedAtAddress(addr);
+				}
+				if (!path.isEmpty() && ok && lineNo > 0) {
+					emit stoppedAt(path, lineNo, func);
 				}
             }
         }

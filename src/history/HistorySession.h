@@ -62,6 +62,10 @@ public:
     bool seek(TimePoint time);
     TimePoint currentTime() const { return m_currentTime; }
     bool isLive() const { return m_live; }
+    bool canSelectPreviousEvent() const;
+    bool canSelectNextEvent() const;
+    bool selectPreviousEvent();
+    bool selectNextEvent();
     void goLive();
 
     void selectEvent(TraceEventId id);

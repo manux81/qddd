@@ -1,6 +1,7 @@
 #include "HistorySession.h"
 
 #include <algorithm>
+#include <iterator>
 
 namespace qddd {
 namespace history {
@@ -191,8 +192,64 @@ void HistorySession::goLive()
     }
     m_live = true;
     m_currentTime = m_events.back().time;
+    const TraceEventId latestId = m_events.back().id;
+    if (m_selectedId != latestId) {
+        m_selectedId = latestId;
+        emit selectedEventChanged(m_selectedId);
+    }
     emit currentTimeChanged(m_currentTime);
     emitStateForTime(m_currentTime);
+}
+
+bool HistorySession::canSelectPreviousEvent() const
+{
+    if (m_events.empty())
+        return false;
+    if (m_live || m_selectedId == InvalidTraceEventId)
+        return m_events.size() > 1;
+    const auto it = std::find_if(m_events.begin(), m_events.end(), [this](const TraceEvent &event) {
+        return event.id == m_selectedId;
+    });
+    return it != m_events.end() && it != m_events.begin();
+}
+
+bool HistorySession::canSelectNextEvent() const
+{
+    if (m_events.empty() || m_live)
+        return false;
+    const auto it = std::find_if(m_events.begin(), m_events.end(), [this](const TraceEvent &event) {
+        return event.id == m_selectedId;
+    });
+    return it != m_events.end() && std::next(it) != m_events.end();
+}
+
+bool HistorySession::selectPreviousEvent()
+{
+    if (!canSelectPreviousEvent())
+        return false;
+    if (m_live || m_selectedId == InvalidTraceEventId) {
+        selectEvent(m_events[m_events.size() - 2].id);
+        return true;
+    }
+    const auto it = std::find_if(m_events.begin(), m_events.end(), [this](const TraceEvent &event) {
+        return event.id == m_selectedId;
+    });
+    selectEvent(std::prev(it)->id);
+    return true;
+}
+
+bool HistorySession::selectNextEvent()
+{
+    if (!canSelectNextEvent())
+        return false;
+    const auto it = std::find_if(m_events.begin(), m_events.end(), [this](const TraceEvent &event) {
+        return event.id == m_selectedId;
+    });
+    if (std::next(it) == std::prev(m_events.end()))
+        goLive();
+    else
+        selectEvent(std::next(it)->id);
+    return true;
 }
 
 void HistorySession::selectEvent(TraceEventId id)
