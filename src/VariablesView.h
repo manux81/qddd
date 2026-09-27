@@ -32,6 +32,7 @@
 #pragma once
 
 #include "DebugSession.h"
+#include "history/HistoryTypes.h"
 #include <QStandardItem>
 #include <QTreeView>
 #include <QStyledItemDelegate>
@@ -52,8 +53,18 @@ class VariablesView : public QTreeView {
   public slots:
 	void clearVariables();
 	void refresh();
+	// Show a recorded snapshot instead of live state. `historic` must be
+	// true whenever the UI displays a history point, even when `snapshot`
+	// is empty (evicted or never captured): the view then shows an
+	// explicit "not captured" notice and never falls back to live values.
 	void setDisplayedSnapshot(const std::optional<ExecutionSnapshot>& snapshot,
-	                          int snapshotStep = -1);
+	                          qddd::history::HistoryPointId historyPointId =
+	                              qddd::history::InvalidHistoryPointId,
+	                          bool historic = false,
+	                          qddd::history::TemporalState temporal =
+	                              qddd::history::TemporalState::Historic);
+
+	bool isHistorical() const { return m_historical; }
 
   private:
 	void addNode(QStandardItem *parent,
@@ -67,7 +78,11 @@ class VariablesView : public QTreeView {
 	HardwareDebugSession *m_hardwareSession = nullptr;
 	bool m_refreshing = false;
 	bool m_historical = false;
-	int m_historicalStep = -1;
+	qddd::history::HistoryPointId m_historyPointId =
+	    qddd::history::InvalidHistoryPointId;
+	// Position label shown in the header while historic (e.g. " · S42");
+	// empty in live mode so live/historic can never be confused.
+	QString m_headerSuffix;
 	std::optional<ExecutionSnapshot> m_historicalSnapshot;
 	std::vector<std::unique_ptr<DebugVariable>> m_historicalRoots;
 };

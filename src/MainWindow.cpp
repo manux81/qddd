@@ -1,7 +1,6 @@
 #include "GdbMiSession.h"
 #include "ThreadsView.h"
 #include "MemoryView.h"
-#include "DataHistoryView.h"
 /*
  * Copyright (c) 2026, Manuele Conti
  * All rights reserved.
@@ -67,7 +66,9 @@
 #include "HardwareServerConfig.h"
 #include "SourceBrowserDialog.h"
 #include "history/GdbStopHistoryBackend.h"
+#include "history/GdbRecordTimeMachineBackend.h"
 #include "history/DisplayedState.h"
+#include "history/TimeMachineModel.h"
 #include "history/HistorySession.h"
 #include "history/HistoryView.h"
 
@@ -325,7 +326,8 @@ void MainWindow::setupUi() {
 
     auto* threadsDock = new QDockWidget(tr("Threads"), this);
     threadsDock->setObjectName("ThreadsDock");
-    threadsDock->setWidget(new ThreadsView(m_session.get(), threadsDock));
+    m_threadsView = new ThreadsView(m_session.get(), threadsDock);
+    threadsDock->setWidget(m_threadsView);
     addDockWidget(Qt::RightDockWidgetArea, threadsDock);
     tabifyDockWidget(m_varsDock, threadsDock);
 
@@ -342,14 +344,15 @@ void MainWindow::setupUi() {
 
     auto* memoryDock = new QDockWidget(tr("Memory"), this);
     memoryDock->setObjectName("MemoryDock");
-    memoryDock->setWidget(new MemoryView(m_session.get(), memoryDock));
+    m_memoryView = new MemoryView(m_session.get(), memoryDock);
+    memoryDock->setWidget(m_memoryView);
     addDockWidget(Qt::BottomDockWidgetArea, memoryDock);
     tabifyDockWidget(m_dataDock, memoryDock);
 
 	// Execution History: generic timeline over recorded stops. The backend
 	// observes live GDB stops; navigation never disturbs the live target.
 	m_historySession = new qddd::history::HistorySession(this);
-	m_historyBackend = new qddd::history::GdbStopHistoryBackend(m_session.get(), this);
+	m_historyBackend = new qddd::history::GdbRecordTimeMachineBackend(m_session.get(), this);
 	m_historyBackend->attachStore(&m_historySession->eventStore());
 	m_historySession->setBackend(m_historyBackend);
 	m_historySession->setSnapshotResolver([this](int stepIndex)
@@ -361,6 +364,10 @@ void MainWindow::setupUi() {
 	});
 	m_displayedState = new qddd::history::DisplayedStateModel(
 	    m_session.get(), m_historySession, this);
+	// One authoritative navigation entry for all Time Travel UI: timeline,
+	// inspector and menus route moves through this controller, which
+	// derives a single selected position from the session.
+	m_timeTravel = new qddd::history::TimeTravelController(m_historySession, this);
 	connect(m_historyBackend, &qddd::history::GdbStopHistoryBackend::stopRecorded,
 	        this, [this](const qddd::history::TraceEvent& event) {
 		        m_historySession->addEvent(event);
@@ -375,39 +382,54 @@ void MainWindow::setupUi() {
 	auto* timeTravelDock = new QDockWidget(tr("Time Travel"), this);
 	timeTravelDock->setObjectName("TimeTravelDock");
 	timeTravelDock->setMinimumSize(0, 0);
-	auto* timeTravelSplit = new QSplitter(Qt::Vertical, timeTravelDock);
-	timeTravelSplit->setChildrenCollapsible(true);
-	timeTravelSplit->setOpaqueResize(true);
-	timeTravelSplit->setMinimumSize(0, 0);
-	m_historyView = new qddd::history::HistoryView(m_historySession, timeTravelSplit);
-	timeTravelSplit->addWidget(m_historyView);
-	timeTravelSplit->addWidget(new DataHistoryView(m_session.get(), timeTravelSplit));
-	timeTravelSplit->setStretchFactor(0, 3);
-	timeTravelSplit->setStretchFactor(1, 2);
-	timeTravelSplit->setSizes({260, 150});
-	timeTravelDock->setWidget(timeTravelSplit);
+	m_historyView = new qddd::history::HistoryView(m_historySession, timeTravelDock);
+	m_historyView->setController(m_timeTravel);
+	timeTravelDock->setWidget(m_historyView);
 	addDockWidget(Qt::BottomDockWidgetArea, timeTravelDock);
 	tabifyDockWidget(m_dataDock, timeTravelDock);
 	m_historyDock = timeTravelDock;
 
+	// Mandatory temporal indicator in the status bar: explicit text, never
+	// color-only, always visible regardless of dock layout.
+	m_temporalBadge = new QLabel(tr("LIVE"), this);
+	m_temporalBadge->setAlignment(Qt::AlignCenter);
+	m_temporalBadge->setMinimumWidth(150);
+	statusBar()->addPermanentWidget(m_temporalBadge);
+
+	// Central displayed-state synchronization. One signal drives source,
+	// variables, Data Display, stack, threads, memory and disassembly
+	// together, so views can never disagree about which stop is on
+	// display — and never mix live values into a historic view. Views
+	// without captured data show an explicit notice instead.
 	connect(m_displayedState,
 	        &qddd::history::DisplayedStateModel::displayedStateChanged,
 	        this, [this](const qddd::history::DisplayedDebugState& state) {
 		        const bool historical = !state.isLive();
+		        const qddd::history::TemporalState temporal =
+		            m_displayedState ? m_displayedState->temporalState()
+		                             : qddd::history::TemporalState::Live;
 		        m_variablesView->setDisplayedSnapshot(
-		            historical ? state.snapshot : std::nullopt, state.snapshotStep);
+		            state.snapshot, state.historyPointId, historical, temporal);
 		        m_graphicalView->setDisplayedSnapshot(
-		            historical ? state.snapshot : std::nullopt, state.snapshotStep);
-		        if (historical && state.snapshot && !state.snapshot->file.isEmpty()
-		            && state.snapshot->line > 0)
+		            state.snapshot, state.historyPointId, historical, temporal);
+		        m_stackView->setHistoric(historical);
+		        m_threadsView->setHistoric(historical);
+		        if (m_memoryView)
+			        m_memoryView->setHistoric(historical);
+		        if (m_disasmView)
+			        m_disasmView->setHistoric(historical);
+		        if (historical) {
+			        if (state.snapshot && !state.snapshot->file.isEmpty()
+			            && state.snapshot->line > 0)
+				        showSourceLocation(state.snapshot->file, state.snapshot->line);
+		        } else if (m_displayWasHistoric && state.snapshot
+		                   && !state.snapshot->file.isEmpty() && state.snapshot->line > 0) {
+			        // Return to Present: show the real current PC again.
 			        showSourceLocation(state.snapshot->file, state.snapshot->line);
+		        }
+		        m_displayWasHistoric = historical;
+		        updateTemporalBadge();
 	        });
-	connect(m_session.get(), &DebuggerSession::targetStarted, this, [this] {
-		m_historySession->setRecording(true);
-	});
-	connect(m_session.get(), &DebuggerSession::targetExited, this, [this](int) {
-		m_historySession->setRecording(false);
-	});
 
 	m_consoleDock = new QDockWidget(tr("Console"), this);
 	m_consoleWidget = new ConsoleWidget(m_consoleDock);
@@ -714,86 +736,113 @@ void MainWindow::setupMenusAndToolbars() {
 	QAction *downAct = programMenu->addAction(tr("Down"));
 	QAction *toggleBpAct = programMenu->addAction(tr("Toggle Breakpoint"));
 
-	// Reverse debugging: capability-driven. GDB-level reverse execution is
-	// available only when the session reports it; history navigation
-	// (Previous Breakpoint) works on recorded events; memory-write search
-	// stays disabled until a backend implements MemoryWriteHistory.
-	programMenu->addSeparator();
-	m_reverseStepInAct = programMenu->addAction(tr("Reverse Step Into"));
-	m_reverseStepInAct->setShortcut(Qt::SHIFT | Qt::Key_F5);
-	m_reverseStepOverAct = programMenu->addAction(tr("Reverse Step Over"));
-	m_reverseStepOverAct->setShortcut(Qt::SHIFT | Qt::Key_F6);
-	m_reverseContinueAct = programMenu->addAction(tr("Reverse Continue"));
-	m_reverseContinueAct->setShortcut(Qt::SHIFT | Qt::Key_F9);
-	m_prevBreakpointAct = programMenu->addAction(tr("Previous Breakpoint"));
-	m_prevBreakpointAct->setShortcut(Qt::ALT | Qt::Key_B);
-	m_prevWriteAct = programMenu->addAction(tr("Find Previous Write"));
-	m_prevWriteAct->setEnabled(false);
-	m_prevWriteAct->setToolTip(tr("Requires a backend with memory-write history."));
-	connect(m_reverseStepInAct, &QAction::triggered, this, [this] {
+	// Time Machine: one coherent entry point for execution history. All
+	// commands go through the HistorySession/Time Machine API — widgets
+	// never issue raw debugger commands. Capabilities gate every action
+	// with an explanation; snapshot inspection stays available everywhere.
+	QMenu *timeMachineMenu = programMenu->addMenu(tr("Time Machine"));
+	m_tmStartRecAct = timeMachineMenu->addAction(tr("Start Recording"));
+	m_tmStopRecAct = timeMachineMenu->addAction(tr("Stop Recording"));
+	timeMachineMenu->addSeparator();
+	m_tmPrevAct = timeMachineMenu->addAction(tr("Previous Stop"));
+	m_tmNextAct = timeMachineMenu->addAction(tr("Next Stop"));
+	m_tmRevContAct = timeMachineMenu->addAction(tr("Reverse Continue"));
+	m_tmRevContAct->setShortcut(Qt::SHIFT | Qt::Key_F9);
+	m_tmPresentAct = timeMachineMenu->addAction(tr("Return to Present"));
+	m_tmTimelineAct = timeMachineMenu->addAction(tr("Show Timeline"));
+	m_tmTimelineAct->setCheckable(true);
+	m_tmTimelineAct->setChecked(true);
+	QMenu *tmAdvancedMenu = timeMachineMenu->addMenu(tr("Advanced"));
+	m_tmRevStepInAct = tmAdvancedMenu->addAction(tr("Reverse Step Into"));
+	m_tmRevStepInAct->setShortcut(Qt::SHIFT | Qt::Key_F5);
+	m_tmRevStepOverAct = tmAdvancedMenu->addAction(tr("Reverse Step Over"));
+	m_tmRevStepOverAct->setShortcut(Qt::SHIFT | Qt::Key_F6);
+	tmAdvancedMenu->addSeparator();
+	m_tmCapsAct = tmAdvancedMenu->addAction(tr("Backend Capabilities…"));
+
+	connect(m_tmStartRecAct, &QAction::triggered, this, [this] {
+		if (m_historySession)
+			m_historySession->startRecording();
+	});
+	connect(m_tmStopRecAct, &QAction::triggered, this, [this] {
+		if (m_historySession)
+			m_historySession->stopRecording();
+	});
+	connect(m_tmPrevAct, &QAction::triggered, this, [this] {
+		if (m_timeTravel)
+			m_timeTravel->showPrevious();
+	});
+	connect(m_tmNextAct, &QAction::triggered, this, [this] {
+		if (m_timeTravel)
+			m_timeTravel->showNext();
+	});
+	connect(m_tmRevContAct, &QAction::triggered, this, [this] {
+		if (m_historySession)
+			m_historySession->reverseContinue();
+	});
+	connect(m_tmPresentAct, &QAction::triggered, this, [this] {
+		if (m_timeTravel)
+			m_timeTravel->showPresent();
+	});
+	connect(m_tmTimelineAct, &QAction::triggered, this, [this](bool checked) {
+		if (m_historyDock)
+			m_historyDock->setVisible(checked);
+	});
+	connect(m_tmRevStepInAct, &QAction::triggered, this, [this] {
 		m_session->reverseStepInto();
 	});
-	connect(m_reverseStepOverAct, &QAction::triggered, this, [this] {
+	connect(m_tmRevStepOverAct, &QAction::triggered, this, [this] {
 		m_session->reverseStepOver();
 	});
-	connect(m_reverseContinueAct, &QAction::triggered, this, [this] {
-		m_session->reverseContinueExecution();
+	connect(m_tmCapsAct, &QAction::triggered, this, [this] {
+		const qddd::history::HistoryCapabilities caps =
+		    m_historySession ? m_historySession->capabilities()
+		                     : qddd::history::HistoryCapabilities{};
+		const QStringList names = qddd::history::historyCapabilityNames(caps);
+		QMessageBox::information(
+		    this, tr("Time Machine backend"),
+		    tr("Capabilities: %1\nRecording: %2\nHistory points: %3")
+		        .arg(names.isEmpty() ? tr("(none — snapshots only)") : names.join(", "))
+		        .arg(m_historySession && m_historySession->isRecording() ? tr("active")
+		                                                                : tr("inactive"))
+		        .arg(m_historySession ? int(m_historySession->storedEvents().size()) : 0));
 	});
-	connect(m_prevBreakpointAct, &QAction::triggered, this, [this] {
-		if (!m_historySession)
-			return;
-		const std::vector<qddd::history::TraceEvent>& all =
-		    m_historySession->storedEvents();
-		const qddd::history::TimePoint cursor = m_historySession->currentTime();
-		for (auto it = all.rbegin(); it != all.rend(); ++it) {
-			if (it->type == qddd::history::TraceEventType::Breakpoint
-			    && it->time < cursor) {
-				m_historySession->selectEvent(it->id);
+	auto updateTimeMachineUi = [this] {
+		using namespace qddd::history;
+		auto apply = [this](TimeMachineAction action, QAction *act) {
+			if (!act)
 				return;
-			}
-		}
-	});
-	auto updateHistoryActions = [this] {
-		const bool reverseOk = m_session && m_session->supportsReverseExecution();
-		if (m_reverseStepInAct)
-			m_reverseStepInAct->setEnabled(reverseOk);
-		if (m_reverseStepOverAct)
-			m_reverseStepOverAct->setEnabled(reverseOk);
-		if (m_reverseContinueAct)
-			m_reverseContinueAct->setEnabled(reverseOk);
-		const QString reverseTip = reverseOk
-		    ? tr("Reverse execution")
-		    : tr("Reverse execution is not available with the current debugger backend.");
-		if (m_reverseStepInAct)
-			m_reverseStepInAct->setToolTip(reverseTip);
-		if (m_reverseStepOverAct)
-			m_reverseStepOverAct->setToolTip(reverseTip);
-		if (m_reverseContinueAct)
-			m_reverseContinueAct->setToolTip(reverseTip);
-		bool hasBreakpointEvent = false;
-		if (m_historySession) {
-			for (const auto& event : m_historySession->storedEvents()) {
-				if (event.type == qddd::history::TraceEventType::Breakpoint) {
-					hasBreakpointEvent = true;
-					break;
-				}
-			}
-		}
-		if (m_prevBreakpointAct) {
-			m_prevBreakpointAct->setEnabled(hasBreakpointEvent);
-			if (!hasBreakpointEvent)
-				m_prevBreakpointAct->setToolTip(
-				    tr("No breakpoint events recorded yet."));
-		}
-		// m_prevWriteAct stays disabled: no backend implements
-		// MemoryWriteHistory yet (see docs/execution-history.md).
+			const TimeMachineActionState actionState =
+			    timeMachineActionState(action, m_historySession, m_session.get());
+			act->setEnabled(actionState.enabled);
+			if (!actionState.enabled && !actionState.reason.isEmpty())
+				act->setToolTip(actionState.reason);
+		};
+		apply(TimeMachineAction::StartRecording, m_tmStartRecAct);
+		apply(TimeMachineAction::StopRecording, m_tmStopRecAct);
+		apply(TimeMachineAction::Previous, m_tmPrevAct);
+		apply(TimeMachineAction::Next, m_tmNextAct);
+		apply(TimeMachineAction::ReverseContinue, m_tmRevContAct);
+		apply(TimeMachineAction::ReturnToPresent, m_tmPresentAct);
+		apply(TimeMachineAction::ShowTimeline, m_tmTimelineAct);
+		apply(TimeMachineAction::ReverseStepIn, m_tmRevStepInAct);
+		apply(TimeMachineAction::ReverseStepOver, m_tmRevStepOverAct);
+		if (m_tmTimelineAct && m_historyDock)
+			m_tmTimelineAct->setChecked(m_historyDock->isVisible());
 	};
-	updateHistoryActions();
+	updateTimeMachineUi();
 	connect(m_session.get(), &DebuggerSession::reverseExecutionAvailabilityChanged,
-	        this, updateHistoryActions);
-	if (m_historySession)
+	        this, updateTimeMachineUi);
+	connect(m_session.get(), &DebuggerSession::targetStopped,
+	        this, updateTimeMachineUi);
+	if (m_historySession) {
 		connect(m_historySession, &qddd::history::HistorySession::eventsAppended,
-		        this, updateHistoryActions);
+		        this, updateTimeMachineUi);
+		connect(m_historySession, &qddd::history::HistorySession::capabilitiesChanged,
+		        this, updateTimeMachineUi);
+		connect(m_historySession, &qddd::history::HistorySession::recordingChanged,
+		        this, updateTimeMachineUi);
+	}
 
 
 	runAct->setIcon(QIcon(":/icons/resources/icons/run.svg"));
@@ -863,6 +912,9 @@ void MainWindow::setupMenusAndToolbars() {
 	connect(m_session.get(), &DebuggerSession::targetRunning, this,
 	        [this, setTargetRunningUi] {
 		        setTargetRunningUi(true);
+		        // Time Travel realignment on resume lives in
+		        // DisplayedStateModel (targetRunning → goLive); here only
+		        // the stale PC arrow is cleared.
 		        // A stopped PC is no longer current once execution resumes. Leaving
 		        // its arrow visible makes a long-running Next look one line behind.
 		        if (m_sourceTabs) {
@@ -880,6 +932,8 @@ void MainWindow::setupMenusAndToolbars() {
 	        [this, setTargetRunningUi](HardwareDebugSession::SessionState state) {
 		        const bool running = state == HardwareDebugSession::SessionState::Running;
 		        setTargetRunningUi(running);
+		        if (running && m_historySession)
+			        m_historySession->goLive();
 		        if (running && m_sourceTabs) {
 			        for (int i = 0; i < m_sourceTabs->count(); ++i) {
 				        if (auto* editor = qobject_cast<SourceEditor*>(m_sourceTabs->widget(i)))
@@ -1215,6 +1269,36 @@ void MainWindow::updateTargetChip(const QString& state)
 	const QFileInfo fi(m_currentProgram);
 	const QString program = fi.exists() && fi.isFile() ? fi.fileName() : tr("No firmware");
 	m_targetState->setText(QStringLiteral("%1 · %2").arg(program, state));
+}
+
+void MainWindow::updateTemporalBadge()
+{
+	if (!m_temporalBadge || !m_displayedState)
+		return;
+	const qddd::history::TemporalState temporal = m_displayedState->temporalState();
+	qddd::history::HistoryPointId pointId =
+	    qddd::history::InvalidHistoryPointId;
+	if (temporal != qddd::history::TemporalState::Live && m_historySession) {
+		if (const qddd::history::ExecutionHistoryPoint* point =
+		        m_historySession->historyPoint(m_historySession->selectedEventId()))
+			pointId = point->id;
+	}
+	m_temporalBadge->setText(qddd::history::temporalBadgeText(temporal, pointId));
+	m_temporalBadge->setToolTip(
+	    temporal == qddd::history::TemporalState::Live
+	        ? tr("Views show the live target state.")
+	        : tr("Views show a recorded history point. The target keeps running "
+	             "unless the backend actually replayed it."));
+	const char* style =
+	    temporal == qddd::history::TemporalState::Live
+	        ? "color: #d8f3dc; background: #2f3f33; border: 1px solid #3b5141; "
+	          "border-radius: 4px; padding: 1px 6px;"
+	    : temporal == qddd::history::TemporalState::Replayed
+	        ? "color: #dbeafe; background: #1e3a5f; border: 1px solid #3b5f8a; "
+	          "border-radius: 4px; padding: 1px 6px;"
+	        : "color: #f0d9a8; background: #4a3a20; border: 1px solid #6b5426; "
+	          "border-radius: 4px; padding: 1px 6px;";
+	m_temporalBadge->setStyleSheet(QString::fromLatin1(style));
 }
 
 void MainWindow::openSettings()

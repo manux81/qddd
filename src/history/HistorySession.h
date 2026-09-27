@@ -27,6 +27,7 @@ class HistorySession : public QObject {
     Q_OBJECT
 public:
     explicit HistorySession(QObject *parent = nullptr);
+    ~HistorySession() override;
 
     void setBackend(HistoryBackend *backend); // not owned
     HistoryBackend *backend() const { return m_backend; }
@@ -44,6 +45,10 @@ public:
     std::vector<TraceEvent> events(TimeRange range) const;
     std::vector<TraceEvent> events(TimeRange range, const QString &trackId) const;
     const TraceEvent *eventById(TraceEventId id) const;
+    const std::vector<ExecutionHistoryPoint> &historyPoints() const { return m_points; }
+    const ExecutionHistoryPoint *historyPoint(TraceEventId id) const;
+    std::optional<Checkpoint> checkpoint(TraceEventId id) const;
+    bool createCheckpoint(TraceEventId id);
 
     // Snapshot resolution. The session stores stop-level TraceEvents; the
     // authoritative per-stop variable state lives in the debugger's
@@ -67,6 +72,14 @@ public:
     bool selectPreviousEvent();
     bool selectNextEvent();
     void goLive();
+    bool seekToHistoryPoint(TraceEventId id);
+    bool returnToPresent();
+    bool startRecording();
+    bool stopRecording();
+    bool reverseStep();
+    bool reverseNext();
+    bool reverseContinue();
+    bool reverseFinish();
 
     void selectEvent(TraceEventId id);
     TraceEventId selectedEventId() const { return m_selectedId; }
@@ -84,9 +97,15 @@ signals:
     void recordingChanged(bool recording);
     void capabilitiesChanged(qddd::history::HistoryCapabilities capabilities);
     void eventsAppended(int count);
+    void historyChanged();
+    void historyPointSelected(qddd::history::TraceEventId id);
+    void temporalStateChanged(qddd::history::TemporalState state);
+    void operationFinished(const QString &operation, bool success, const QString &message);
 
 private:
     void emitStateForTime(TimePoint time);
+    void refreshBackendState();
+    void rebuildPoints();
 
     HistoryBackend *m_backend = nullptr; // not owned
     SnapshotResolver m_snapshotResolver;
@@ -94,6 +113,8 @@ private:
     bool m_lastAvailable = false;
 
     std::vector<TraceEvent> m_events;
+    std::vector<ExecutionHistoryPoint> m_points;
+    QHash<TraceEventId, Checkpoint> m_checkpoints;
     TraceEventId m_nextId = 1;
 
     TimePoint m_currentTime = InvalidTime;

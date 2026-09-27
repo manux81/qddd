@@ -29,10 +29,32 @@ public:
             m_address->setText(QString("*(void**)(%1)").arg(m_address->text())); read();
         });
         connect(session, &DebuggerSession::targetExited, this, [this](int) { ++m_generation; m_output->setPlainText(tr("Target exited.")); });
+        m_readButton = refresh;
+        m_followButton = follow;
     }
     void openAddress(const QString& address) { m_address->setText(address); read(); }
+    // Historic inspection: memory reads would hit the live target, so the
+    // actions are disabled with an explicit notice instead.
+    void setHistoric(bool historic)
+    {
+        if (m_historic == historic)
+            return;
+        m_historic = historic;
+        if (m_readButton)
+            m_readButton->setEnabled(!historic);
+        if (m_followButton)
+            m_followButton->setEnabled(!historic);
+        if (historic) {
+            ++m_generation; // invalidate in-flight live reads
+            m_output->setPlainText(
+                tr("Memory — not captured for this history point.\n"
+                   "Reads would hit the live target, so they are disabled."));
+        }
+    }
 private:
     void read() {
+        if (m_historic)
+            return;
         const auto generation = ++m_generation;
         m_output->setPlainText(tr("Reading memory…"));
         QPointer<MemoryView> guard(this);
@@ -48,5 +70,8 @@ private:
     QLineEdit* m_address;
     QSpinBox* m_count;
     QPlainTextEdit* m_output;
+    QPushButton* m_readButton = nullptr;
+    QPushButton* m_followButton = nullptr;
+    bool m_historic = false;
     quint64 m_generation = 0;
 };

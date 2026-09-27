@@ -116,7 +116,7 @@ void DisassemblyView::setSession(DebuggerSession* session)
 	// Auto-refresh disassembly on stop; let DebuggerSession decide the exact MI command.
 	connect(m_session, &DebuggerSession::stoppedAt, this,
 	        [this](const QString& file, int line, const QString&) {
-		        if (m_session && m_autoRefreshEnabled)
+		        if (m_session && m_autoRefreshEnabled && !m_historic)
 			        m_session->requestDisassembly(file, line);
 	        });
 }
@@ -124,20 +124,41 @@ void DisassemblyView::setSession(DebuggerSession* session)
 void DisassemblyView::setAutoRefreshEnabled(bool enabled)
 {
 	m_autoRefreshEnabled = enabled;
-	if (m_autoRefreshEnabled && m_session)
+	if (m_autoRefreshEnabled && m_session && !m_historic)
 		m_session->requestDisassemblyAtLastStop();
+}
+
+void DisassemblyView::setHistoric(bool historic)
+{
+	if (m_historic == historic)
+		return;
+	m_historic = historic;
+	if (!m_table)
+		return;
+	if (m_historic) {
+		m_table->setRowCount(1);
+		m_table->setColumnCount(3);
+		auto *notice = new QTableWidgetItem(
+		    tr("Disassembly — not captured for this history point"));
+		notice->setFlags(notice->flags() & ~Qt::ItemIsSelectable);
+		m_table->setItem(0, 0, new QTableWidgetItem(QString()));
+		m_table->setItem(0, 1, new QTableWidgetItem(QString()));
+		m_table->setItem(0, 2, notice);
+	} else if (m_autoRefreshEnabled && m_session) {
+		m_session->requestDisassemblyAtLastStop();
+	}
 }
 
 void DisassemblyView::setDisassemblyText(const QString& text)
 {
-	if (!m_autoRefreshEnabled)
+	if (!m_autoRefreshEnabled || m_historic)
 		return;
 	rebuildTableFromText(text);
 }
 
 void DisassemblyView::setCurrentAddress(const QString& addr)
 {
-	if (!m_autoRefreshEnabled)
+	if (!m_autoRefreshEnabled || m_historic)
 		return;
 	m_currentAddr = addr.trimmed();
 	// Re-apply highlight to current contents (if present).

@@ -71,11 +71,15 @@ add_executable(qddd WIN32 MACOSX_BUNDLE
     history/HistorySession.h
     history/GdbStopHistoryBackend.cpp
     history/GdbStopHistoryBackend.h
+    history/GdbRecordTimeMachineBackend.cpp
+    history/GdbRecordTimeMachineBackend.h
     history/RecordingMetadata.h
     history/ExecutionComparison.h
     history/FlowModel.h
     history/HistoryView.cpp
     history/HistoryView.h
+    history/TimeMachineModel.cpp
+    history/TimeMachineModel.h
     history/DisplayedState.cpp
     history/DisplayedState.h
 

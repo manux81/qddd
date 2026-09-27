@@ -32,6 +32,7 @@
 #pragma once
 
 #include "DebugSession.h"
+#include "history/HistoryTypes.h"
 #include "RuntimeObjectGraph.h"
 #include "RuntimeGraphLayout.h"
 
@@ -186,7 +187,13 @@ public:
 
 	void setSession(DebuggerSession* session);
 	void setDisplayedSnapshot(const std::optional<ExecutionSnapshot>& snapshot,
-	                          int snapshotStep = -1);
+	                          qddd::history::HistoryPointId historyPointId =
+	                              qddd::history::InvalidHistoryPointId,
+	                          bool historic = false,
+	                          qddd::history::TemporalState temporal =
+	                              qddd::history::TemporalState::Historic);
+
+	bool isHistorical() const { return m_historical; }
 
 public slots:
 	void refresh();
@@ -228,7 +235,10 @@ private:
 	QGraphicsScene*  m_scene   = nullptr;
 	DebuggerSession* m_session = nullptr;
 	bool m_historical = false;
-	int m_historicalStep = -1;
+	qddd::history::TemporalState m_temporal =
+	    qddd::history::TemporalState::Historic;
+	qddd::history::HistoryPointId m_historyPointId =
+	    qddd::history::InvalidHistoryPointId;
 	std::optional<ExecutionSnapshot> m_historicalSnapshot;
 	std::vector<std::unique_ptr<DebugVariable>> m_historicalRoots;
 
@@ -244,6 +254,7 @@ private:
 	quint64 m_refreshGeneration = 0;
 	QToolButton* m_autoLayoutButton = nullptr;
 	QLabel* m_modeChip = nullptr;
+	QGraphicsSimpleTextItem* m_historyNotice = nullptr;
 	bool m_autoLayoutEnabled = true;
 	bool m_compactLayout = false;
 	bool m_refreshInProgress = false;

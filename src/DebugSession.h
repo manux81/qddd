@@ -242,6 +242,14 @@ public:
 	virtual void reverseStepInto() = 0;
 	virtual void reverseStepOver() = 0;
 	virtual bool supportsReverseExecution() const = 0;
+	// Recorder/replayer control used by HistoryBackend adapters. Views must not
+	// issue the underlying GDB commands themselves.
+	virtual bool startTimeMachineRecording() { return false; }
+	virtual bool stopTimeMachineRecording() { return false; }
+	virtual bool reverseFinishExecution() { return false; }
+	virtual bool returnToPresentExecution() { return false; }
+	virtual bool timeMachineRecordingActive() const { return false; }
+	virtual bool timeMachineRecordingSupported() const { return false; }
 
 	// Breakpoints
 	virtual void insertBreakpoint(const BreakpointRequest& request) = 0;
@@ -340,5 +348,8 @@ signals:
 	void downloadFinished(bool success);
 	void disassemblyUpdated(const QString& text);
 	void reverseExecutionAvailabilityChanged();
+	void timeMachineRecordingStateChanged(bool active);
+	void timeMachineOperationFinished(const QString& operation, bool success,
+	                                  const QString& message);
 
 };

@@ -20,7 +20,11 @@ enum class HistoryCapability {
     MemoryWriteHistory   = 0x20, // findPreviousWrite() is implemented.
     InterruptEvents      = 0x40, // Interrupt enter/exit events available.
     PeripheralEvents     = 0x80, // Peripheral events available.
-    DeterministicReplay  = 0x100 // Seeks/steps are bit-exact, not best-effort.
+    DeterministicReplay  = 0x100, // Seeks/steps are bit-exact, not best-effort.
+    Checkpoints          = 0x200, // Stop snapshots can be retained as checkpoints.
+    ReverseNext          = 0x400,
+    ReverseFinish        = 0x800,
+    RecordReplay         = 0x1000 // Backend owns an execution recorder/replayer.
 };
 Q_DECLARE_FLAGS(HistoryCapabilities, HistoryCapability)
 
@@ -45,6 +49,14 @@ inline QStringList historyCapabilityNames(HistoryCapabilities caps)
         names << QStringLiteral("peripheral-events");
     if (caps.testFlag(HistoryCapability::DeterministicReplay))
         names << QStringLiteral("deterministic-replay");
+    if (caps.testFlag(HistoryCapability::Checkpoints))
+        names << QStringLiteral("checkpoints");
+    if (caps.testFlag(HistoryCapability::ReverseNext))
+        names << QStringLiteral("reverse-next");
+    if (caps.testFlag(HistoryCapability::ReverseFinish))
+        names << QStringLiteral("reverse-finish");
+    if (caps.testFlag(HistoryCapability::RecordReplay))
+        names << QStringLiteral("record-replay");
     return names;
 }
 

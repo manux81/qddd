@@ -58,12 +58,15 @@ class QComboBox;
 class QLabel;
 class QProgressBar;
 class HardwareDebugSession;
+class ThreadsView;
+class MemoryView;
 
 namespace qddd { namespace history {
 class HistorySession;
 class GdbStopHistoryBackend;
 class HistoryView;
 class DisplayedStateModel;
+class TimeTravelController;
 }}
 
 class MainWindow : public QMainWindow {
@@ -111,6 +114,7 @@ class MainWindow : public QMainWindow {
 	void wireSourceEditor(SourceEditor* editor);
 	void positionCommandOverlay();
 	QString sourceProjectRoot() const;
+	void updateTemporalBadge();
 
 	std::unique_ptr<DebuggerSession> m_session;
 	std::unique_ptr<HardwareDebugSession> m_hardwareSession;
@@ -124,6 +128,8 @@ class MainWindow : public QMainWindow {
 	QHash<QString, QPointer<SourceEditor>> m_sourceEditorByFile;
 	VariablesView *m_variablesView = nullptr;
 	StackView *m_stackView = nullptr;
+	ThreadsView *m_threadsView = nullptr;
+	MemoryView *m_memoryView = nullptr;
     GraphicalVariablesView *m_graphicalView = nullptr;
 	ConsoleWidget *m_consoleWidget = nullptr;
 	BreakpointsView *m_breakView = nullptr;
@@ -145,13 +151,21 @@ class MainWindow : public QMainWindow {
 	qddd::history::HistorySession *m_historySession = nullptr;
 	qddd::history::GdbStopHistoryBackend *m_historyBackend = nullptr;
 	qddd::history::DisplayedStateModel *m_displayedState = nullptr;
+	qddd::history::TimeTravelController *m_timeTravel = nullptr;
 	qddd::history::HistoryView *m_historyView = nullptr;
 	QDockWidget *m_historyDock = nullptr;
-	QAction *m_reverseStepInAct = nullptr;
-	QAction *m_reverseStepOverAct = nullptr;
-	QAction *m_reverseContinueAct = nullptr;
-	QAction *m_prevBreakpointAct = nullptr;
-	QAction *m_prevWriteAct = nullptr;
+	QAction *m_tmStartRecAct = nullptr;
+	QAction *m_tmStopRecAct = nullptr;
+	QAction *m_tmPrevAct = nullptr;
+	QAction *m_tmNextAct = nullptr;
+	QAction *m_tmRevContAct = nullptr;
+	QAction *m_tmPresentAct = nullptr;
+	QAction *m_tmTimelineAct = nullptr;
+	QAction *m_tmRevStepInAct = nullptr;
+	QAction *m_tmRevStepOverAct = nullptr;
+	QAction *m_tmCapsAct = nullptr;
+	QLabel *m_temporalBadge = nullptr;
+	bool m_displayWasHistoric = false;
 
 	QString m_currentProgram;
 	bool m_breakOnMainInserted = false;

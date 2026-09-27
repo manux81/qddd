@@ -27,8 +27,13 @@ namespace history {
 using TimePoint = qint64;
 inline constexpr TimePoint InvalidTime = -1;
 
-using TraceEventId = quint64;
-inline constexpr TraceEventId InvalidTraceEventId = 0;
+using HistoryPointId = quint64;
+inline constexpr HistoryPointId InvalidHistoryPointId = 0;
+
+// Backward-compatible event vocabulary. A recorded event and its execution
+// history point have one identity; these must never become separate counters.
+using TraceEventId = HistoryPointId;
+inline constexpr TraceEventId InvalidTraceEventId = InvalidHistoryPointId;
 
 struct TimeRange {
     TimePoint begin = InvalidTime;
@@ -51,6 +56,48 @@ struct SourceLocation {
     QString function;
 
     bool isValid() const { return !file.isEmpty() && line > 0; }
+};
+
+// Backend-owned position/checkpoint identifiers are deliberately opaque. A
+// QEMU backend can store a replay offset or machine-snapshot id here without
+// teaching the core or UI about either representation.
+struct BackendHistoryPosition {
+    QString backendId;
+    QByteArray opaqueId;
+
+    bool isValid() const { return !backendId.isEmpty() && !opaqueId.isEmpty(); }
+};
+
+enum class HistoryPointType {
+    Stop,
+    Checkpoint,
+    RecordingBoundary,
+    Marker
+};
+
+enum class TemporalState {
+    Live,
+    Historic,
+    Replayed
+};
+
+struct ExecutionHistoryPoint {
+    HistoryPointId id = InvalidHistoryPointId;
+    quint64 sequence = 0;
+    TimePoint timestamp = InvalidTime;
+    std::optional<SourceLocation> location;
+    QString threadId;
+    std::optional<quint64> programCounter;
+    std::optional<int> snapshotStep;
+    std::optional<BackendHistoryPosition> backendPosition;
+    HistoryPointType type = HistoryPointType::Stop;
+    TemporalState temporalState = TemporalState::Historic;
+};
+
+struct Checkpoint {
+    HistoryPointId historyPointId = InvalidHistoryPointId;
+    std::optional<int> snapshotStep;
+    std::optional<BackendHistoryPosition> backendCheckpoint;
 };
 
 // Generic register set: register name -> value text. Names are backend

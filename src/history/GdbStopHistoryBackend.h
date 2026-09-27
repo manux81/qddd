@@ -44,6 +44,9 @@ public:
     // backend only translates live stops into TraceEvents.
     void attachStore(std::vector<TraceEvent> *store);
 
+protected:
+    DebuggerSession *debuggerSession() const { return m_session; }
+
 signals:
     void stopRecorded(const qddd::history::TraceEvent &event);
     void backendChanged();

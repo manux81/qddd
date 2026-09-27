@@ -31,6 +31,7 @@
 
 #include "VariablesView.h"
 #include "HardwareDebugSession.h"
+#include "history/TimeMachineModel.h"
 
 #include <QFontDatabase>
 #include <QHeaderView>
@@ -390,15 +391,21 @@ void VariablesView::setHardwareSession(HardwareDebugSession* session)
 
 void VariablesView::clearVariables() {
 	m_model->clear();
-    m_model->setHorizontalHeaderLabels({tr("Name"), tr("Value")/*, tr("Type")*/});
+    m_model->setHorizontalHeaderLabels(
+        {tr("Name") + m_headerSuffix, tr("Value")/*, tr("Type")*/});
 }
 
 void VariablesView::setDisplayedSnapshot(
-	const std::optional<ExecutionSnapshot>& snapshot, int snapshotStep)
+	const std::optional<ExecutionSnapshot>& snapshot,
+	qddd::history::HistoryPointId historyPointId, bool historic,
+	qddd::history::TemporalState temporal)
 {
-	m_historical = snapshot.has_value();
+	m_historical = historic;
 	m_historicalSnapshot = snapshot;
-	m_historicalStep = snapshotStep;
+	m_historyPointId = historyPointId;
+	m_headerSuffix = historic
+	    ? QStringLiteral(" · ") + qddd::history::positionChipText(temporal, snapshot)
+	    : QString();
 	m_historicalRoots.clear();
 	if (snapshot && m_session) {
 		for (const auto& root : m_session->variables()) {
@@ -438,6 +445,18 @@ void VariablesView::refresh()
 	const auto& roots = m_historical ? m_historicalRoots : m_session->variables();
 	for (const auto& n : roots)
 		addNode(nullptr, n.get());
+	if (m_historical && m_model->rowCount() == 0) {
+		// Historic point without captured values: say so explicitly
+		// instead of leaking the live tree.
+		auto *nameItem = new QStandardItem(tr("—"));
+		nameItem->setEditable(false);
+		nameItem->setEnabled(false);
+		auto *valueItem = new QStandardItem(
+		    tr("Not captured for history point #%1").arg(m_historyPointId));
+		valueItem->setEditable(false);
+		valueItem->setEnabled(false);
+		m_model->appendRow({nameItem, valueItem});
+	}
 	m_refreshing = false;
 
 

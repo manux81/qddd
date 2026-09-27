@@ -46,6 +46,10 @@ public:
 	void setSession(DebuggerSession* session);
 	void setAutoRefreshEnabled(bool enabled);
 
+	// Historic inspection: disassembly memory reads would hit the live
+	// target, so live updates are held and an explicit notice is shown.
+	void setHistoric(bool historic);
+
 private slots:
 	void setDisassemblyText(const QString& text);
 	void setCurrentAddress(const QString& addr);
@@ -57,4 +61,5 @@ private:
 	DebuggerSession* m_session = nullptr;
 	QString m_currentAddr;
 	bool m_autoRefreshEnabled = false;
+	bool m_historic = false;
 };

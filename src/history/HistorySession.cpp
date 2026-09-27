@@ -11,9 +11,36 @@ HistorySession::HistorySession(QObject *parent)
 {
 }
 
+HistorySession::~HistorySession()
+{
+	if (!m_backend)
+		return;
+	m_backend->setCapabilitiesChangedHandler({});
+	m_backend->setRecordingChangedHandler({});
+	m_backend->setOperationFinishedHandler({});
+}
+
 void HistorySession::setBackend(HistoryBackend *backend)
 {
+	if (m_backend) {
+		m_backend->setCapabilitiesChangedHandler({});
+		m_backend->setRecordingChangedHandler({});
+		m_backend->setOperationFinishedHandler({});
+	}
     m_backend = backend;
+	if (m_backend) {
+		m_backend->setCapabilitiesChangedHandler([this] { refreshBackendState(); });
+		m_backend->setRecordingChangedHandler([this](bool active) { setRecording(active); });
+		m_backend->setOperationFinishedHandler(
+		    [this](const QString &name, bool ok, const QString &message) {
+			    emit operationFinished(name, ok, message);
+		    });
+	}
+	refreshBackendState();
+}
+
+void HistorySession::refreshBackendState()
+{
     const HistoryCapabilities caps = capabilities();
     const bool available = isAvailable();
     if (caps != m_lastCapabilities) {
@@ -48,6 +75,7 @@ void HistorySession::addEvent(TraceEvent event)
         return; // Undated events cannot be placed on the timeline.
     m_events.push_back(std::move(event));
     std::sort(m_events.begin(), m_events.end());
+	rebuildPoints();
     if (m_live)
         m_currentTime = m_events.back().time;
     emit eventsAppended(1);
@@ -71,6 +99,7 @@ void HistorySession::addEvents(const std::vector<TraceEvent> &events)
     if (appended == 0)
         return;
     std::sort(m_events.begin(), m_events.end());
+	rebuildPoints();
     if (m_live)
         m_currentTime = m_events.back().time;
     emit eventsAppended(appended);
@@ -81,12 +110,67 @@ void HistorySession::addEvents(const std::vector<TraceEvent> &events)
 void HistorySession::clear()
 {
     m_events.clear();
+	m_points.clear();
+	m_checkpoints.clear();
     m_currentTime = InvalidTime;
     m_selectedId = InvalidTraceEventId;
     m_live = true;
     emit eventsAppended(0);
     emit selectedEventChanged(m_selectedId);
     emit currentTimeChanged(m_currentTime);
+	emit historyChanged();
+}
+
+void HistorySession::rebuildPoints()
+{
+	m_points.clear();
+	m_points.reserve(m_events.size());
+	quint64 sequence = 0;
+	for (const TraceEvent &event : m_events) {
+		ExecutionHistoryPoint point;
+		point.id = event.id;
+		point.sequence = sequence++;
+		point.timestamp = event.time;
+		point.location = event.source;
+		point.programCounter = event.address;
+		point.snapshotStep = traceSnapshotStep(event);
+		point.temporalState = (&event == &m_events.back())
+		    ? TemporalState::Live : TemporalState::Historic;
+		point.type = m_checkpoints.contains(event.id)
+		    ? HistoryPointType::Checkpoint : HistoryPointType::Stop;
+		m_points.push_back(std::move(point));
+	}
+	emit historyChanged();
+}
+
+const ExecutionHistoryPoint *HistorySession::historyPoint(TraceEventId id) const
+{
+	for (const auto &point : m_points)
+		if (point.id == id)
+			return &point;
+	return nullptr;
+}
+
+std::optional<Checkpoint> HistorySession::checkpoint(TraceEventId id) const
+{
+	const auto it = m_checkpoints.constFind(id);
+	return it == m_checkpoints.constEnd() ? std::nullopt
+	                                    : std::optional<Checkpoint>(it.value());
+}
+
+bool HistorySession::createCheckpoint(TraceEventId id)
+{
+	const ExecutionHistoryPoint *point = historyPoint(id);
+	if (!point || !capabilities().testFlag(HistoryCapability::Checkpoints))
+		return false;
+	Checkpoint value;
+	value.historyPointId = id;
+	value.snapshotStep = point->snapshotStep;
+	if (m_backend && !m_backend->createCheckpoint(*point, value) && !value.snapshotStep)
+		return false;
+	m_checkpoints.insert(id, value);
+	rebuildPoints();
+	return true;
 }
 
 std::vector<TraceEvent> HistorySession::events(TimeRange range) const
@@ -199,6 +283,67 @@ void HistorySession::goLive()
     }
     emit currentTimeChanged(m_currentTime);
     emitStateForTime(m_currentTime);
+	emit temporalStateChanged(TemporalState::Live);
+}
+
+bool HistorySession::seekToHistoryPoint(TraceEventId id)
+{
+	const ExecutionHistoryPoint *point = historyPoint(id);
+	if (!point)
+		return false;
+	if (id == m_events.back().id) {
+		goLive();
+		return true;
+	}
+	if (m_backend && capabilities().testFlag(HistoryCapability::Seek) &&
+	    !m_backend->seekToHistoryPoint(*point))
+		return false;
+	selectEvent(id);
+	return true;
+}
+
+bool HistorySession::returnToPresent()
+{
+	if (m_backend && capabilities().testFlag(HistoryCapability::Seek) &&
+	    !isLive())
+		return m_backend->returnToPresent();
+	goLive();
+	return true;
+}
+
+bool HistorySession::startRecording()
+{
+	return m_backend && capabilities().testFlag(HistoryCapability::RecordReplay)
+	    && m_backend->startRecording();
+}
+
+bool HistorySession::stopRecording()
+{
+	return m_backend && m_recording && m_backend->stopRecording();
+}
+
+bool HistorySession::reverseStep()
+{
+	return m_backend && capabilities().testFlag(HistoryCapability::ReverseStep)
+	    && m_backend->stepBackward();
+}
+
+bool HistorySession::reverseNext()
+{
+	return m_backend && capabilities().testFlag(HistoryCapability::ReverseNext)
+	    && m_backend->reverseNext();
+}
+
+bool HistorySession::reverseContinue()
+{
+	return m_backend && capabilities().testFlag(HistoryCapability::ReverseContinue)
+	    && m_backend->continueBackward();
+}
+
+bool HistorySession::reverseFinish()
+{
+	return m_backend && capabilities().testFlag(HistoryCapability::ReverseFinish)
+	    && m_backend->reverseFinish();
 }
 
 bool HistorySession::canSelectPreviousEvent() const
@@ -261,8 +406,10 @@ void HistorySession::selectEvent(TraceEventId id)
     m_currentTime = event->time;
     m_live = (event->time == fullRange().end);
     emit selectedEventChanged(m_selectedId);
+	emit historyPointSelected(m_selectedId);
     emit currentTimeChanged(m_currentTime);
     emitStateForTime(m_currentTime);
+	emit temporalStateChanged(m_live ? TemporalState::Live : TemporalState::Historic);
 }
 
 void HistorySession::setRecording(bool recording)

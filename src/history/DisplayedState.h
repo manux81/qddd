@@ -39,7 +39,12 @@ struct DisplayedDebugState {
     // (empty when the event has no captured snapshot).
     std::optional<ExecutionSnapshot> snapshot;
 
-    // Stable stop sequence number (ExecutionSnapshot::stepIndex), or -1.
+    // Canonical identity shown by every view. This is the HistorySession
+    // point/event id, never a row, vector index, sequence, or snapshot step.
+    HistoryPointId historyPointId = InvalidHistoryPointId;
+
+    // Internal snapshot correlation only. Never present this as the history
+    // point number; it is not the public identity.
     int snapshotStep = -1;
 
     bool isLive() const { return mode == Mode::Live; }
@@ -55,6 +60,13 @@ public:
                         QObject *parent = nullptr);
 
     DisplayedDebugState displayedState() const { return m_state; }
+
+    // TemporalState reuses the backend vocabulary (HistoryTypes.h) instead
+    // of duplicating it: Live while following the present; Replayed when a
+    // seek-capable backend drives the selection (the inferior was actually
+    // moved); Historic when only a recorded snapshot is inspected while the
+    // inferior stays elsewhere. Current backends yield Historic.
+    TemporalState temporalState() const;
 
     // Return to the live/current presentation.
     void goLive();

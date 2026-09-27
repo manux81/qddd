@@ -67,10 +67,34 @@ void StackView::setSession(DebuggerSession *session) {
 
 void StackView::clearFrames() { m_model->removeRows(0, m_model->rowCount()); }
 
+void StackView::setHistoric(bool historic)
+{
+	if (m_historic == historic)
+		return;
+	m_historic = historic;
+	if (m_historic) {
+		clearFrames();
+		auto *notice = new QStandardItem(
+		    tr("Call stack — not captured for this history point"));
+		notice->setEditable(false);
+		notice->setEnabled(false);
+		m_model->appendRow({notice, new QStandardItem, new QStandardItem,
+		                    new QStandardItem});
+	} else {
+		refresh();
+	}
+}
+
 void StackView::refresh() {
 	if (!m_session)
 		return;
 
+	if (m_historic) {
+		// Live updates must not clobber the historic notice while
+		// browsing; only an explicit setHistoric(false) returns to live.
+		setHistoric(true);
+		return;
+	}
 	clearFrames();
 	const auto frames = m_session->stackFrames();
 	for (const auto &f : frames) {
@@ -83,7 +107,7 @@ void StackView::refresh() {
 }
 
 void StackView::onItemActivated(const QModelIndex &index) {
-	if (!index.isValid())
+	if (!index.isValid() || m_historic)
 		return;
 
 	int row = index.row();

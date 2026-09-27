@@ -506,6 +506,7 @@ void GdbMiSession::startSession(const QString& executablePath)
 	m_reverseRecordingRequested = false;
 	m_reverseRecordingFailed = false;
 	m_reverseRecordingReady = false;
+	m_recordingStopRequested = false;
 	m_replayDirection = ReplayDirection::None;
 	m_historyCursor = -1;
 	m_restoredHistoricalVariables = false;
@@ -715,6 +716,59 @@ void GdbMiSession::reverseContinueExecution() { executeReverseCommand("-exec-con
 void GdbMiSession::reverseStepInto()          { executeReverseCommand("-exec-step --reverse"); }
 void GdbMiSession::reverseStepOver()          { executeReverseCommand("-exec-next --reverse"); }
 
+bool GdbMiSession::timeMachineRecordingSupported() const
+{
+	return m_backend == Backend::GdbMi && m_reverseMode != ReverseMode::Disabled
+	    && !isRemoteTarget() && !m_reverseRecordingFailed;
+}
+
+bool GdbMiSession::startTimeMachineRecording()
+{
+	if (!timeMachineRecordingSupported() || m_reverseRecordingRequested ||
+	    m_reverseRecordingReady || m_targetExecuting)
+		return false;
+	ensureReverseRecording();
+	return m_reverseRecordingRequested;
+}
+
+bool GdbMiSession::stopTimeMachineRecording()
+{
+	if (!m_reverseRecordingReady || m_recordingStopRequested || m_targetExecuting)
+		return false;
+	m_recordingStopRequested = true;
+	enqueueCommand(QStringLiteral("-interpreter-exec console \"record stop\""),
+	               [this](const QString& reply) {
+		const bool ok = reply.contains(QStringLiteral("^done"));
+		m_recordingStopRequested = false;
+		if (ok) {
+			m_reverseRecordingReady = false;
+			m_reverseRecordingRequested = false;
+			emit timeMachineRecordingStateChanged(false);
+			emit reverseExecutionAvailabilityChanged();
+		}
+		emit timeMachineOperationFinished(QStringLiteral("stop-recording"), ok,
+		                                  ok ? QString() : reply);
+	});
+	return true;
+}
+
+bool GdbMiSession::reverseFinishExecution()
+{
+	if (!supportsReverseExecution())
+		return false;
+	executeReverseCommand(QStringLiteral("-exec-finish --reverse"));
+	return m_targetExecuting;
+}
+
+bool GdbMiSession::returnToPresentExecution()
+{
+	if (!supportsReverseExecution() || !canStartExecutionCommand(tr("Return to present")))
+		return false;
+	m_replayDirection = ReplayDirection::Forward;
+	enqueueCommand(QStringLiteral("-exec-continue"));
+	return true;
+}
+
 void GdbMiSession::executeReverseCommand(const QString& command)
 {
 	if (!supportsReverseExecution() || command.isEmpty())
@@ -749,6 +803,8 @@ void GdbMiSession::ensureReverseRecording()
 	enqueueCommand(recordCommand, [this, fullRecord](const QString& reply) {
 		if (reply.contains("^done")) {
 			m_reverseRecordingReady = true;
+			emit timeMachineRecordingStateChanged(true);
+			emit timeMachineOperationFinished(QStringLiteral("start-recording"), true, QString());
 			emit reverseExecutionAvailabilityChanged();
 			return;
 		}
@@ -765,6 +821,7 @@ void GdbMiSession::ensureReverseRecording()
 			    "GDB full recording could not be started. Normal debugging remains enabled.\n"));
 		}
 		emit reverseExecutionAvailabilityChanged();
+		emit timeMachineOperationFinished(QStringLiteral("start-recording"), false, reply);
 	});
 }
 
@@ -1140,6 +1197,7 @@ void GdbMiSession::consumeDebuggerOutput(const QByteArray& data)
 
 void GdbMiSession::resetSessionState()
 {
+	const bool recordingWasActive = m_reverseRecordingReady;
 	++m_sessionGeneration;
 	m_commandTimeoutTimer.stop();
 	if (m_commandInFlight && m_inFlight.command == QStringLiteral("-target-download"))
@@ -1163,6 +1221,7 @@ void GdbMiSession::resetSessionState()
 	m_reverseRecordingRequested = false;
 	m_reverseRecordingFailed = false;
 	m_reverseRecordingReady = false;
+	m_recordingStopRequested = false;
 	m_replayDirection = ReplayDirection::None;
 	m_historyCursor = -1;
 	m_restoredHistoricalVariables = false;
@@ -1176,6 +1235,8 @@ void GdbMiSession::resetSessionState()
 	emit variablesUpdated();
 	emit breakpointsUpdated();
 	emit reverseExecutionAvailabilityChanged();
+	if (recordingWasActive)
+		emit timeMachineRecordingStateChanged(false);
 }
 
 void GdbMiSession::abortCommandChannel(const QString& reason)

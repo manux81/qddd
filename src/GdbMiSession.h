@@ -43,6 +43,12 @@ public:
 	void reverseStepInto() override;
 	void reverseStepOver() override;
 	[[nodiscard]] bool supportsReverseExecution() const override;
+	bool startTimeMachineRecording() override;
+	bool stopTimeMachineRecording() override;
+	bool reverseFinishExecution() override;
+	bool returnToPresentExecution() override;
+	[[nodiscard]] bool timeMachineRecordingActive() const override { return m_reverseRecordingReady; }
+	[[nodiscard]] bool timeMachineRecordingSupported() const override;
 
 	// Breakpoints
 	void insertBreakpoint(const BreakpointRequest& request) override;
@@ -225,6 +231,7 @@ private:
 	bool m_reverseRecordingRequested = false;
 	bool m_reverseRecordingFailed = false;
 	bool m_reverseRecordingReady = false;
+	bool m_recordingStopRequested = false;
 
 	int m_stepCounter = 0;
 	quint64 m_stopStateGeneration = 0;

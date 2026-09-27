@@ -51,6 +51,11 @@ class StackView : public QTreeView {
 	void clearFrames();
 	void refresh();
 
+	// Historic inspection: snapshots carry no call frames, so show an
+	// explicit notice instead of the stale live stack. Live display is
+	// restored by refresh().
+	void setHistoric(bool historic);
+
   signals:
 	void frameActivated(const QString &file, int line);
 
@@ -60,4 +65,5 @@ class StackView : public QTreeView {
   private:
 	QStandardItemModel *m_model;
 	DebuggerSession *m_session = nullptr;
+	bool m_historic = false;
 };

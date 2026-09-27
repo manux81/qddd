@@ -34,12 +34,14 @@
  */
 #include "GraphicalVariablesView.h"
 #include "OrthogonalEdgeRouter.h"
+#include "history/TimeMachineModel.h"
 
 #include <QPainter>
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QGraphicsSceneMouseEvent>
 #include <QGraphicsSceneWheelEvent>
+#include <QGraphicsSimpleTextItem>
 #include <QVBoxLayout>
 #include <QToolButton>
 #include <QLabel>
@@ -1494,11 +1496,14 @@ void GraphicalVariablesView::setSession(DebuggerSession* s)
 }
 
 void GraphicalVariablesView::setDisplayedSnapshot(
-	const std::optional<ExecutionSnapshot>& snapshot, int snapshotStep)
+	const std::optional<ExecutionSnapshot>& snapshot,
+	qddd::history::HistoryPointId historyPointId, bool historic,
+	qddd::history::TemporalState temporal)
 {
-	m_historical = snapshot.has_value();
+	m_historical = historic;
 	m_historicalSnapshot = snapshot;
-	m_historicalStep = snapshotStep;
+	m_historyPointId = historyPointId;
+	m_temporal = historic ? temporal : qddd::history::TemporalState::Live;
 	m_historicalRoots.clear();
 	if (snapshot && m_session) {
 		for (const auto& root : m_session->variables()) {
@@ -1515,21 +1520,32 @@ void GraphicalVariablesView::updateModeChip()
 {
 	if (!m_modeChip)
 		return;
-	if (m_historical) {
-		m_modeChip->setText(tr("HISTORY · %1").arg(m_historicalStep));
-		m_modeChip->setToolTip(
-			tr("Recorded state from stop %1; the live target was not rewound")
-				.arg(m_historicalStep));
-		// Muted amber on dark, matching the app palette (cf. command pill).
-		m_modeChip->setStyleSheet(QStringLiteral(
-			"QLabel { color: #f0d9a8; background: #4a3a20; border: 1px solid #6b5426; "
-			"border-radius: 4px; padding: 1px 6px; }"));
-	} else {
-		m_modeChip->setText(tr("LIVE"));
+	// Distinct chips for semantically different positions: LIVE is the
+	// actual target, S42 is recorded snapshot 42, TRACE is a replayed
+	// execution position. Never the raw history-point id.
+	const QString chip =
+	    qddd::history::positionChipText(m_temporal, m_historicalSnapshot);
+	if (m_temporal == qddd::history::TemporalState::Live) {
+		m_modeChip->setText(chip);
 		m_modeChip->setToolTip(tr("Data Display is showing the current debugger state"));
 		// Same muted green as the primary command button.
 		m_modeChip->setStyleSheet(QStringLiteral(
 			"QLabel { color: #d8f3dc; background: #2f3f33; border: 1px solid #3b5141; "
+			"border-radius: 4px; padding: 1px 6px; }"));
+	} else if (m_temporal == qddd::history::TemporalState::Replayed) {
+		m_modeChip->setText(chip);
+		m_modeChip->setToolTip(
+			tr("Replayed execution position. The inferior was moved here by the backend."));
+		m_modeChip->setStyleSheet(QStringLiteral(
+			"QLabel { color: #dbeafe; background: #1e3a5f; border: 1px solid #3b5f8a; "
+			"border-radius: 4px; padding: 1px 6px; }"));
+	} else {
+		m_modeChip->setText(chip);
+		m_modeChip->setToolTip(
+			tr("Recorded state from a history stop; the live target was not rewound."));
+		// Muted amber on dark, matching the app palette (cf. command pill).
+		m_modeChip->setStyleSheet(QStringLiteral(
+			"QLabel { color: #f0d9a8; background: #4a3a20; border: 1px solid #6b5426; "
 			"border-radius: 4px; padding: 1px 6px; }"));
 	}
 	m_modeChip->adjustSize();
@@ -1569,6 +1585,8 @@ void GraphicalVariablesView::refresh()
 	m_refreshInProgress = true;
 	m_refreshPending = false;
 	setUpdatesEnabled(false);
+	delete m_historyNotice;
+	m_historyNotice = nullptr;
 	const QPointF previousCenter = mapToScene(viewport()->rect().center());
 
     // Edges are detached before rebinding cards: their endpoints hold old
@@ -1688,6 +1706,19 @@ void GraphicalVariablesView::refresh()
 		applyAutomaticLayout(false);
 	else
 		m_scene->setSceneRect(m_scene->itemsBoundingRect().adjusted(-200, -200, 200, 200));
+
+	if (m_historical && m_historicalRoots.empty()) {
+		// Historic point without captured values: say so explicitly
+		// instead of leaking the live graph.
+		m_historyNotice = new QGraphicsSimpleTextItem(
+		    tr("Not captured for history point #%1").arg(m_historyPointId));
+		m_historyNotice->setBrush(palette().placeholderText().color());
+		m_historyNotice->setPos(previousCenter
+		                        - QPointF(m_historyNotice->boundingRect().width() / 2,
+		                                  m_historyNotice->boundingRect().height() / 2));
+		m_historyNotice->setZValue(1000);
+		m_scene->addItem(m_historyNotice);
+	}
 
 	m_refreshInProgress = false;
     scheduleEdgeRouting();
@@ -1914,7 +1945,7 @@ void GraphicalVariablesView::contextMenuEvent(QContextMenuEvent* event)
 	if (m_historical) {
 		QMenu menu(this);
 		auto* info = menu.addAction(
-			tr("Historical stop %1 — read-only").arg(m_historicalStep));
+			tr("History point #%1 — read-only").arg(m_historyPointId));
 		info->setEnabled(false);
 		menu.exec(event->globalPos());
 		return;

@@ -141,3 +141,40 @@ item maps to one `HistoryCapability`:
    wall-clock time.
 
 Until these exist, QDDD records live GDB stops and navigates them honestly.
+# Time Machine core contract
+
+`HistorySession` is the single GUI-facing Time Machine façade. Widgets query
+`capabilities()` and call `startRecording()`, `stopRecording()`,
+`createCheckpoint(id)`, `seekToHistoryPoint(id)`, `reverseStep()`,
+`reverseNext()`, `reverseContinue()`, `reverseFinish()`, and
+`returnToPresent()`. They never emit GDB commands.
+
+The durable core model is `ExecutionHistoryPoint`: a monotonically sequenced
+point with a stable id, source/PC information, an optional
+`ExecutionSnapshot::stepIndex`, and an optional opaque backend position.
+`Checkpoint` binds such a point to its debugger snapshot and, for future
+backends, a backend-owned machine checkpoint. `BackendHistoryPosition` is
+opaque so a later QEMU implementation can provide restore-and-replay without
+changing callers.
+
+`DisplayedStateModel` remains the presentation authority. Its Live and
+Historical modes ensure that selecting an old point renders only the linked
+snapshot; it never falls through to current GDB variables. True replay state
+is represented separately by `TemporalState::Replayed` for replay-capable
+backends.
+
+The GDB implementation is `GdbRecordTimeMachineBackend`. It combines the
+existing stop/checkpoint stream with GDB `record full` or `record btrace` and
+MI reverse execution. Arbitrary seek, deterministic replay positions, and
+reverse watchpoints are not advertised because GDB does not expose a stable
+generic position primitive through this integration.
+
+## GUI integration contract
+
+Consume `HistorySession::historyPoints()` and `historyPoint(id)`. Enable
+controls exclusively from `capabilities()`. Invoke only the semantic methods
+on `HistorySession`. Observe `historyChanged`, `historyPointSelected`,
+`capabilitiesChanged`, `recordingChanged`, `temporalStateChanged`, and
+`operationFinished`. Render variables/source through `DisplayedStateModel::
+displayedStateChanged`, using its snapshot in Historical mode. Never call
+`DebuggerSession::sendRawCommand()` from a history widget.

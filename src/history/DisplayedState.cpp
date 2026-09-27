@@ -26,6 +26,13 @@ DisplayedStateModel::DisplayedStateModel(DebuggerSession *debugSession,
                 this, [this] { refresh(); });
         connect(m_debug, &DebuggerSession::targetExited,
                 this, [this] { refresh(); });
+        // Resuming normal execution returns the UI to LIVE: a new stop (or
+        // continued running) updates the present rather than silently
+        // mutating a historical snapshot view.
+        connect(m_debug, &DebuggerSession::targetRunning, this, [this] {
+            if (m_history && !m_history->isLive())
+                m_history->goLive();
+        });
     }
     refresh();
 }
@@ -35,6 +42,15 @@ void DisplayedStateModel::goLive()
     if (m_history)
         m_history->goLive();
     refresh();
+}
+
+TemporalState DisplayedStateModel::temporalState() const
+{
+    if (m_state.isLive())
+        return TemporalState::Live;
+    if (m_history && m_history->capabilities().testFlag(HistoryCapability::Seek))
+        return TemporalState::Replayed;
+    return TemporalState::Historic;
 }
 
 void DisplayedStateModel::refresh()
@@ -50,6 +66,7 @@ void DisplayedStateModel::refresh()
     } else {
         next.mode = DisplayedDebugState::Mode::Historical;
         if (const TraceEvent *event = m_history->selectedEvent()) {
+            next.historyPointId = event->id;
             if (const std::optional<int> step = traceSnapshotStep(*event))
                 next.snapshotStep = *step;
             next.snapshot = m_history->snapshotForEvent(event->id);
@@ -66,7 +83,8 @@ void DisplayedStateModel::refresh()
 bool DisplayedStateModel::statesEqual(const DisplayedDebugState &a,
                                       const DisplayedDebugState &b) const
 {
-    if (a.mode != b.mode || a.snapshotStep != b.snapshotStep)
+    if (a.mode != b.mode || a.historyPointId != b.historyPointId ||
+        a.snapshotStep != b.snapshotStep)
         return false;
     if (a.snapshot.has_value() != b.snapshot.has_value())
         return false;
