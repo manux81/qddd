@@ -57,6 +57,32 @@ namespace {
 
 constexpr int VariablePathRole = Qt::UserRole + 3;
 
+std::unique_ptr<DebugVariable> snapshotTree(
+	const DebugVariable* source, DebugVariable* parent,
+	const ExecutionSnapshot& snapshot)
+{
+	if (!source)
+		return {};
+	auto copy = std::make_unique<DebugVariable>();
+	copy->name = source->name;
+	copy->expression = source->expression;
+	copy->value = snapshot.variableValues.value(source->fullPath(), source->value);
+	copy->type = source->type;
+	copy->address = source->address;
+	copy->pointeeAddress = source->pointeeAddress;
+	copy->isPointer = source->isPointer;
+	copy->hasChildren = source->hasChildren;
+	copy->isWatch = source->isWatch;
+	copy->enabled = source->enabled;
+	copy->parent = parent;
+	for (const auto& child : source->children) {
+		auto childCopy = snapshotTree(child.get(), copy.get(), snapshot);
+		if (childCopy)
+			copy->children.push_back(std::move(childCopy));
+	}
+	return copy;
+}
+
 QStringList splitTopLevel(const QString &s) {
 	QStringList result;
 	QString current;
@@ -367,6 +393,23 @@ void VariablesView::clearVariables() {
     m_model->setHorizontalHeaderLabels({tr("Name"), tr("Value")/*, tr("Type")*/});
 }
 
+void VariablesView::setDisplayedSnapshot(
+	const std::optional<ExecutionSnapshot>& snapshot, int snapshotStep)
+{
+	m_historical = snapshot.has_value();
+	m_historicalSnapshot = snapshot;
+	m_historicalStep = snapshotStep;
+	m_historicalRoots.clear();
+	if (snapshot && m_session) {
+		for (const auto& root : m_session->variables()) {
+			auto copy = snapshotTree(root.get(), nullptr, *snapshot);
+			if (copy)
+				m_historicalRoots.push_back(std::move(copy));
+		}
+	}
+	refresh();
+}
+
 void VariablesView::refresh()
 {
     if (!m_session)
@@ -392,7 +435,8 @@ void VariablesView::refresh()
 	m_refreshing = true;
 	clearVariables();
 
-	for (const auto& n : m_session->variables())
+	const auto& roots = m_historical ? m_historicalRoots : m_session->variables();
+	for (const auto& n : roots)
 		addNode(nullptr, n.get());
 	m_refreshing = false;
 
@@ -448,10 +492,9 @@ void VariablesView::addNode(QStandardItem *parent, DebugVariable *node)
 		valueItem->setForeground(QColor(145, 145, 145));
 	}
 
-	const bool nodeChanged =
-		isLeafValue &&
-		m_session &&
-		m_session->changedPaths().contains(path);
+	const bool nodeChanged = isLeafValue && (m_historicalSnapshot
+		? m_historicalSnapshot->changedPaths.contains(path)
+		: (m_session && m_session->changedPaths().contains(path)));
 
 	valueItem->setData(nodeChanged, ChangedRole);
 
@@ -576,7 +619,7 @@ QStandardItem* VariablesView::findPointerItem(const QString& expression) const
 
 void VariablesView::expandPointer(const QModelIndex& index)
 {
-	if (!m_session || !index.isValid())
+	if (!m_session || !index.isValid() || m_historical)
 		return;
 
 	QStandardItem* item = m_model->itemFromIndex(index.siblingAtColumn(0));
@@ -627,6 +670,8 @@ void VariablesView::expandPointer(const QModelIndex& index)
 void VariablesView::commitValue(QStandardItem *item)
 {
 	if (m_refreshing || !m_session || !item || item->column() != 1)
+		return;
+	if (m_historical)
 		return;
 
 	const QString path = item->data(VariablePathRole).toString();

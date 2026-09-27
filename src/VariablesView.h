@@ -36,6 +36,7 @@
 #include <QTreeView>
 #include <QStyledItemDelegate>
 #include <QFontDatabase>
+#include <optional>
 
 class QStandardItemModel;
 class HardwareDebugSession;
@@ -51,6 +52,8 @@ class VariablesView : public QTreeView {
   public slots:
 	void clearVariables();
 	void refresh();
+	void setDisplayedSnapshot(const std::optional<ExecutionSnapshot>& snapshot,
+	                          int snapshotStep = -1);
 
   private:
 	void addNode(QStandardItem *parent,
@@ -63,4 +66,8 @@ class VariablesView : public QTreeView {
 	DebuggerSession *m_session = nullptr;
 	HardwareDebugSession *m_hardwareSession = nullptr;
 	bool m_refreshing = false;
+	bool m_historical = false;
+	int m_historicalStep = -1;
+	std::optional<ExecutionSnapshot> m_historicalSnapshot;
+	std::vector<std::unique_ptr<DebugVariable>> m_historicalRoots;
 };
