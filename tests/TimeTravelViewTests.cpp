@@ -189,11 +189,23 @@ static int checkInspectorGrowthBounded()
         CHECK(rowTop(list, row) == topsBefore[row]);
     // The timeline keeps a usable height...
     CHECK(list->viewport()->height() >= 120);
-    // ...because show-all growth stays inside its own scroll region.
+    // ...because show-all growth stays inside its own capped region instead
+    // of collapsing the list: the region never exceeds its cap, so any
+    // overflow scrolls internally (where platform fonts require it).
     auto *changesScroll =
         view.findChild<QScrollArea *>(QStringLiteral("changesScroll"));
     CHECK(changesScroll);
-    CHECK(changesScroll->verticalScrollBar()->maximum() > 0);
+    const int rowHeight = list->fontMetrics().height() + 2;
+    const int expectedCap = 6 * rowHeight + 4;
+    CHECK(changesScroll->height() <= expectedCap + 12);
+    // Expanded state is honestly reported: all rows exist, toggle offers
+    // to collapse again.
+    bool showFewer = false;
+    for (QToolButton *button : view.findChildren<QToolButton *>()) {
+        if (button->text() == QStringLiteral("Show fewer changes"))
+            showFewer = true;
+    }
+    CHECK(showFewer);
     return 0;
 }
 
