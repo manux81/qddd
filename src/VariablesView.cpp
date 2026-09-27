@@ -299,6 +299,8 @@ VariablesView::VariablesView(QWidget *parent)
 			const QModelIndex index = indexAt(pos);
 			if (!index.isValid())
 				return;
+			if (m_historical)
+				return; // No live evaluation or watch edits on recorded values.
 			const QModelIndex nameIndex = index.siblingAtColumn(0);
 			if (!m_session)
 				return;
@@ -367,10 +369,64 @@ void VariablesView::clearVariables() {
     m_model->setHorizontalHeaderLabels({tr("Name"), tr("Value")/*, tr("Type")*/});
 }
 
+void VariablesView::setDisplayedSnapshot(const std::optional<ExecutionSnapshot> &snapshot,
+                                         int snapshotStep)
+{
+	const bool historical = snapshot.has_value();
+	if (m_historical == historical && m_historicalStep == snapshotStep
+	    && (!historical
+	        || (m_historicalSnapshot
+	            && m_historicalSnapshot->timestampNs == snapshot->timestampNs)))
+		return;
+	m_historical = historical;
+	m_historicalSnapshot = snapshot;
+	m_historicalStep = snapshotStep;
+	if (m_historical)
+		refreshHistorical();
+	else
+		refresh();
+}
+
+void VariablesView::refreshHistorical()
+{
+	// Flat read-only rendering of the recorded snapshot. Keys are debugger
+	// full paths (expressions); rebuilding the live tree structure from
+	// them would be guesswork, so history shows the complete flat list.
+	m_refreshing = true;
+	clearVariables();
+	if (m_historicalSnapshot) {
+		m_model->setHorizontalHeaderLabels(
+		    {tr("Name · Stop %1").arg(m_historicalStep), tr("Value (recorded)")});
+		QStringList keys = m_historicalSnapshot->variableValues.keys();
+		keys.sort();
+		for (const QString &key : keys) {
+			auto *nameItem = new QStandardItem(key);
+			nameItem->setEditable(false);
+			nameItem->setIcon(iconForType(VarVisualType::Scalar));
+			auto *valueItem = new QStandardItem(
+			    m_historicalSnapshot->variableValues.value(key));
+			valueItem->setEditable(false);
+			valueItem->setData(m_historicalSnapshot->variableValues.value(key),
+			                   RawValueRole);
+			valueItem->setData(m_historicalSnapshot->changedPaths.contains(key),
+			                   ChangedRole);
+			m_model->appendRow({nameItem, valueItem});
+		}
+	}
+	m_refreshing = false;
+}
+
 void VariablesView::refresh()
 {
     if (!m_session)
         return;
+
+    // While previewing history, live updates must not clobber the recorded
+    // rendering. Re-render the held snapshot instead (cheap, no GDB traffic).
+    if (m_historical) {
+        refreshHistorical();
+        return;
+    }
 
     QSet<QString> expanded;
 
@@ -576,7 +632,7 @@ QStandardItem* VariablesView::findPointerItem(const QString& expression) const
 
 void VariablesView::expandPointer(const QModelIndex& index)
 {
-	if (!m_session || !index.isValid())
+	if (!m_session || !index.isValid() || m_historical)
 		return;
 
 	QStandardItem* item = m_model->itemFromIndex(index.siblingAtColumn(0));
@@ -628,6 +684,8 @@ void VariablesView::commitValue(QStandardItem *item)
 {
 	if (m_refreshing || !m_session || !item || item->column() != 1)
 		return;
+	if (m_historical)
+		return; // Recorded values are read-only; never write to the target.
 
 	const QString path = item->data(VariablePathRole).toString();
 	if (path.isEmpty())
